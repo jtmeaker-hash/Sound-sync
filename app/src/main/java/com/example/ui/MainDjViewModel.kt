@@ -34,8 +34,11 @@ import com.example.service.AudioScanState
 import com.example.storage.LocalFileSystemScanner
 import com.example.storage.MediaScannerHelper
 import com.example.storage.SafStorageManager
+import com.example.storage.ScanStateManager
+import com.example.storage.ScanStatus
 import com.example.sync.CloudSyncManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +47,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -61,6 +65,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val db = AppDatabase.getDatabase(application)
     private val trackDao = db.trackDao()
     private val sourceFolderDao = db.sourceFolderDao()
+
+    val scanStateManager = ScanStateManager(application)
+    private val scanMutex = Mutex()
+    private var currentScanJob: Job? = null
 
     val audioEngine = DjAudioEngine(application)
 
@@ -290,8 +298,13 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun onPermissionResult(isGranted: Boolean) {
         _hasStoragePermission.value = isGranted
         if (isGranted) {
-            showSnackbar("Storage access granted! Scanning device audio library...")
-            scanDeviceMediaStore()
+            showSnackbar("Storage access granted!")
+            viewModelScope.launch(Dispatchers.IO) {
+                val existingCount = trackDao.getTrackCount()
+                if (existingCount == 0 && scanStateManager.status != ScanStatus.SCANNING) {
+                    scanDeviceMediaStore()
+                }
+            }
         } else {
             showSnackbar("Storage permission denied. You can import audio files individually or pick folders via SAF.")
         }
@@ -299,13 +312,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun initializeStorageAndData() {
         viewModelScope.launch(Dispatchers.IO) {
+            // Check for interrupted scan from a previous app crash or killed process
+            val wasInterrupted = scanStateManager.checkAndRecoverInterruptedScan()
+            if (wasInterrupted) {
+                Log.w("MainDjViewModel", "Detected interrupted scan from prior session. Safely recovered to prevent crash loop.")
+                withContext(Dispatchers.Main) {
+                    showSnackbar("Previous library scan was interrupted. Tap 'Rescan' to scan when ready.")
+                }
+            }
+
             refreshStorageSourcesList()
 
             val existingCount = trackDao.getTrackCount()
-            if (existingCount == 0 && _hasStoragePermission.value) {
-                // Auto scan MediaStore on initial launch if permission is granted
-                scanDeviceMediaStoreInternal()
-            } else if (existingCount > 0) {
+            if (existingCount > 0) {
                 // Restore first track into engine in PAUSED state (strict no autoplay on startup)
                 val firstTrack = trackDao.getAllTracksSync().firstOrNull()?.toTrack()
                 if (firstTrack != null) {
@@ -315,6 +334,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                         inspectTrackSpectrogram(firstTrack)
                     }
                 }
+            } else if (_hasStoragePermission.value && scanStateManager.status == ScanStatus.IDLE && !wasInterrupted) {
+                // Only perform auto-scan on clean initial launch if permission is granted and no crash occurred
+                scanDeviceMediaStoreInternal()
             }
         }
     }
@@ -346,44 +368,82 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun scanDeviceMediaStore() {
-        viewModelScope.launch(Dispatchers.IO) {
+        if (currentScanJob?.isActive == true || _isScanning.value) {
+            Log.d("MainDjViewModel", "MediaStore scan already active, skipping duplicate request.")
+            return
+        }
+
+        currentScanJob = viewModelScope.launch(Dispatchers.IO) {
             scanDeviceMediaStoreInternal()
         }
     }
 
     private suspend fun scanDeviceMediaStoreInternal() {
+        if (!scanMutex.tryLock()) {
+            Log.d("MainDjViewModel", "Scan mutex currently held, aborting parallel scan.")
+            return
+        }
+
         val app = getApplication<Application>()
         _isScanning.value = true
+        scanStateManager.status = ScanStatus.SCANNING
         _scanProgressMessage.value = "Scanning MediaStore audio repository..."
 
+        var totalScanned = 0
+        var isFirstBatch = true
+
         try {
-            val scannedTracks = MediaScannerHelper.scanDeviceAudio(app) { current, total, title ->
-                _scanProgressMessage.value = "Scanning audio files: $current of $total ($title)..."
-            }
+            totalScanned = MediaScannerHelper.scanDeviceAudioStreaming(
+                context = app,
+                batchSize = 50,
+                onBatch = { batch ->
+                    val entities = batch.map { TrackEntity.fromTrack(it) }
+                    trackDao.insertTracks(entities)
+                    refreshStorageSourcesList()
 
-            if (scannedTracks.isNotEmpty()) {
-                val entities = scannedTracks.map { TrackEntity.fromTrack(it) }
-                trackDao.insertTracks(entities)
-                refreshStorageSourcesList()
-
-                val first = scannedTracks.first()
-                withContext(Dispatchers.Main) {
-                    audioEngine.loadTrack(first, autoPlay = false)
-                    inspectTrackSpectrogram(first)
-                    showSnackbar("Successfully indexed ${scannedTracks.size} audio tracks from phone storage!")
+                    if (isFirstBatch && batch.isNotEmpty() && audioEngine.currentTrack.value == null) {
+                        isFirstBatch = false
+                        val first = batch.first()
+                        withContext(Dispatchers.Main) {
+                            audioEngine.loadTrack(first, autoPlay = false)
+                            inspectTrackSpectrogram(first)
+                        }
+                    }
+                },
+                onProgress = { current, total, title ->
+                    _scanProgressMessage.value = "Scanning audio files: $current of $total ($title)..."
                 }
-            } else {
-                withContext(Dispatchers.Main) {
+            )
+
+            scanStateManager.status = ScanStatus.COMPLETED
+            scanStateManager.lastScanTime = System.currentTimeMillis()
+            scanStateManager.lastScannedCount = totalScanned
+
+            withContext(Dispatchers.Main) {
+                if (totalScanned > 0) {
+                    showSnackbar("Successfully indexed $totalScanned audio tracks from phone storage!")
+                } else {
                     showSnackbar("No audio files detected in MediaStore. You can select a folder or pick audio files.")
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: SecurityException) {
+            Log.e("MainDjViewModel", "SecurityException during MediaStore scan", e)
+            scanStateManager.status = ScanStatus.FAILED
+            scanStateManager.lastErrorMessage = "Permission denied: ${e.localizedMessage}"
             withContext(Dispatchers.Main) {
-                showSnackbar("Error scanning storage: ${e.localizedMessage}")
+                showSnackbar("Storage permission required to scan device audio.")
+            }
+        } catch (e: Exception) {
+            Log.e("MainDjViewModel", "Error during MediaStore scan", e)
+            scanStateManager.status = ScanStatus.FAILED
+            scanStateManager.lastErrorMessage = e.localizedMessage
+            withContext(Dispatchers.Main) {
+                showSnackbar("Error scanning storage: ${e.localizedMessage ?: "Unknown error"}")
             }
         } finally {
             _isScanning.value = false
             _scanProgressMessage.value = ""
+            scanMutex.unlock()
         }
     }
 

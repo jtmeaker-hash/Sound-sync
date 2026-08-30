@@ -7,6 +7,10 @@ import com.example.model.AudioQualityRating
 import com.example.model.MusicPlatform
 import com.example.model.SyncState
 import com.example.model.Track
+import com.example.storage.MediaScannerHelper
+import com.example.storage.ScanStateManager
+import com.example.storage.ScanStatus
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -125,5 +129,49 @@ class ExampleRobolectricTest {
         assertFalse(engine.isPlaying.value)
 
         engine.release()
+    }
+
+    @Test
+    fun `ScanStateManager correctly recovers from interrupted scan`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scanManager = ScanStateManager(context)
+
+        // Set to SCANNING as if the app was killed mid-scan
+        scanManager.status = ScanStatus.SCANNING
+        assertEquals(ScanStatus.SCANNING, scanManager.status)
+
+        // Run recovery check
+        val wasInterrupted = scanManager.checkAndRecoverInterruptedScan()
+        assertTrue("Should detect interrupted scan", wasInterrupted)
+        assertEquals("Status must transition to FAILED to prevent auto-scan loop", ScanStatus.FAILED, scanManager.status)
+        assertNotNull(scanManager.lastErrorMessage)
+
+        // Running check again should return false since it is no longer SCANNING
+        assertFalse(scanManager.checkAndRecoverInterruptedScan())
+    }
+
+    @Test
+    fun `MediaScannerHelper resolves formats and extensions accurately`() {
+        assertEquals("FLAC", MediaScannerHelper.resolveFormat("/Music/song.flac", "audio/flac"))
+        assertEquals("WAV", MediaScannerHelper.resolveFormat("/Music/song.wav", "audio/wav"))
+        assertEquals("AAC", MediaScannerHelper.resolveFormat("/Music/song.aac", "audio/aac"))
+        assertEquals("M4A", MediaScannerHelper.resolveFormat("/Music/song.m4a", "audio/mp4"))
+        assertEquals("OGG", MediaScannerHelper.resolveFormat("/Music/song.ogg", "audio/ogg"))
+        assertEquals("AIFF", MediaScannerHelper.resolveFormat("/Music/song.aiff", "audio/aiff"))
+        assertEquals("MP3", MediaScannerHelper.resolveFormat("/Music/song.mp3", "audio/mpeg"))
+    }
+
+    @Test
+    fun `MediaScannerHelper scanDeviceAudioStreaming runs safely without crashing`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val batches = mutableListOf<List<Track>>()
+
+        val total = MediaScannerHelper.scanDeviceAudioStreaming(
+            context = context,
+            batchSize = 20,
+            onBatch = { batch -> batches.add(batch) }
+        )
+
+        assertTrue(total >= 0)
     }
 }
