@@ -108,6 +108,7 @@ fun MainDjScreen(
     val analyzedTrack by viewModel.analyzedTrack.collectAsState()
     val spectrogramData by viewModel.spectrogramData.collectAsState()
     val isSpectrogramLoading by viewModel.isSpectrogramLoading.collectAsState()
+    val spectrogramErrorMessage by viewModel.spectrogramErrorMessage.collectAsState()
     val analysisProgressPercent by viewModel.analysisProgressPercent.collectAsState()
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
     val showApiConfigDialog by viewModel.showApiConfigDialog.collectAsState()
@@ -181,15 +182,15 @@ fun MainDjScreen(
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 // Docked Mini-Player Bar (When a track is loaded/playing)
-                if (playingTrack != null) {
+                playingTrack?.let { track ->
                     DjMiniPlayer(
-                        track = playingTrack!!,
+                        track = track,
                         isPlaying = isPlaying,
                         currentPositionSec = currentPosSec,
                         playbackProgress = playbackProgress,
                         onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
                         onOpenSpectrogram = {
-                            viewModel.inspectTrackSpectrogram(playingTrack!!, showTab = true)
+                            viewModel.inspectTrackSpectrogram(track, showTab = true)
                         }
                     )
                 }
@@ -280,7 +281,9 @@ fun MainDjScreen(
                         },
                         onLoadToDeck = { viewModel.playTrack(it) },
                         isLoading = isSpectrogramLoading,
-                        analysisProgressPercent = analysisProgressPercent
+                        analysisProgressPercent = analysisProgressPercent,
+                        errorMessage = spectrogramErrorMessage,
+                        onRetryAnalysis = { viewModel.retrySpectrogramAnalysis() }
                     )
                 }
                 DjTab.OPERATIONS -> {

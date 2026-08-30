@@ -162,6 +162,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _isSpectrogramLoading = MutableStateFlow(false)
     val isSpectrogramLoading = _isSpectrogramLoading.asStateFlow()
 
+    private val _spectrogramErrorMessage = MutableStateFlow<String?>(null)
+    val spectrogramErrorMessage = _spectrogramErrorMessage.asStateFlow()
+
     private var currentAnalysisJob: Job? = null
 
     private val _snackbarMessage = MutableStateFlow<String?>(null)
@@ -721,6 +724,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun inspectTrackSpectrogram(track: Track, showTab: Boolean = false) {
         _analyzedTrack.value = track
+        _spectrogramErrorMessage.value = null
         if (showTab) {
             _selectedTab.value = DjTab.SPECTROGRAM
         }
@@ -739,6 +743,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         currentAnalysisJob = viewModelScope.launch(Dispatchers.Default) {
             val app = getApplication<Application>()
             try {
+                Log.d("SoundSyncSpectrum", "Starting spectrogram analysis for '${track.title}' (URI: ${track.filePath})")
                 val analysis = SpectrogramEngine.analyzeTrack(
                     context = app,
                     track = track,
@@ -746,12 +751,29 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                         _analysisProgressPercent.value = percent
                     }
                 )
-                _spectrogramData.value = analysis
-            } catch (e: Exception) {
-                Log.e("MainDjViewModel", "Error analyzing spectrogram for '${track.title}': ${e.message}", e)
+                if (_analyzedTrack.value?.id == track.id) {
+                    _spectrogramData.value = analysis
+                    _spectrogramErrorMessage.value = null
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.d("SoundSyncSpectrum", "Spectrogram analysis cancelled cleanly for '${track.title}'")
+            } catch (e: Throwable) {
+                Log.e("SoundSyncSpectrum", "Spectrogram analysis error for '${track.title}': ${e.message}", e)
+                if (_analyzedTrack.value?.id == track.id) {
+                    _spectrogramErrorMessage.value = "Couldn't analyze this track (${e.localizedMessage ?: "decoder failure"})."
+                }
             } finally {
-                _isSpectrogramLoading.value = false
+                if (_analyzedTrack.value?.id == track.id) {
+                    _isSpectrogramLoading.value = false
+                }
             }
+        }
+    }
+
+    fun retrySpectrogramAnalysis() {
+        val current = _analyzedTrack.value
+        if (current != null) {
+            inspectTrackSpectrogram(current, showTab = false)
         }
     }
 

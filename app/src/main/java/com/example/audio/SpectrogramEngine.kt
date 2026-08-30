@@ -6,11 +6,11 @@ import androidx.collection.LruCache
 import com.example.model.AudioQualityRating
 import com.example.model.SpectrogramAnalysis
 import com.example.model.Track
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.PI
 import kotlin.math.cos
-import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
@@ -24,7 +24,7 @@ import kotlin.math.sqrt
  */
 object SpectrogramEngine {
 
-    private const val TAG = "SpectrogramEngine"
+    private const val TAG = "SoundSyncSpectrum"
     const val NUM_FREQ_BINS = 64
     const val NUM_TIME_SLICES = 120
     private const val FFT_SIZE = 1024
@@ -56,12 +56,10 @@ object SpectrogramEngine {
         onProgress: (percent: Int) -> Unit = {}
     ): SpectrogramAnalysis = withContext(Dispatchers.Default) {
         val startTime = System.currentTimeMillis()
-        com.example.util.DjLogger.startTiming("SPECTROGRAM_START", "STFT analysis for '${track.title}'")
-        Log.d(TAG, "Selected track analysis started for: '${track.title}' (id=${track.id})")
+        Log.d(TAG, "Selected track analysis started: URI/path='${track.filePath}', title='${track.title}' (id=${track.id})")
 
         // 1. Check cache first
         analysisCache.get(track.id)?.let { cached ->
-            com.example.util.DjLogger.endTiming("SPECTROGRAM_END", "Retrieved from cache for '${track.title}'")
             Log.d(TAG, "Spectrogram retrieved from LRU cache in ${System.currentTimeMillis() - startTime}ms for '${track.title}'")
             onProgress(100)
             return@withContext cached
@@ -69,31 +67,43 @@ object SpectrogramEngine {
 
         onProgress(15)
 
-        // 2. Decode real mono PCM samples from track source
-        val decodeStartTime = System.currentTimeMillis()
-        val decodedAudio = AudioDecoder.decodeToMonoPcm(context, track.filePath, maxDurationSeconds = 240)
-        val decodeTime = System.currentTimeMillis() - decodeStartTime
-        Log.d(TAG, "PCM audio decoding finished in ${decodeTime}ms for '${track.title}'")
+        try {
+            // 2. Decode real mono PCM samples from track source
+            val decodeStartTime = System.currentTimeMillis()
+            val decodedAudio = AudioDecoder.decodeToMonoPcm(context, track.filePath, maxDurationSeconds = 240)
+            val decodeTime = System.currentTimeMillis() - decodeStartTime
 
-        onProgress(50)
+            onProgress(50)
 
-        val spectrogramStartTime = System.currentTimeMillis()
-        val analysis = if (decodedAudio != null && decodedAudio.samples.size >= FFT_SIZE) {
-            computeRealSpectrogram(track, decodedAudio.samples, decodedAudio.sampleRate)
-        } else {
-            Log.d(TAG, "Using fallback acoustic model for track '${track.title}' (PCM not directly available)")
-            computeDeterministicSpectrogram(track)
+            val spectrogramStartTime = System.currentTimeMillis()
+            val analysis = if (decodedAudio != null && decodedAudio.samples.size >= FFT_SIZE) {
+                val sampleRate = if (decodedAudio.sampleRate > 0) decodedAudio.sampleRate else 44100
+                Log.d(TAG, "Computing real STFT for '${track.title}': ${decodedAudio.samples.size} samples, sampleRate=$sampleRate Hz, channels=${decodedAudio.channelCount}, FFT_size=$FFT_SIZE, slices=$NUM_TIME_SLICES, bins=$NUM_FREQ_BINS")
+                computeRealSpectrogram(track, decodedAudio.samples, sampleRate)
+            } else {
+                Log.d(TAG, "Using fallback acoustic model for track '${track.title}' (PCM not directly available or below FFT size)")
+                computeDeterministicSpectrogram(track)
+            }
+
+            onProgress(100)
+
+            val spectroTime = System.currentTimeMillis() - spectrogramStartTime
+            val estimatedMatrixBytes = NUM_TIME_SLICES * NUM_FREQ_BINS * 4
+            Log.d(TAG, "Spectrogram analysis finished: ${spectroTime}ms compute (decode=${decodeTime}ms, total=${System.currentTimeMillis() - startTime}ms). Ceiling: ${String.format("%.1f", analysis.cutoffKhz)} kHz. Matrix size: ${NUM_TIME_SLICES}x$NUM_FREQ_BINS (~${estimatedMatrixBytes / 1024} KB)")
+
+            // Cache result
+            analysisCache.put(track.id, analysis)
+            analysis
+        } catch (e: CancellationException) {
+            Log.d(TAG, "Spectrogram analysis cancelled for '${track.title}'")
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "Spectrogram analysis failed for '${track.title}': ${e.message}", e)
+            // Fallback to deterministic model instead of crashing
+            val fallback = computeDeterministicSpectrogram(track)
+            analysisCache.put(track.id, fallback)
+            fallback
         }
-
-        onProgress(100)
-
-        val spectroTime = System.currentTimeMillis() - spectrogramStartTime
-        com.example.util.DjLogger.endTiming("SPECTROGRAM_END", "Ceiling: ${String.format("%.1f", analysis.cutoffKhz)} kHz for '${track.title}'")
-        Log.d(TAG, "Spectrogram generation time: ${spectroTime}ms. Total analysis time: ${System.currentTimeMillis() - startTime}ms for '${track.title}' (Ceiling: ${String.format("%.1f", analysis.cutoffKhz)} kHz)")
-
-        // Cache result
-        analysisCache.put(track.id, analysis)
-        analysis
     }
 
     /**
@@ -103,45 +113,58 @@ object SpectrogramEngine {
         val startTime = System.currentTimeMillis()
         waveformCache.get(track.id)?.let { return@withContext it }
 
-        val decodedAudio = AudioDecoder.decodeToMonoPcm(context, track.filePath, maxDurationSeconds = 240)
-        val waveform = if (decodedAudio != null && decodedAudio.samples.isNotEmpty()) {
-            val samples = decodedAudio.samples
-            val chunkSize = samples.size / barCount
-            val bars = FloatArray(barCount)
+        val safeBarCount = barCount.coerceIn(16, 240)
+        try {
+            val decodedAudio = AudioDecoder.decodeToMonoPcm(context, track.filePath, maxDurationSeconds = 240)
+            val waveform = if (decodedAudio != null && decodedAudio.samples.isNotEmpty()) {
+                val samples = decodedAudio.samples
+                val chunkSize = max(1, samples.size / safeBarCount)
+                val bars = FloatArray(safeBarCount)
 
-            var globalMax = 0.001f
-            for (i in 0 until barCount) {
-                val startIdx = i * chunkSize
-                val endIdx = min(startIdx + chunkSize, samples.size)
-                var sumSquares = 0.0f
-                var count = 0
-                for (j in startIdx until endIdx) {
-                    val s = samples[j]
-                    sumSquares += s * s
-                    count++
+                var globalMax = 0.001f
+                for (i in 0 until safeBarCount) {
+                    val startIdx = i * chunkSize
+                    val endIdx = min(startIdx + chunkSize, samples.size)
+                    var sumSquares = 0.0f
+                    var count = 0
+                    for (j in startIdx until endIdx) {
+                        val s = samples[j]
+                        sumSquares += s * s
+                        count++
+                    }
+                    val rms = if (count > 0) sqrt(sumSquares / count) else 0.1f
+                    bars[i] = rms
+                    if (rms > globalMax) globalMax = rms
                 }
-                val rms = if (count > 0) sqrt(sumSquares / count) else 0.1f
-                bars[i] = rms
-                if (rms > globalMax) globalMax = rms
+
+                // Normalize
+                val maxDiv = if (globalMax > 0.0001f) globalMax else 1.0f
+                for (i in 0 until safeBarCount) {
+                    bars[i] = (bars[i] / maxDiv).coerceIn(0.12f, 1.0f)
+                }
+                bars
+            } else {
+                // Fallback deterministic waveform
+                val seed = track.id.hashCode().toLong()
+                val random = kotlin.random.Random(seed)
+                FloatArray(safeBarCount) {
+                    (0.2f + random.nextFloat() * 0.75f).coerceIn(0.15f, 1.0f)
+                }
             }
 
-            // Normalize
-            for (i in 0 until barCount) {
-                bars[i] = (bars[i] / globalMax).coerceIn(0.12f, 1.0f)
-            }
-            bars
-        } else {
-            // Fallback deterministic waveform
+            Log.d(TAG, "Waveform generation time: ${System.currentTimeMillis() - startTime}ms for '${track.title}'")
+            waveformCache.put(track.id, waveform)
+            waveform
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "Waveform extraction failed for '${track.title}': ${e.message}", e)
             val seed = track.id.hashCode().toLong()
             val random = kotlin.random.Random(seed)
-            FloatArray(barCount) {
+            FloatArray(safeBarCount) {
                 (0.2f + random.nextFloat() * 0.75f).coerceIn(0.15f, 1.0f)
             }
         }
-
-        Log.d(TAG, "Waveform generation time: ${System.currentTimeMillis() - startTime}ms for '${track.title}'")
-        waveformCache.put(track.id, waveform)
-        waveform
     }
 
     /**
@@ -151,33 +174,36 @@ object SpectrogramEngine {
         val totalSamples = pcmSamples.size
         val slices = ArrayList<FloatArray>(NUM_TIME_SLICES)
 
-        // Stride across samples for NUM_TIME_SLICES
+        val safeSampleRate = if (sampleRate > 0) sampleRate else 44100
         val stride = max(1, (totalSamples - FFT_SIZE) / NUM_TIME_SLICES)
 
-        val nyquistHz = sampleRate / 2.0f
+        val nyquistHz = (safeSampleRate / 2.0f).coerceIn(4000.0f, 48000.0f)
         val fftReal = FloatArray(FFT_SIZE)
         val fftImag = FloatArray(FFT_SIZE)
         val mag = FloatArray(FFT_SIZE / 2)
 
         // Frequency mapping boundaries: Logarithmic/Mel scale bins from 20 Hz to Nyquist
         val minFreq = 20.0f
-        val maxFreq = nyquistHz.coerceAtMost(24000.0f)
+        val maxFreq = nyquistHz.coerceAtMost(24000.0f).coerceAtLeast(minFreq + 100f)
         val binFrequencies = FloatArray(NUM_FREQ_BINS + 1)
+        val freqRatio = (maxFreq / minFreq).toDouble()
+
         for (b in 0..NUM_FREQ_BINS) {
             val ratio = b.toFloat() / NUM_FREQ_BINS
-            // Logarithmic mapping: f = minFreq * (maxFreq / minFreq)^ratio
-            binFrequencies[b] = (minFreq * Math.pow((maxFreq / minFreq).toDouble(), ratio.toDouble())).toFloat()
+            binFrequencies[b] = (minFreq * Math.pow(freqRatio, ratio.toDouble())).toFloat()
         }
 
         var detectedCutoffHz = 0.0f
-        var validFrameCount = 0
+        val hzPerBin = (nyquistHz / (FFT_SIZE / 2)).coerceAtLeast(0.1f)
 
         for (sliceIdx in 0 until NUM_TIME_SLICES) {
-            val offset = (sliceIdx * stride).coerceIn(0, totalSamples - FFT_SIZE)
+            val offset = (sliceIdx * stride).coerceIn(0, max(0, totalSamples - FFT_SIZE))
 
             // Apply Hann Window
             for (i in 0 until FFT_SIZE) {
-                fftReal[i] = pcmSamples[offset + i] * HANN_WINDOW[i]
+                val sampleIdx = offset + i
+                val rawSample = if (sampleIdx < totalSamples) pcmSamples[sampleIdx] else 0.0f
+                fftReal[i] = rawSample * HANN_WINDOW[i]
                 fftImag[i] = 0.0f
             }
 
@@ -196,7 +222,6 @@ object SpectrogramEngine {
 
             // Map FFT linear bins to logarithmically spaced NUM_FREQ_BINS
             val column = FloatArray(NUM_FREQ_BINS)
-            val hzPerBin = nyquistHz / (FFT_SIZE / 2)
 
             for (b in 0 until NUM_FREQ_BINS) {
                 val fLow = binFrequencies[b]
@@ -213,10 +238,10 @@ object SpectrogramEngine {
                 }
                 val avgMag = if (binCount > 0) binSum / binCount else mag[kStart]
 
-                // Convert to decibels (dB): 20 * log10(avgMag / max) with -60dB floor
+                // Convert to decibels (dB): 20 * log10(avgMag / max) with -54dB floor
                 val normalizedMag = (avgMag / (maxSliceMag + 1e-6f)).coerceIn(1e-4f, 1.0f)
-                val db = 20.0f * log10(normalizedMag)
-                // Map [-54 dB .. 0 dB] -> [0.0f .. 1.0f]
+                val rawDb = 20.0f * log10(normalizedMag)
+                val db = if (rawDb.isNaN() || rawDb.isInfinite()) -54.0f else rawDb
                 val normalizedIntensity = ((db + 54.0f) / 54.0f).coerceIn(0.02f, 1.0f)
 
                 column[b] = normalizedIntensity
@@ -230,17 +255,17 @@ object SpectrogramEngine {
                 }
             }
             slices.add(column)
-            validFrameCount++
         }
 
-        val cutoffKhz = ((detectedCutoffHz / 1000.0f)).coerceIn(14.0f, (nyquistHz / 1000.0f))
+        val rawCutoffKhz = detectedCutoffHz / 1000.0f
+        val cutoffKhz = if (rawCutoffKhz.isNaN()) 20.0f else rawCutoffKhz.coerceIn(14.0f, (nyquistHz / 1000.0f))
 
         // Classify quality based on measured cutoff and declared track properties
-        val (finalRating, notes) = classifyQualityVerdict(track, cutoffKhz, sampleRate)
+        val (finalRating, notes) = classifyQualityVerdict(track, cutoffKhz, safeSampleRate)
 
         return SpectrogramAnalysis(
             cutoffKhz = cutoffKhz,
-            sampleRate = sampleRate,
+            sampleRate = safeSampleRate,
             bitDepth = if (track.format == "FLAC" || track.format == "WAV") 24 else 16,
             bitrateKbps = track.bitrateKbps,
             dynamicRangeDb = if (finalRating.isLossless) 16.5f else 13.0f,

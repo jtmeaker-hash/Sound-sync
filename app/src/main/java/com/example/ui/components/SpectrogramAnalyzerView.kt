@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -52,6 +53,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -98,6 +100,8 @@ fun SpectrogramAnalyzerView(
     onLoadToDeck: (Track) -> Unit = {},
     isLoading: Boolean = false,
     analysisProgressPercent: Int = 0,
+    errorMessage: String? = null,
+    onRetryAnalysis: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var inspectXRatio by remember { mutableFloatStateOf(0.45f) }
@@ -177,6 +181,53 @@ fun SpectrogramAnalyzerView(
                     )
                 }
             }
+        } else if (errorMessage != null && analyzedTrack != null) {
+            // Inline Error Recovery Card (Player remains fully functional)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("spectrogram_error_card"),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, NeonRed)
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = NeonRed, modifier = Modifier.size(22.dp))
+                        Text(
+                            text = "Couldn't analyze this track",
+                            color = NeonRed,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                    }
+                    Text(
+                        text = errorMessage,
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = onRetryAnalysis,
+                            colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("spectrogram_retry_button")
+                        ) {
+                            Icon(Icons.Default.Replay, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Retry Analysis", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
         } else if (isLoading) {
             Card(
                 modifier = Modifier
@@ -231,7 +282,8 @@ fun SpectrogramAnalyzerView(
 
             // Dynamic Inspection Crosshair readout
             val inspectedKhz = (1.0f - inspectYRatio) * 24.0f
-            val inspectedSec = (inspectXRatio * analyzedTrack.durationSeconds).toInt()
+            val safeDuration = analyzedTrack.durationSeconds.coerceAtLeast(0)
+            val inspectedSec = (inspectXRatio * safeDuration).toInt()
             val inspectedDb = -54.0f + (1.0f - inspectYRatio) * 54.0f
 
             Surface(
@@ -293,6 +345,34 @@ private fun SpectrogramCanvasCard(
     onInspectChange: (Float, Float) -> Unit,
     onSeek: (Float) -> Unit
 ) {
+    // Generate and cache lightweight GPU ImageBitmap texture (120x64 = ~30 KB)
+    val cachedBitmap = remember(analysis) {
+        val slices = analysis.spectralSlices
+        if (slices.isNotEmpty()) {
+            val numSlices = slices.size
+            val numBins = slices[0].size
+            if (numSlices > 0 && numBins > 0) {
+                try {
+                    val bmp = android.graphics.Bitmap.createBitmap(numSlices, numBins, android.graphics.Bitmap.Config.ARGB_8888)
+                    val pixels = IntArray(numSlices * numBins)
+                    for (f in 0 until numBins) {
+                        // Invert Y so low frequencies are at the bottom of the image
+                        val y = numBins - 1 - f
+                        for (t in 0 until numSlices) {
+                            val energy = slices[t][f]
+                            pixels[y * numSlices + t] = getHeatmapColorArgb(energy)
+                        }
+                    }
+                    bmp.setPixels(pixels, 0, numSlices, 0, 0, numSlices, numBins)
+                    bmp.asImageBitmap()
+                } catch (e: Throwable) {
+                    android.util.Log.e("SoundSyncSpectrum", "Failed creating spectrogram bitmap: ${e.message}", e)
+                    null
+                }
+            } else null
+        } else null
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -375,30 +455,15 @@ private fun SpectrogramCanvasCard(
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val w = size.width
                         val h = size.height
-                        val slices = analysis.spectralSlices
-                        if (slices.isNotEmpty()) {
-                            val numSlices = slices.size
-                            val numBins = slices[0].size
-                            val cellW = w / numSlices
-                            val cellH = h / numBins
+                        if (w <= 0f || h <= 0f) return@Canvas
 
-                            // Draw spectral density cells (Magma / Inferno heatmap)
-                            for (t in 0 until numSlices) {
-                                val col = slices[t]
-                                for (f in 0 until numBins) {
-                                    val energy = col[f]
-                                    val color = getHeatmapColor(energy)
-                                    // Invert Y so low frequencies are at the bottom and high at top
-                                    val y = h - (f + 1) * cellH
-                                    val x = t * cellW
-
-                                    drawRect(
-                                        color = color,
-                                        topLeft = Offset(x, y),
-                                        size = Size(cellW + 0.5f, cellH + 0.5f)
-                                    )
-                                }
-                            }
+                        // Draw pre-rendered spectrogram texture
+                        if (cachedBitmap != null) {
+                            drawImage(
+                                image = cachedBitmap,
+                                dstSize = androidx.compose.ui.unit.IntSize(w.toInt().coerceAtLeast(1), h.toInt().coerceAtLeast(1)),
+                                filterQuality = androidx.compose.ui.graphics.FilterQuality.Low
+                            )
                         }
 
                         // Standard Frequency Reference Lines (22.05k, 20.0k, 16.0k, 10.0k)
@@ -411,7 +476,7 @@ private fun SpectrogramCanvasCard(
                         )
 
                         freqMarkers.forEach { (khz, _) ->
-                            val yRatio = 1.0f - (khz / 24.0f)
+                            val yRatio = (1.0f - (khz / 24.0f)).coerceIn(0f, 1f)
                             val yPos = h * yRatio
                             drawLine(
                                 color = Color(0x33FFFFFF),
@@ -423,7 +488,7 @@ private fun SpectrogramCanvasCard(
                         }
 
                         // Draw Detected High Frequency Cutoff line
-                        val cutoffY = h * (1.0f - (analysis.cutoffKhz / 24.0f))
+                        val cutoffY = (h * (1.0f - (analysis.cutoffKhz / 24.0f))).coerceIn(0f, h)
                         val cutoffColor = if (analysis.qualityRating == AudioQualityRating.SUSPICIOUS_UPSCALED) NeonRed else NeonGreen
                         drawLine(
                             color = cutoffColor,
@@ -434,7 +499,7 @@ private fun SpectrogramCanvasCard(
 
                         // Draw Active Playback Cursor Line
                         if (playbackProgress in 0f..1f) {
-                            val playheadX = w * playbackProgress
+                            val playheadX = (w * playbackProgress).coerceIn(0f, w)
                             drawLine(
                                 color = Color.White,
                                 start = Offset(playheadX, 0f),
@@ -449,8 +514,8 @@ private fun SpectrogramCanvasCard(
                         }
 
                         // Draw Inspection Crosshair
-                        val inspectPxX = w * inspectX
-                        val inspectPxY = h * inspectY
+                        val inspectPxX = (w * inspectX).coerceIn(0f, w)
+                        val inspectPxY = (h * inspectY).coerceIn(0f, h)
                         drawLine(
                             color = DeckACyan.copy(alpha = 0.6f),
                             start = Offset(inspectPxX, 0f),
@@ -472,7 +537,7 @@ private fun SpectrogramCanvasCard(
                 modifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val dur = track.durationSeconds
+                val dur = track.durationSeconds.coerceAtLeast(0)
                 Text("0:00", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
                 Text(String.format(Locale.US, "%d:%02d", (dur / 4) / 60, (dur / 4) % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
                 Text(String.format(Locale.US, "%d:%02d", (dur / 2) / 60, (dur / 2) % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
@@ -573,6 +638,15 @@ private fun getHeatmapColor(intensity: Float): Color {
         clamped < 0.95f -> lerpColor(SpectroMidHigh, SpectroHigh, (clamped - 0.80f) / 0.15f)
         else -> lerpColor(SpectroHigh, SpectroPeak, (clamped - 0.95f) / 0.05f)
     }
+}
+
+private fun getHeatmapColorArgb(intensity: Float): Int {
+    val c = getHeatmapColor(intensity)
+    val a = (c.alpha * 255f).toInt().coerceIn(0, 255)
+    val r = (c.red * 255f).toInt().coerceIn(0, 255)
+    val g = (c.green * 255f).toInt().coerceIn(0, 255)
+    val b = (c.blue * 255f).toInt().coerceIn(0, 255)
+    return (a shl 24) or (r shl 16) or (g shl 8) or b
 }
 
 private fun lerpColor(c1: Color, c2: Color, t: Float): Color {

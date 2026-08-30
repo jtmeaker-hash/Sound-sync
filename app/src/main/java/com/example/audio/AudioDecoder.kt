@@ -6,43 +6,65 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.abs
-import kotlin.math.min
 
 /**
  * Decodes audio tracks into raw 16-bit mono PCM float samples [-1.0f .. 1.0f] using MediaExtractor and MediaCodec.
- * Fully supports Android content:// URIs, file:// URIs, and direct filesystem paths.
+ * Highly optimized for memory safety: uses primitive FloatArray buffers with hard memory bounds to prevent OOM crashes.
  */
 object AudioDecoder {
 
-    private const val TAG = "AudioDecoder"
+    private const val TAG = "SoundSyncDecoder"
     private const val TIMEOUT_US = 5000L
-    private const val MAX_PCM_SAMPLES = 44100 * 300 // Max 5 minutes of 44.1kHz mono PCM to prevent OOM
+    // Hard limit: 400,000 mono float samples = ~1.6 MB memory footprint (prevents OOM on all Android devices)
+    private const val MAX_PCM_SAMPLES = 400_000
 
     data class DecodedAudioData(
         val samples: FloatArray,
         val sampleRate: Int,
         val channelCount: Int,
         val durationMs: Long
-    )
+    ) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (javaClass != other?.javaClass) return false
+            other as DecodedAudioData
+            return samples.contentEquals(other.samples) &&
+                    sampleRate == other.sampleRate &&
+                    channelCount == other.channelCount &&
+                    durationMs == other.durationMs
+        }
+
+        override fun hashCode(): Int {
+            var result = samples.contentHashCode()
+            result = 31 * result + sampleRate
+            result = 31 * result + channelCount
+            result = 31 * result + durationMs.hashCode()
+            return result
+        }
+    }
 
     /**
      * Decodes an audio file or content URI into normalized mono float samples.
-     * Safely runs on Dispatchers.IO.
+     * Safely runs on Dispatchers.IO with strict try-finally decoder resource cleanup.
      */
     suspend fun decodeToMonoPcm(
         context: Context,
         filePathOrUri: String,
         maxDurationSeconds: Int = 180
     ): DecodedAudioData? = withContext(Dispatchers.IO) {
-        if (filePathOrUri.isBlank()) return@withContext null
+        if (filePathOrUri.isBlank()) {
+            Log.w(TAG, "decodeToMonoPcm called with blank filePathOrUri")
+            return@withContext null
+        }
 
-        com.example.util.DjLogger.startTiming("DECODE_START", "Decoding PCM for $filePathOrUri")
+        val decodeStartTime = System.currentTimeMillis()
+        Log.d(TAG, "Decoder start: URI/Path='$filePathOrUri', maxDurationSeconds=$maxDurationSeconds")
+
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
 
@@ -86,40 +108,44 @@ object AudioDecoder {
 
             if (audioTrackIndex < 0 || audioFormat == null) {
                 Log.w(TAG, "No audio track format found in $filePathOrUri")
-                extractor.release()
                 return@withContext null
             }
 
             extractor.selectTrack(audioTrackIndex)
 
-            val sampleRate = if (audioFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+            val rawSampleRate = if (audioFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
                 audioFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             } else 44100
+            val sampleRate = if (rawSampleRate > 0) rawSampleRate else 44100
 
-            val channelCount = if (audioFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+            val rawChannelCount = if (audioFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
                 audioFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             } else 2
+            val channelCount = rawChannelCount.coerceIn(1, 8)
 
             val durationUs = if (audioFormat.containsKey(MediaFormat.KEY_DURATION)) {
                 audioFormat.getLong(MediaFormat.KEY_DURATION)
             } else 0L
+            val durationMs = if (durationUs > 0) durationUs / 1000 else 0L
+
+            Log.d(TAG, "Audio stream detected: MIME=$mime, sampleRate=$sampleRate Hz, channels=$channelCount, durationMs=$durationMs ms")
 
             // 3. Initialize MediaCodec Decoder
             codec = MediaCodec.createDecoderByType(mime)
             codec.configure(audioFormat, null, null, 0)
             codec.start()
 
-            val maxSamplesToDecode = (sampleRate * maxDurationSeconds).coerceAtMost(MAX_PCM_SAMPLES)
-            val pcmList = ArrayList<Float>(maxSamplesToDecode)
+            // Preallocate primitive FloatArray (capped at MAX_PCM_SAMPLES = 400k floats = 1.6MB heap)
+            val maxSamplesToDecode = (sampleRate * maxDurationSeconds.coerceAtLeast(10)).coerceIn(4096, MAX_PCM_SAMPLES)
+            val pcmBuffer = FloatArray(maxSamplesToDecode)
+            var decodedSampleCount = 0
 
             val bufferInfo = MediaCodec.BufferInfo()
             var isInputEOS = false
             var isOutputEOS = false
-            var decodedSampleCount = 0
-
-            val maxIterations = 2000 // Loop safety limit to prevent hangs
-
+            val maxIterations = 2500 // Safety threshold to prevent infinite decode loops
             var iteration = 0
+
             while (!isOutputEOS && decodedSampleCount < maxSamplesToDecode && iteration++ < maxIterations) {
                 if (!isInputEOS) {
                     val inputBufIndex = codec.dequeueInputBuffer(TIMEOUT_US)
@@ -159,25 +185,21 @@ object AudioDecoder {
                         outputBuffer.order(ByteOrder.LITTLE_ENDIAN)
 
                         val shortBuffer = outputBuffer.asShortBuffer()
-                        val shortsAvailable = shortBuffer.remaining()
 
                         if (channelCount == 1) {
                             while (shortBuffer.hasRemaining() && decodedSampleCount < maxSamplesToDecode) {
                                 val s = shortBuffer.get()
-                                pcmList.add(s / 32768.0f)
-                                decodedSampleCount++
+                                pcmBuffer[decodedSampleCount++] = s / 32768.0f
                             }
                         } else {
                             // Convert Stereo/Multi-channel to Mono by averaging channels
-                            val channels = channelCount.coerceAtLeast(1)
-                            while (shortBuffer.remaining() >= channels && decodedSampleCount < maxSamplesToDecode) {
+                            while (shortBuffer.remaining() >= channelCount && decodedSampleCount < maxSamplesToDecode) {
                                 var sum = 0
-                                for (ch in 0 until channels) {
+                                for (ch in 0 until channelCount) {
                                     sum += shortBuffer.get().toInt()
                                 }
-                                val mono = (sum / channels) / 32768.0f
-                                pcmList.add(mono)
-                                decodedSampleCount++
+                                val mono = (sum / channelCount.toFloat()) / 32768.0f
+                                pcmBuffer[decodedSampleCount++] = mono
                             }
                         }
                     }
@@ -190,27 +212,45 @@ object AudioDecoder {
                 }
             }
 
-            val samplesArray = pcmList.toFloatArray()
-            com.example.util.DjLogger.endTiming("DECODE_END", "${samplesArray.size} samples decoded for $filePathOrUri")
-            Log.d(TAG, "Decoded ${samplesArray.size} PCM mono samples for $filePathOrUri ($sampleRate Hz, channels=$channelCount)")
+            val finalSamples = if (decodedSampleCount == pcmBuffer.size) {
+                pcmBuffer
+            } else {
+                pcmBuffer.copyOf(decodedSampleCount)
+            }
+
+            val totalDecodeTime = System.currentTimeMillis() - decodeStartTime
+            val estimatedMemKb = (finalSamples.size * 4) / 1024
+            Log.d(TAG, "Decoder end: Decoded ${finalSamples.size} PCM mono samples in ${totalDecodeTime}ms (Heap: ${estimatedMemKb} KB) for '$filePathOrUri'")
 
             DecodedAudioData(
-                samples = samplesArray,
+                samples = finalSamples,
                 sampleRate = sampleRate,
                 channelCount = channelCount,
-                durationMs = durationUs / 1000
+                durationMs = durationMs
             )
-        } catch (e: Exception) {
-            Log.w(TAG, "Error decoding PCM for $filePathOrUri: ${e.message}")
+        } catch (e: CancellationException) {
+            Log.d(TAG, "Decoder cancelled for: $filePathOrUri")
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "Decoder error for '$filePathOrUri': ${e.message}", e)
             null
         } finally {
             try {
                 codec?.stop()
+            } catch (e: Exception) {
+                Log.w(TAG, "Non-critical: codec.stop error: ${e.message}")
+            }
+            try {
                 codec?.release()
-            } catch (ignored: Exception) {}
+            } catch (e: Exception) {
+                Log.w(TAG, "Non-critical: codec.release error: ${e.message}")
+            }
             try {
                 extractor.release()
-            } catch (ignored: Exception) {}
+            } catch (e: Exception) {
+                Log.w(TAG, "Non-critical: extractor.release error: ${e.message}")
+            }
         }
     }
 }
+
