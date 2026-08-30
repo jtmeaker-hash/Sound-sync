@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -305,11 +306,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 // Auto scan MediaStore on initial launch if permission is granted
                 scanDeviceMediaStoreInternal()
             } else if (existingCount > 0) {
-                // Load first track for audio preview
+                // Restore first track into engine in PAUSED state (strict no autoplay on startup)
                 val firstTrack = trackDao.getAllTracksSync().firstOrNull()?.toTrack()
                 if (firstTrack != null) {
                     withContext(Dispatchers.Main) {
-                        audioEngine.loadTrack(firstTrack)
+                        Log.d("MainDjViewModel", "Restoring track '${firstTrack.title}' on startup in paused state")
+                        audioEngine.loadTrack(firstTrack, autoPlay = false)
                         inspectTrackSpectrogram(firstTrack)
                     }
                 }
@@ -366,7 +368,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
                 val first = scannedTracks.first()
                 withContext(Dispatchers.Main) {
-                    audioEngine.loadTrack(first)
+                    audioEngine.loadTrack(first, autoPlay = false)
                     inspectTrackSpectrogram(first)
                     showSnackbar("Successfully indexed ${scannedTracks.size} audio tracks from phone storage!")
                 }
@@ -453,7 +455,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
                 val first = imported.first()
                 withContext(Dispatchers.Main) {
-                    audioEngine.loadTrack(first)
+                    audioEngine.loadTrack(first, autoPlay = false)
                     inspectTrackSpectrogram(first)
                     showSnackbar("Successfully imported ${imported.size} audio files!")
                 }
@@ -476,7 +478,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
             val first = samples.first()
             withContext(Dispatchers.Main) {
-                audioEngine.loadTrack(first)
+                audioEngine.loadTrack(first, autoPlay = false)
                 inspectTrackSpectrogram(first)
                 showSnackbar("Loaded ${samples.size} DJ demo tracks with Camelot keys and cues!")
             }
@@ -612,8 +614,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         if (audioEngine.currentTrack.value?.id == track.id) {
             audioEngine.togglePlayPause()
         } else {
-            audioEngine.loadTrack(track)
-            audioEngine.play()
+            audioEngine.loadTrack(track, autoPlay = true)
             inspectTrackSpectrogram(track)
         }
     }
@@ -640,7 +641,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
             if (audioEngine.currentTrack.value?.id == updatedTrack.id) {
-                audioEngine.loadTrack(updatedTrack)
+                val wasPlaying = audioEngine.isPlaying.value
+                val currentSec = audioEngine.currentPositionSec.value
+                withContext(Dispatchers.Main) {
+                    audioEngine.loadTrack(updatedTrack, autoPlay = wasPlaying, initialPositionSec = currentSec)
+                }
             }
             withContext(Dispatchers.Main) {
                 _inspectingTrackForProperties.value = null
@@ -800,7 +805,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             }
             _isTaggingInProgress.value = false
             if (audioEngine.currentTrack.value?.id == track.id) {
-                audioEngine.loadTrack(tagged)
+                val wasPlaying = audioEngine.isPlaying.value
+                val currentSec = audioEngine.currentPositionSec.value
+                withContext(Dispatchers.Main) {
+                    audioEngine.loadTrack(tagged, autoPlay = wasPlaying, initialPositionSec = currentSec)
+                }
             }
             if (_inspectingTrackForProperties.value?.id == track.id) {
                 _inspectingTrackForProperties.value = tagged

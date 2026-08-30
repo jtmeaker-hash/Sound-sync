@@ -22,14 +22,34 @@ import java.io.File
 import kotlin.math.PI
 import kotlin.math.sin
 
+/**
+ * Single authoritative DJ Audio Engine managing playback state, MediaPlayer lifecycle,
+ * fallback procedural synthesis, and DJ deck parameters (Pitch, EQ, 4-bar Looping, Cues).
+ */
 class DjAudioEngine(private val context: Context) {
+
+    companion object {
+        private const val TAG = "DjAudioEngine"
+    }
 
     private val scope = CoroutineScope(Dispatchers.Default)
     private var playbackJob: Job? = null
+
+    @Volatile
     private var audioTrack: AudioTrack? = null
+    private val audioTrackLock = Any()
+
+    @Volatile
     private var mediaPlayer: MediaPlayer? = null
+    private val mediaPlayerLock = Any()
+
+    @Volatile
     private var isUsingMediaPlayer = false
 
+    @Volatile
+    private var isEngineReleased = false
+
+    // Authoritative Playback State: initialized strictly in a paused/stopped state
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying = _isPlaying.asStateFlow()
 
@@ -69,105 +89,232 @@ class DjAudioEngine(private val context: Context) {
 
     private var activeCueSeconds: Int = 0
 
-    fun loadTrack(track: Track) {
-        val wasPlaying = _isPlaying.value
+    init {
+        Log.d(TAG, "DjAudioEngine initialized in PAUSED/IDLE state. Auto-play is strictly disabled.")
+    }
+
+    /**
+     * Loads a track for playback or preview.
+     * Guaranteed to remain paused unless explicitly instructed via [autoPlay] = true.
+     */
+    fun loadTrack(track: Track?, autoPlay: Boolean = false, initialPositionSec: Int = 0) {
+        if (isEngineReleased) {
+            Log.w(TAG, "Cannot load track: AudioEngine has been released")
+            return
+        }
+
+        // Always pause before loading a new track
         pause()
         releasePlayers()
 
+        if (track == null) {
+            _currentTrack.value = null
+            _playbackProgress.value = 0f
+            _currentPositionSec.value = 0
+            activeCueSeconds = 0
+            Log.d(TAG, "Cleared current track in player")
+            return
+        }
+
+        Log.d(TAG, "Loading media item: '${track.title}' by '${track.artist}' (URI/Path: ${track.filePath}, autoPlay=$autoPlay)")
         _currentTrack.value = track
-        _effectiveBpm.value = track.bpm * (1.0 + _pitchPercent.value / 100.0)
-        _playbackProgress.value = 0f
-        _currentPositionSec.value = 0
+        val baseBpm = if (track.bpm > 0) track.bpm else 126.0
+        _effectiveBpm.value = baseBpm * (1.0 + _pitchPercent.value / 100.0)
+
+        val duration = track.durationSeconds.coerceAtLeast(0)
+        val initialSec = initialPositionSec.coerceIn(0, duration)
+        _currentPositionSec.value = initialSec
+        _playbackProgress.value = if (duration > 0) (initialSec.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
         activeCueSeconds = 0
+
         generateStaticWaveform(track)
+        prepareMediaPlayerForTrack(track, initialSec)
 
-        prepareMediaPlayerForTrack(track)
-
-        if (wasPlaying) {
+        if (autoPlay) {
+            Log.d(TAG, "Explicit autoPlay=true requested for '${track.title}'")
             play()
+        } else {
+            Log.d(TAG, "Track '${track.title}' loaded and PREPARED IN PAUSED STATE (no autoplay).")
         }
     }
 
-    private fun prepareMediaPlayerForTrack(track: Track) {
-        try {
-            val uriOrPath = track.filePath
-            val mp = MediaPlayer()
-            mp.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
+    private fun isUriAccessible(uriOrPath: String): Boolean {
+        if (uriOrPath.isBlank()) return false
+        return try {
+            if (uriOrPath.startsWith("content://")) {
+                val uri = Uri.parse(uriOrPath)
+                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
+            } else if (uriOrPath.startsWith("file://")) {
+                val file = File(Uri.parse(uriOrPath).path ?: "")
+                file.exists() && file.canRead()
+            } else {
+                val file = File(uriOrPath)
+                file.exists() && file.canRead()
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "SecurityException: Lost permission for URI '$uriOrPath': ${e.message}")
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "Cannot access URI or file '$uriOrPath': ${e.message}")
+            false
+        }
+    }
 
-            var prepared = false
+    private fun prepareMediaPlayerForTrack(track: Track, initialPositionSec: Int) {
+        val uriOrPath = track.filePath
+        if (!isUriAccessible(uriOrPath)) {
+            Log.d(TAG, "URI or path '$uriOrPath' is not directly accessible. Synthesis fallback will be used when played.")
+            isUsingMediaPlayer = false
+            return
+        }
+
+        var mp: MediaPlayer? = null
+        try {
+            mp = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+            }
+
+            Log.d(TAG, "Opening URI in MediaPlayer: $uriOrPath")
             if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
                 mp.setDataSource(context, Uri.parse(uriOrPath))
-                mp.prepare()
-                prepared = true
-            } else if (File(uriOrPath).exists() && File(uriOrPath).canRead()) {
+            } else {
                 mp.setDataSource(uriOrPath)
-                mp.prepare()
-                prepared = true
             }
 
-            if (prepared) {
-                applyPlaybackParams(mp)
-                mp.setOnCompletionListener {
-                    if (_activeLoopBars.value > 0) {
-                        seekToSecond(activeCueSeconds)
-                        mp.start()
-                    } else {
-                        seekToSecond(0)
-                        pause()
+            mp.prepare()
+            applyPlaybackParams(mp)
+
+            if (initialPositionSec > 0) {
+                mp.seekTo(initialPositionSec * 1000)
+            }
+
+            mp.setOnCompletionListener {
+                Log.d(TAG, "MediaPlayer completed playback")
+                if (_activeLoopBars.value > 0) {
+                    seekToSecond(activeCueSeconds)
+                    if (_isPlaying.value) {
+                        try {
+                            it.start()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error restarting loop in MediaPlayer: ${e.message}")
+                        }
                     }
+                } else {
+                    seekToSecond(0)
+                    pause()
                 }
-                mp.setOnErrorListener { _, what, extra ->
-                    Log.w("DjAudioEngine", "MediaPlayer error: $what, $extra")
+            }
+
+            mp.setOnErrorListener { _, what, extra ->
+                Log.e(TAG, "MediaPlayer asynchronous error: what=$what, extra=$extra. Reverting to paused synthesis.")
+                synchronized(mediaPlayerLock) {
                     isUsingMediaPlayer = false
-                    true
+                    try {
+                        mediaPlayer?.release()
+                    } catch (ignored: Exception) {}
+                    mediaPlayer = null
                 }
+                true
+            }
+
+            synchronized(mediaPlayerLock) {
                 mediaPlayer = mp
                 isUsingMediaPlayer = true
-            } else {
-                mp.release()
-                isUsingMediaPlayer = false
             }
+            Log.d(TAG, "MediaPlayer successfully prepared for '${track.title}'. Ready in paused state.")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException preparing MediaPlayer for '${track.filePath}': ${e.message}")
+            safeReleaseMediaPlayer(mp)
+            isUsingMediaPlayer = false
         } catch (e: Exception) {
-            Log.d("DjAudioEngine", "Cannot use MediaPlayer for path '${track.filePath}', falling back to synthesis: ${e.message}")
+            Log.e(TAG, "Exception preparing MediaPlayer for '${track.filePath}': ${e.message}")
+            safeReleaseMediaPlayer(mp)
             isUsingMediaPlayer = false
         }
     }
 
-    fun play() {
-        if (_currentTrack.value == null) return
-        _isPlaying.value = true
-
-        if (isUsingMediaPlayer && mediaPlayer != null) {
-            try {
-                applyPlaybackParams(mediaPlayer)
-                mediaPlayer?.start()
-                startMediaPlayerTracking()
-            } catch (e: Exception) {
-                isUsingMediaPlayer = false
-                startAudioSynthesis()
-            }
-        } else {
-            startAudioSynthesis()
+    private fun safeReleaseMediaPlayer(mp: MediaPlayer?) {
+        if (mp == null) return
+        try {
+            mp.reset()
+            mp.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing temporary MediaPlayer: ${e.message}")
         }
     }
 
+    /**
+     * Explicit playback start triggered ONLY by user interaction.
+     */
+    fun play() {
+        if (isEngineReleased) {
+            Log.w(TAG, "Cannot start playback: AudioEngine has been released.")
+            return
+        }
+
+        val track = _currentTrack.value
+        if (track == null) {
+            Log.w(TAG, "Play called but no track is currently loaded.")
+            return
+        }
+
+        Log.d(TAG, "Explicit playback started by user for track: '${track.title}' (isUsingMediaPlayer=$isUsingMediaPlayer)")
+        _isPlaying.value = true
+
+        if (isUsingMediaPlayer) {
+            val mp = synchronized(mediaPlayerLock) { mediaPlayer }
+            if (mp != null) {
+                try {
+                    applyPlaybackParams(mp)
+                    mp.start()
+                    startMediaPlayerTracking()
+                    return
+                } catch (e: IllegalStateException) {
+                    Log.e(TAG, "MediaPlayer was in an invalid state when start() called: ${e.message}. Falling back to synthesis.")
+                    synchronized(mediaPlayerLock) {
+                        isUsingMediaPlayer = false
+                        try {
+                            mediaPlayer?.release()
+                        } catch (ignored: Exception) {}
+                        mediaPlayer = null
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error starting MediaPlayer: ${e.message}. Falling back to synthesis.")
+                    isUsingMediaPlayer = false
+                }
+            }
+        }
+
+        // Fallback to audio synthesis preview
+        startAudioSynthesis()
+    }
+
+    /**
+     * Pauses playback and stops audio output immediately.
+     */
     fun pause() {
+        Log.d(TAG, "Playback paused.")
         _isPlaying.value = false
         playbackJob?.cancel()
-        if (isUsingMediaPlayer && mediaPlayer != null) {
-            try {
-                if (mediaPlayer?.isPlaying == true) {
-                    mediaPlayer?.pause()
+
+        synchronized(mediaPlayerLock) {
+            if (mediaPlayer != null) {
+                try {
+                    if (mediaPlayer?.isPlaying == true) {
+                        mediaPlayer?.pause()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Ignored exception during MediaPlayer pause: ${e.message}")
                 }
-            } catch (ignored: Exception) {}
-        } else {
-            stopAudioSynthesis()
+            }
         }
+
+        stopAudioSynthesis()
     }
 
     fun togglePlayPause() {
@@ -198,8 +345,10 @@ class DjAudioEngine(private val context: Context) {
         val base = _currentTrack.value?.bpm ?: 126.0
         _effectiveBpm.value = base * (1.0 + _pitchPercent.value / 100.0)
 
-        if (isUsingMediaPlayer && mediaPlayer != null) {
-            applyPlaybackParams(mediaPlayer)
+        synchronized(mediaPlayerLock) {
+            if (isUsingMediaPlayer && mediaPlayer != null) {
+                applyPlaybackParams(mediaPlayer)
+            }
         }
     }
 
@@ -238,14 +387,19 @@ class DjAudioEngine(private val context: Context) {
 
     fun seekToSecond(sec: Int) {
         val track = _currentTrack.value ?: return
-        val clamped = sec.coerceIn(0, track.durationSeconds)
+        val duration = track.durationSeconds.coerceAtLeast(0)
+        val clamped = sec.coerceIn(0, duration)
         _currentPositionSec.value = clamped
-        _playbackProgress.value = if (track.durationSeconds > 0) clamped.toFloat() / track.durationSeconds else 0f
+        _playbackProgress.value = if (duration > 0) clamped.toFloat() / duration.toFloat() else 0f
 
-        if (isUsingMediaPlayer && mediaPlayer != null) {
-            try {
-                mediaPlayer?.seekTo(clamped * 1000)
-            } catch (ignored: Exception) {}
+        synchronized(mediaPlayerLock) {
+            if (isUsingMediaPlayer && mediaPlayer != null) {
+                try {
+                    mediaPlayer?.seekTo(clamped * 1000)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Seek error in MediaPlayer: ${e.message}")
+                }
+            }
         }
     }
 
@@ -261,15 +415,15 @@ class DjAudioEngine(private val context: Context) {
                 mp.playbackParams = params
             }
         } catch (e: Exception) {
-            Log.w("DjAudioEngine", "Cannot apply playback params", e)
+            Log.w(TAG, "Cannot apply playback params: ${e.message}")
         }
     }
 
     private fun startMediaPlayerTracking() {
         playbackJob?.cancel()
         playbackJob = scope.launch {
-            while (isActive && _isPlaying.value) {
-                val mp = mediaPlayer
+            while (isActive && _isPlaying.value && !isEngineReleased) {
+                val mp = synchronized(mediaPlayerLock) { mediaPlayer }
                 val track = _currentTrack.value
                 if (mp != null && track != null) {
                     try {
@@ -283,14 +437,16 @@ class DjAudioEngine(private val context: Context) {
 
                         // Check active loop
                         if (_activeLoopBars.value > 0) {
-                            val currentBpm = _effectiveBpm.value
+                            val currentBpm = _effectiveBpm.value.coerceIn(20.0, 300.0)
                             val loopLengthSec = (_activeLoopBars.value * 4 * 60 / currentBpm).toInt().coerceAtLeast(2)
                             val startLoopSec = activeCueSeconds
                             if (currentSec >= startLoopSec + loopLengthSec) {
                                 seekToSecond(startLoopSec)
                             }
                         }
-                    } catch (ignored: Exception) {}
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Exception in tracking loop: ${e.message}")
+                    }
                 }
                 delay(100)
             }
@@ -310,14 +466,16 @@ class DjAudioEngine(private val context: Context) {
         playbackJob?.cancel()
         playbackJob = scope.launch {
             val sampleRate = 22050
-            val bufferSize = AudioTrack.getMinBufferSize(
+            val minBuf = AudioTrack.getMinBufferSize(
                 sampleRate,
                 AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
+            val bufferSize = if (minBuf > 0) minBuf.coerceAtLeast(4096) else 4096
 
+            var localTrack: AudioTrack? = null
             try {
-                audioTrack = AudioTrack.Builder()
+                localTrack = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -335,16 +493,26 @@ class DjAudioEngine(private val context: Context) {
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
 
-                audioTrack?.play()
+                if (localTrack.state != AudioTrack.STATE_INITIALIZED) {
+                    Log.w(TAG, "AudioTrack failed to initialize, skipping synthesis")
+                    localTrack.release()
+                    return@launch
+                }
+
+                synchronized(audioTrackLock) {
+                    audioTrack = localTrack
+                }
+
+                localTrack.play()
 
                 val buffer = ShortArray(bufferSize / 2)
                 var phase = 0.0
                 var step = 0
 
-                while (isActive && _isPlaying.value) {
+                while (isActive && _isPlaying.value && !isEngineReleased) {
                     val track = _currentTrack.value ?: break
-                    val currentBpm = _effectiveBpm.value
-                    val beatPeriodSamples = (sampleRate * 60.0 / currentBpm).toInt()
+                    val currentBpm = _effectiveBpm.value.coerceIn(20.0, 300.0)
+                    val beatPeriodSamples = (sampleRate * 60.0 / currentBpm).toInt().coerceAtLeast(100)
 
                     for (i in buffer.indices) {
                         step++
@@ -387,9 +555,14 @@ class DjAudioEngine(private val context: Context) {
                         buffer[i] = shortSample
                     }
 
-                    audioTrack?.write(buffer, 0, buffer.size)
+                    synchronized(audioTrackLock) {
+                        if (audioTrack == localTrack && localTrack.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                            localTrack.write(buffer, 0, buffer.size)
+                        }
+                    }
 
-                    // Advance track position
+                    // Advance track position safely
+                    val duration = track.durationSeconds.coerceAtLeast(1)
                     val newSec = _currentPositionSec.value + 1
                     if (_activeLoopBars.value > 0) {
                         val loopLengthSec = (_activeLoopBars.value * 4 * 60 / currentBpm).toInt().coerceAtLeast(2)
@@ -400,7 +573,7 @@ class DjAudioEngine(private val context: Context) {
                             seekToSecond(newSec)
                         }
                     } else {
-                        if (newSec >= track.durationSeconds) {
+                        if (newSec >= duration) {
                             seekToSecond(0)
                             pause()
                         } else {
@@ -411,7 +584,7 @@ class DjAudioEngine(private val context: Context) {
                     delay(300)
                 }
             } catch (e: Exception) {
-                // Audio device handling
+                Log.e(TAG, "Audio synthesis error: ${e.message}", e)
             } finally {
                 stopAudioSynthesis()
             }
@@ -419,25 +592,42 @@ class DjAudioEngine(private val context: Context) {
     }
 
     private fun stopAudioSynthesis() {
-        try {
-            audioTrack?.stop()
-            audioTrack?.release()
-        } catch (e: Exception) {
-            // Ignored
+        synchronized(audioTrackLock) {
+            try {
+                if (audioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                    audioTrack?.stop()
+                }
+                audioTrack?.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Ignored error stopping AudioTrack: ${e.message}")
+            }
+            audioTrack = null
         }
-        audioTrack = null
     }
 
     private fun releasePlayers() {
-        try {
-            mediaPlayer?.stop()
-            mediaPlayer?.release()
-        } catch (ignored: Exception) {}
-        mediaPlayer = null
+        synchronized(mediaPlayerLock) {
+            try {
+                if (mediaPlayer?.isPlaying == true) {
+                    mediaPlayer?.stop()
+                }
+                mediaPlayer?.reset()
+                mediaPlayer?.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Ignored error releasing MediaPlayer: ${e.message}")
+            }
+            mediaPlayer = null
+            isUsingMediaPlayer = false
+        }
         stopAudioSynthesis()
     }
 
+    /**
+     * Releases all player instances and cancels active coroutines when the ViewModel is destroyed.
+     */
     fun release() {
+        Log.d(TAG, "Releasing DjAudioEngine...")
+        isEngineReleased = true
         pause()
         releasePlayers()
         playbackJob?.cancel()

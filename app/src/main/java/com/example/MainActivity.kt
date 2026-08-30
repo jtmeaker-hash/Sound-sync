@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -18,8 +19,13 @@ import com.example.ui.theme.SoundSyncTheme
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.d(TAG, "onCreate: Activity starting up. Auto-playback is strictly prohibited.")
         enableEdgeToEdge()
 
         setContent {
@@ -31,6 +37,7 @@ class MainActivity : ComponentActivity() {
                     contract = ActivityResultContracts.RequestMultiplePermissions()
                 ) { permissions ->
                     val isGranted = permissions.values.any { it }
+                    Log.d(TAG, "Storage permission result: isGranted=$isGranted")
                     viewModel.onPermissionResult(isGranted)
                 }
 
@@ -39,6 +46,7 @@ class MainActivity : ComponentActivity() {
                     contract = ActivityResultContracts.OpenDocumentTree()
                 ) { uri: Uri? ->
                     if (uri != null) {
+                        Log.d(TAG, "SAF folder selected: $uri")
                         viewModel.importSafFolder(uri)
                     }
                 }
@@ -48,6 +56,7 @@ class MainActivity : ComponentActivity() {
                     contract = ActivityResultContracts.OpenMultipleDocuments()
                 ) { uris: List<Uri> ->
                     if (uris.isNotEmpty()) {
+                        Log.d(TAG, "Importing ${uris.size} audio files selected by user")
                         viewModel.importAudioFiles(uris)
                     }
                 }
@@ -90,5 +99,30 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        Log.d(TAG, "onStart: Activity visible (audio remains in its current user-commanded state).")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Log.d(TAG, "onResume: Activity in foreground.")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Log.d(TAG, "onPause: Activity losing focus.")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        Log.d(TAG, "onStop: Activity in background.")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d(TAG, "onDestroy: Activity destroyed.")
     }
 }
