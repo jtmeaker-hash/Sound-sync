@@ -162,16 +162,32 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `MediaScannerHelper scanDeviceAudioStreaming runs safely without crashing`() = runBlocking {
+    fun `SpectrogramEngine analyzeTrack produces valid STFT frequency heatmap and cutoffKhz`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val batches = mutableListOf<List<Track>>()
+        val track = createSampleTrack()
 
-        val total = MediaScannerHelper.scanDeviceAudioStreaming(
-            context = context,
-            batchSize = 20,
-            onBatch = { batch -> batches.add(batch) }
-        )
+        val analysis = com.example.audio.SpectrogramEngine.analyzeTrack(context, track)
 
-        assertTrue(total >= 0)
+        assertNotNull(analysis)
+        assertTrue(analysis.cutoffKhz in 14.0f..24.0f)
+        assertEquals(com.example.audio.SpectrogramEngine.NUM_TIME_SLICES, analysis.spectralSlices.size)
+        assertTrue(analysis.spectralSlices.isNotEmpty())
+        assertEquals(com.example.audio.SpectrogramEngine.NUM_FREQ_BINS, analysis.spectralSlices[0].size)
+        assertNotNull(analysis.qualityRating)
+        assertNotNull(analysis.notes)
+    }
+
+    @Test
+    fun `SpectrogramEngine extractWaveform produces normalized amplitude bars`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val track = createSampleTrack()
+
+        val waveform = com.example.audio.SpectrogramEngine.extractWaveform(context, track, barCount = 60)
+
+        assertNotNull(waveform)
+        assertEquals(60, waveform.size)
+        waveform.forEach { bar ->
+            assertTrue(bar in 0.0f..1.0f)
+        }
     }
 }

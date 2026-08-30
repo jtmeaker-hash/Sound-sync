@@ -63,6 +63,9 @@ object MediaScannerHelper {
         val selection = "(${MediaStore.Audio.Media.IS_MUSIC} != 0 OR ${MediaStore.Audio.Media.DURATION} > 3000)"
         val sortOrder = "${MediaStore.Audio.Media.DATE_MODIFIED} DESC"
 
+        val scanStartTime = System.currentTimeMillis()
+        Log.d(TAG, "Library scan started via MediaStore")
+
         var totalIndexed = 0
         val currentBatch = mutableListOf<Track>()
 
@@ -82,6 +85,7 @@ object MediaScannerHelper {
                 } else -1
 
                 val total = cursor.count
+                Log.d(TAG, "MediaStore query completed: $total audio tracks found on storage")
                 var current = 0
 
                 while (cursor.moveToNext()) {
@@ -156,7 +160,10 @@ object MediaScannerHelper {
 
                         // Emit batch to database incrementally
                         if (currentBatch.size >= batchSize) {
+                            val batchStartTime = System.currentTimeMillis()
+                            Log.d(TAG, "Metadata processing batch saving (${currentBatch.size} tracks)...")
                             onBatch(currentBatch.toList())
+                            Log.d(TAG, "Metadata processing batch saved in ${System.currentTimeMillis() - batchStartTime}ms")
                             currentBatch.clear()
                         }
                     } catch (e: Exception) {
@@ -168,9 +175,13 @@ object MediaScannerHelper {
 
             // Flush final batch
             if (currentBatch.isNotEmpty()) {
+                val batchStartTime = System.currentTimeMillis()
+                Log.d(TAG, "Metadata processing final batch saving (${currentBatch.size} tracks)...")
                 onBatch(currentBatch.toList())
+                Log.d(TAG, "Metadata processing final batch saved in ${System.currentTimeMillis() - batchStartTime}ms")
                 currentBatch.clear()
             }
+            Log.d(TAG, "Library scan finished. Total indexed tracks: $totalIndexed in ${System.currentTimeMillis() - scanStartTime}ms")
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException querying MediaStore: ${e.message}", e)
             throw e

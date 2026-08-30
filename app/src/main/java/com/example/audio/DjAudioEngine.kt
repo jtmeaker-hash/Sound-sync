@@ -93,9 +93,12 @@ class DjAudioEngine(private val context: Context) {
         Log.d(TAG, "DjAudioEngine initialized in PAUSED/IDLE state. Auto-play is strictly disabled.")
     }
 
+    private var prepareJob: Job? = null
+
     /**
      * Loads a track for playback or preview.
      * Guaranteed to remain paused unless explicitly instructed via [autoPlay] = true.
+     * Operates completely asynchronously without blocking the main/UI thread.
      */
     fun loadTrack(track: Track?, autoPlay: Boolean = false, initialPositionSec: Int = 0) {
         if (isEngineReleased) {
@@ -105,6 +108,7 @@ class DjAudioEngine(private val context: Context) {
 
         // Always pause before loading a new track
         pause()
+        prepareJob?.cancel()
         releasePlayers()
 
         if (track == null) {
@@ -127,14 +131,26 @@ class DjAudioEngine(private val context: Context) {
         _playbackProgress.value = if (duration > 0) (initialSec.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
         activeCueSeconds = 0
 
-        generateStaticWaveform(track)
-        prepareMediaPlayerForTrack(track, initialSec)
+        // Asynchronously prepare MediaPlayer and extract real waveform without blocking UI
+        prepareJob = scope.launch(Dispatchers.IO) {
+            val prepStartTime = System.currentTimeMillis()
+            Log.d(TAG, "Playback preparation started for '${track.title}'")
 
-        if (autoPlay) {
-            Log.d(TAG, "Explicit autoPlay=true requested for '${track.title}'")
-            play()
-        } else {
-            Log.d(TAG, "Track '${track.title}' loaded and PREPARED IN PAUSED STATE (no autoplay).")
+            // 1. Asynchronously extract waveform
+            val waveform = SpectrogramEngine.extractWaveform(context, track)
+            _waveformHeights.value = waveform
+
+            // 2. Prepare MediaPlayer on background IO thread
+            prepareMediaPlayerForTrack(track, initialSec)
+            val prepTime = System.currentTimeMillis() - prepStartTime
+            Log.d(TAG, "Playback preparation finished in ${prepTime}ms for '${track.title}'")
+
+            if (autoPlay && !isEngineReleased) {
+                Log.d(TAG, "Explicit autoPlay=true requested for '${track.title}'")
+                play()
+            } else {
+                Log.d(TAG, "Track '${track.title}' loaded and PREPARED IN PAUSED STATE (no autoplay).")
+            }
         }
     }
 

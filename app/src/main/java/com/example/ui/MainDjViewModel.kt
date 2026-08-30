@@ -134,6 +134,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _spectrogramData = MutableStateFlow<SpectrogramAnalysis?>(null)
     val spectrogramData = _spectrogramData.asStateFlow()
 
+    private val _isSpectrogramLoading = MutableStateFlow(false)
+    val isSpectrogramLoading = _isSpectrogramLoading.asStateFlow()
+
+    private var currentAnalysisJob: Job? = null
+
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage = _snackbarMessage.asStateFlow()
 
@@ -691,9 +696,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun inspectTrackSpectrogram(track: Track) {
         _analyzedTrack.value = track
-        viewModelScope.launch(Dispatchers.Default) {
-            val analysis = SpectrogramEngine.analyzeTrackQuality(track)
-            _spectrogramData.value = analysis
+        currentAnalysisJob?.cancel()
+        _isSpectrogramLoading.value = true
+
+        currentAnalysisJob = viewModelScope.launch(Dispatchers.Default) {
+            val app = getApplication<Application>()
+            try {
+                val analysis = SpectrogramEngine.analyzeTrack(app, track)
+                _spectrogramData.value = analysis
+            } catch (e: Exception) {
+                Log.e("MainDjViewModel", "Error analyzing spectrogram for '${track.title}': ${e.message}", e)
+            } finally {
+                _isSpectrogramLoading.value = false
+            }
         }
     }
 

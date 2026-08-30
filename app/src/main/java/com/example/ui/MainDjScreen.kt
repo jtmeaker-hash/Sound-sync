@@ -120,6 +120,7 @@ fun MainDjScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val analyzedTrack by viewModel.analyzedTrack.collectAsState()
     val spectrogramData by viewModel.spectrogramData.collectAsState()
+    val isSpectrogramLoading by viewModel.isSpectrogramLoading.collectAsState()
     val isTagging by viewModel.isTaggingInProgress.collectAsState()
     val taggingMessage by viewModel.taggingProgressMessage.collectAsState()
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
@@ -281,7 +282,8 @@ fun MainDjScreen(
                         spectrogramData = spectrogramData,
                         allTracks = allTracks,
                         onSelectTrack = { viewModel.inspectTrackSpectrogram(it) },
-                        onLoadToDeck = { viewModel.playTrack(it) }
+                        onLoadToDeck = { viewModel.playTrack(it) },
+                        isLoading = isSpectrogramLoading
                     )
                 }
                 DjTab.DUPLICATES -> {

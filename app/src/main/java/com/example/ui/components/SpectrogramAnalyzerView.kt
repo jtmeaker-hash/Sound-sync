@@ -33,6 +33,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -91,6 +92,7 @@ fun SpectrogramAnalyzerView(
     allTracks: List<Track>,
     onSelectTrack: (Track) -> Unit,
     onLoadToDeck: (Track) -> Unit,
+    isLoading: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var inspectXRatio by remember { mutableFloatStateOf(0.45f) }
@@ -145,7 +147,37 @@ fun SpectrogramAnalyzerView(
             }
         }
 
-        if (analyzedTrack != null && spectrogramData != null) {
+        if (isLoading) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(260.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    CircularProgressIndicator(color = DeckACyan, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Calculating Acoustic FFT & Spectral Density...",
+                        color = DeckACyan,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Decoding PCM and analyzing high-frequency acoustic cutoff in background",
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        } else if (analyzedTrack != null && spectrogramData != null) {
             // Main Spectrogram Heatmap Canvas Card
             SpectrogramCanvasCard(
                 track = analyzedTrack,
