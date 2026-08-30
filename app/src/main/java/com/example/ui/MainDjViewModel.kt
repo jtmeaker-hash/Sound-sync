@@ -53,11 +53,11 @@ import java.io.File
 import java.util.UUID
 
 enum class DjTab(val title: String, val iconName: String) {
-    EXPLORER("DJ Explorer", "folder"),
-    LIBRARY("Crates & Tags", "queue_music"),
-    SPECTROGRAM("Spectrum Lab", "graphic_eq"),
-    DUPLICATES("Duplicates", "content_copy"),
-    OPERATIONS("Hub & Storage", "storage")
+    LOCAL("Local", "folder"),
+    SOUNDCLOUD("SoundCloud", "cloud"),
+    SPOTIFY("Spotify", "library_music"),
+    SPECTROGRAM("Spectrogram", "graphic_eq"),
+    OPERATIONS("DJ Tools", "storage")
 }
 
 class MainDjViewModel(application: Application) : AndroidViewModel(application) {
@@ -66,17 +66,24 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val trackDao = db.trackDao()
     private val sourceFolderDao = db.sourceFolderDao()
 
+    val spotifyRepository = com.example.network.spotify.SpotifyRepository(application)
+    val soundCloudRepository = com.example.network.soundcloud.SoundCloudRepository(application)
+
     val scanStateManager = ScanStateManager(application)
     private val scanMutex = Mutex()
     private var currentScanJob: Job? = null
 
     val audioEngine = DjAudioEngine(application)
 
-    private val _selectedTab = MutableStateFlow(DjTab.EXPLORER)
+    private val _selectedTab = MutableStateFlow(DjTab.LOCAL)
     val selectedTab = _selectedTab.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
+
+    // Dialog state for API credentials
+    private val _showApiConfigDialog = MutableStateFlow(false)
+    val showApiConfigDialog = _showApiConfigDialog.asStateFlow()
 
     // Permission and Scanning State
     private val _hasStoragePermission = MutableStateFlow(checkInitialStoragePermission())
@@ -87,6 +94,24 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _scanProgressMessage = MutableStateFlow("")
     val scanProgressMessage = _scanProgressMessage.asStateFlow()
+
+    // Spectrogram analysis progress
+    private val _analysisProgressPercent = MutableStateFlow(0)
+    val analysisProgressPercent = _analysisProgressPercent.asStateFlow()
+
+    // Spotify State Flows
+    val spotifyAuthState = spotifyRepository.authState
+    val spotifySavedTracks = spotifyRepository.savedTracks
+    val spotifyPlaylists = spotifyRepository.playlists
+    val spotifySearchResults = spotifyRepository.searchResults
+    val spotifyIsLoading = spotifyRepository.isLoadingContent
+
+    // SoundCloud State Flows
+    val soundCloudAuthState = soundCloudRepository.authState
+    val soundCloudLikedTracks = soundCloudRepository.likedTracks
+    val soundCloudPlaylists = soundCloudRepository.playlists
+    val soundCloudSearchResults = soundCloudRepository.searchResults
+    val soundCloudIsLoading = soundCloudRepository.isLoadingContent
 
     // Background DocumentFile AudioScanService State
     val scanServiceState: StateFlow<AudioScanState> = AudioScanService.scanState
@@ -694,20 +719,169 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         _inspectingTrackForProperties.value = null
     }
 
-    fun inspectTrackSpectrogram(track: Track) {
+    fun inspectTrackSpectrogram(track: Track, showTab: Boolean = false) {
         _analyzedTrack.value = track
+        if (showTab) {
+            _selectedTab.value = DjTab.SPECTROGRAM
+        }
+
+        if (track.platforms.contains(MusicPlatform.SPOTIFY)) {
+            _spectrogramData.value = null
+            _isSpectrogramLoading.value = false
+            _analysisProgressPercent.value = 0
+            return
+        }
+
         currentAnalysisJob?.cancel()
         _isSpectrogramLoading.value = true
+        _analysisProgressPercent.value = 0
 
         currentAnalysisJob = viewModelScope.launch(Dispatchers.Default) {
             val app = getApplication<Application>()
             try {
-                val analysis = SpectrogramEngine.analyzeTrack(app, track)
+                val analysis = SpectrogramEngine.analyzeTrack(
+                    context = app,
+                    track = track,
+                    onProgress = { percent ->
+                        _analysisProgressPercent.value = percent
+                    }
+                )
                 _spectrogramData.value = analysis
             } catch (e: Exception) {
                 Log.e("MainDjViewModel", "Error analyzing spectrogram for '${track.title}': ${e.message}", e)
             } finally {
                 _isSpectrogramLoading.value = false
+            }
+        }
+    }
+
+    // ==========================================
+    // STREAMING SERVICES & OAUTH DEEP LINKING
+    // ==========================================
+
+    fun openApiConfigDialog() {
+        _showApiConfigDialog.value = true
+    }
+
+    fun closeApiConfigDialog() {
+        _showApiConfigDialog.value = false
+    }
+
+    fun saveSpotifyClientId(id: String) {
+        spotifyRepository.saveClientId(id)
+        showSnackbar("Saved Spotify Client ID")
+    }
+
+    fun saveSoundCloudClientId(id: String) {
+        soundCloudRepository.saveClientId(id)
+        showSnackbar("Saved SoundCloud Client ID")
+    }
+
+    fun connectSpotify(context: Context) {
+        val authUrl = spotifyRepository.createAuthUrl()
+        try {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(authUrl))
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            showSnackbar("Could not launch browser for Spotify authentication: ${e.message}")
+        }
+    }
+
+    fun disconnectSpotify() {
+        spotifyRepository.disconnect()
+        showSnackbar("Disconnected from Spotify")
+    }
+
+    fun searchSpotify(query: String) {
+        viewModelScope.launch {
+            spotifyRepository.searchTracks(query)
+        }
+    }
+
+    fun refreshSpotify() {
+        viewModelScope.launch {
+            spotifyRepository.fetchSavedTracks()
+            spotifyRepository.fetchPlaylists()
+        }
+    }
+
+    fun playSpotifyTrack(item: com.example.model.SpotifyTrackItem) {
+        val track = item.toAppTrack()
+        audioEngine.loadTrack(track, autoPlay = true)
+        inspectTrackSpectrogram(track, showTab = false)
+        showSnackbar("Loaded Spotify track: '${item.name}'")
+    }
+
+    fun connectSoundCloud(context: Context) {
+        val authUrl = soundCloudRepository.createAuthUrl()
+        try {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(authUrl))
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            showSnackbar("Could not launch browser for SoundCloud authentication: ${e.message}")
+        }
+    }
+
+    fun disconnectSoundCloud() {
+        soundCloudRepository.disconnect()
+        showSnackbar("Disconnected from SoundCloud")
+    }
+
+    fun searchSoundCloud(query: String) {
+        viewModelScope.launch {
+            soundCloudRepository.searchTracks(query)
+        }
+    }
+
+    fun refreshSoundCloud() {
+        viewModelScope.launch {
+            soundCloudRepository.fetchLikedTracks()
+            soundCloudRepository.fetchPlaylists()
+        }
+    }
+
+    fun playSoundCloudTrack(item: com.example.model.SoundCloudTrackItem) {
+        val track = item.toAppTrack()
+        audioEngine.loadTrack(track, autoPlay = true)
+        inspectTrackSpectrogram(track, showTab = false)
+        showSnackbar("Playing SoundCloud stream: '${item.title}'")
+    }
+
+    fun handleDeepLinkUri(uri: Uri) {
+        val host = uri.host
+        val code = uri.getQueryParameter("code")
+        val error = uri.getQueryParameter("error")
+
+        if (error != null) {
+            showSnackbar("OAuth authentication error: $error")
+            return
+        }
+
+        if (code.isNullOrBlank()) return
+
+        if (host == "spotify-callback") {
+            viewModelScope.launch {
+                showSnackbar("Verifying Spotify authorization...")
+                val result = spotifyRepository.exchangeCodeForToken(code)
+                if (result.isSuccess) {
+                    showSnackbar("Successfully connected Spotify account!")
+                    _selectedTab.value = DjTab.SPOTIFY
+                } else {
+                    showSnackbar("Spotify connection failed: ${result.exceptionOrNull()?.message}")
+                }
+            }
+        } else if (host == "soundcloud-callback") {
+            viewModelScope.launch {
+                showSnackbar("Verifying SoundCloud authorization...")
+                val result = soundCloudRepository.exchangeCodeForToken(code)
+                if (result.isSuccess) {
+                    showSnackbar("Successfully connected SoundCloud account!")
+                    _selectedTab.value = DjTab.SOUNDCLOUD
+                } else {
+                    showSnackbar("SoundCloud connection failed: ${result.exceptionOrNull()?.message}")
+                }
             }
         }
     }

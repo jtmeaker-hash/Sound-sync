@@ -121,6 +121,7 @@ class DjAudioEngine(private val context: Context) {
         }
 
         Log.d(TAG, "Loading media item: '${track.title}' by '${track.artist}' (URI/Path: ${track.filePath}, autoPlay=$autoPlay)")
+        com.example.util.DjLogger.startTiming("TRACK_LOAD_START", "'${track.title}' by '${track.artist}'")
         _currentTrack.value = track
         val baseBpm = if (track.bpm > 0) track.bpm else 126.0
         _effectiveBpm.value = baseBpm * (1.0 + _pitchPercent.value / 100.0)
@@ -134,6 +135,7 @@ class DjAudioEngine(private val context: Context) {
         // Asynchronously prepare MediaPlayer and extract real waveform without blocking UI
         prepareJob = scope.launch(Dispatchers.IO) {
             val prepStartTime = System.currentTimeMillis()
+            com.example.util.DjLogger.startTiming("PLAYER_PREPARE", "'${track.title}'")
             Log.d(TAG, "Playback preparation started for '${track.title}'")
 
             // 1. Asynchronously extract waveform
@@ -143,6 +145,8 @@ class DjAudioEngine(private val context: Context) {
             // 2. Prepare MediaPlayer on background IO thread
             prepareMediaPlayerForTrack(track, initialSec)
             val prepTime = System.currentTimeMillis() - prepStartTime
+            com.example.util.DjLogger.endTiming("PLAYER_PREPARE", "Prepared in ${prepTime}ms for '${track.title}'")
+            com.example.util.DjLogger.endTiming("TRACK_LOAD_END", "'${track.title}' ready in paused state")
             Log.d(TAG, "Playback preparation finished in ${prepTime}ms for '${track.title}'")
 
             if (autoPlay && !isEngineReleased) {
@@ -280,6 +284,7 @@ class DjAudioEngine(private val context: Context) {
         }
 
         Log.d(TAG, "Explicit playback started by user for track: '${track.title}' (isUsingMediaPlayer=$isUsingMediaPlayer)")
+        com.example.util.DjLogger.log("PLAYER_PLAY", "'${track.title}' by '${track.artist}'")
         _isPlaying.value = true
 
         if (isUsingMediaPlayer) {
@@ -315,6 +320,7 @@ class DjAudioEngine(private val context: Context) {
      */
     fun pause() {
         Log.d(TAG, "Playback paused.")
+        com.example.util.DjLogger.log("PLAYER_STOP", "Playback paused")
         _isPlaying.value = false
         playbackJob?.cancel()
 

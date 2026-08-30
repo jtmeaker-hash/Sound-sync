@@ -42,6 +42,7 @@ object AudioDecoder {
     ): DecodedAudioData? = withContext(Dispatchers.IO) {
         if (filePathOrUri.isBlank()) return@withContext null
 
+        com.example.util.DjLogger.startTiming("DECODE_START", "Decoding PCM for $filePathOrUri")
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
 
@@ -190,6 +191,7 @@ object AudioDecoder {
             }
 
             val samplesArray = pcmList.toFloatArray()
+            com.example.util.DjLogger.endTiming("DECODE_END", "${samplesArray.size} samples decoded for $filePathOrUri")
             Log.d(TAG, "Decoded ${samplesArray.size} PCM mono samples for $filePathOrUri ($sampleRate Hz, channels=$channelCount)")
 
             DecodedAudioData(

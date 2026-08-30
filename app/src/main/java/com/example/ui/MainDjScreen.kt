@@ -2,7 +2,6 @@ package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,26 +16,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.AudioFile
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -56,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -64,16 +62,15 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.model.FileOperationType
 import com.example.model.Track
-import com.example.ui.components.AddTrackDialog
-import com.example.ui.components.AudioInspectorBar
-import com.example.ui.components.AutoTagProgressDialog
-import com.example.ui.components.DjFileExplorerView
-import com.example.ui.components.DuplicateFinderSheet
-import com.example.ui.components.FilePropertiesDialog
-import com.example.ui.components.LibraryCrateView
+import com.example.ui.components.ApiConfigDialog
+import com.example.ui.components.DjMiniPlayer
+import com.example.ui.components.LocalMusicView
 import com.example.ui.components.OperationsAndCloudView
-import com.example.ui.components.SafeBulkOperationDialog
+import com.example.ui.components.SoundCloudTab
+import com.example.ui.components.SoundCloudOrange
 import com.example.ui.components.SpectrogramAnalyzerView
+import com.example.ui.components.SpotifyGreen
+import com.example.ui.components.SpotifyTab
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
@@ -96,16 +93,11 @@ fun MainDjScreen(
     onPickSafFolder: () -> Unit = {},
     onPickAudioFiles: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val selectedTab by viewModel.selectedTab.collectAsState()
     val allTracks by viewModel.allTracks.collectAsState()
-    val directoryTracks by viewModel.currentDirectoryTracks.collectAsState()
-    val subFolders by viewModel.currentSubFolders.collectAsState()
     val storageSources by viewModel.storageSources.collectAsState()
     val currentSourceId by viewModel.currentStorageSourceId.collectAsState()
-    val currentDirPath by viewModel.currentDirectoryPath.collectAsState()
-    val selectedTrackIds by viewModel.selectedTrackIds.collectAsState()
-    val sortOption by viewModel.explorerSortOption.collectAsState()
-    val isDryRun by viewModel.isDryRunEnabled.collectAsState()
     val operationJournal by viewModel.operationJournal.collectAsState()
 
     val hasStoragePermission by viewModel.hasStoragePermission.collectAsState()
@@ -113,25 +105,34 @@ fun MainDjScreen(
     val scanProgressMessage by viewModel.scanProgressMessage.collectAsState()
     val scanServiceState by viewModel.scanServiceState.collectAsState()
 
-    val filteredTracks by viewModel.filteredTracks.collectAsState()
-    val duplicateMatches by viewModel.duplicateMatches.collectAsState()
-    val crates by viewModel.crates.collectAsState()
-    val selectedCrateId by viewModel.selectedCrateId.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
     val analyzedTrack by viewModel.analyzedTrack.collectAsState()
     val spectrogramData by viewModel.spectrogramData.collectAsState()
     val isSpectrogramLoading by viewModel.isSpectrogramLoading.collectAsState()
-    val isTagging by viewModel.isTaggingInProgress.collectAsState()
-    val taggingMessage by viewModel.taggingProgressMessage.collectAsState()
+    val analysisProgressPercent by viewModel.analysisProgressPercent.collectAsState()
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
+    val showApiConfigDialog by viewModel.showApiConfigDialog.collectAsState()
 
+    // Spotify States
+    val spotifyAuthState by viewModel.spotifyAuthState.collectAsState()
+    val spotifySavedTracks by viewModel.spotifySavedTracks.collectAsState()
+    val spotifyPlaylists by viewModel.spotifyPlaylists.collectAsState()
+    val spotifySearchResults by viewModel.spotifySearchResults.collectAsState()
+    val spotifyIsLoading by viewModel.spotifyIsLoading.collectAsState()
+
+    // SoundCloud States
+    val soundCloudAuthState by viewModel.soundCloudAuthState.collectAsState()
+    val soundCloudLikedTracks by viewModel.soundCloudLikedTracks.collectAsState()
+    val soundCloudPlaylists by viewModel.soundCloudPlaylists.collectAsState()
+    val soundCloudSearchResults by viewModel.soundCloudSearchResults.collectAsState()
+    val soundCloudIsLoading by viewModel.soundCloudIsLoading.collectAsState()
+
+    // Audio Engine Playback States
     val playingTrack by viewModel.audioEngine.currentTrack.collectAsState()
     val isPlaying by viewModel.audioEngine.isPlaying.collectAsState()
+    val currentPosSec by viewModel.audioEngine.currentPositionSec.collectAsState()
+    val playbackProgress by viewModel.audioEngine.playbackProgress.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
-    var showAddTrackDialog by remember { mutableStateOf(false) }
-    var inspectingTrackForProperties by remember { mutableStateOf<Track?>(null) }
-    var bulkOperationType by remember { mutableStateOf<FileOperationType?>(null) }
 
     LaunchedEffect(snackbarMessage) {
         snackbarMessage?.let { msg ->
@@ -148,10 +149,9 @@ fun MainDjScreen(
             Column(modifier = Modifier.fillMaxWidth()) {
                 DjTopAppBar(
                     totalTracks = allTracks.size,
-                    duplicatesCount = duplicateMatches.size,
-                    currentSourceLabel = storageSources.find { it.id == currentSourceId }?.label ?: "Storage",
+                    currentTab = selectedTab,
                     isScanning = isScanning,
-                    onSelectDuplicatesTab = { viewModel.selectTab(DjTab.DUPLICATES) },
+                    onOpenConfig = { viewModel.openApiConfigDialog() },
                     onRescan = { viewModel.scanDeviceMediaStore() }
                 )
 
@@ -180,27 +180,23 @@ fun MainDjScreen(
         },
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                // Docked Audio Inspector & Mini Player (When a track is selected/playing)
+                // Docked Mini-Player Bar (When a track is loaded/playing)
                 if (playingTrack != null) {
-                    AudioInspectorBar(
-                        audioEngine = viewModel.audioEngine,
-                        onOpenSpectrogram = { track ->
-                            viewModel.inspectTrackSpectrogram(track)
-                            viewModel.selectTab(DjTab.SPECTROGRAM)
-                        },
-                        onOpenProperties = { track ->
-                            inspectingTrackForProperties = track
-                        },
-                        onAutoTag = { track ->
-                            viewModel.autoTagSingleTrack(track)
+                    DjMiniPlayer(
+                        track = playingTrack!!,
+                        isPlaying = isPlaying,
+                        currentPositionSec = currentPosSec,
+                        playbackProgress = playbackProgress,
+                        onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
+                        onOpenSpectrogram = {
+                            viewModel.inspectTrackSpectrogram(playingTrack!!, showTab = true)
                         }
                     )
                 }
 
-                // Bottom Navigation
+                // Bottom Navigation (Local, SoundCloud, Spotify, Spectrogram, DJ Tools)
                 DjBottomNavigationBar(
                     selectedTab = selectedTab,
-                    duplicatesCount = duplicateMatches.size,
                     onTabSelected = { viewModel.selectTab(it) }
                 )
             }
@@ -213,88 +209,78 @@ fun MainDjScreen(
                 .background(DjObsidian)
         ) {
             when (selectedTab) {
-                DjTab.EXPLORER -> {
-                    DjFileExplorerView(
-                        tracks = directoryTracks,
-                        subFolders = subFolders,
-                        storageSources = storageSources,
-                        currentSourceId = currentSourceId,
-                        currentPath = currentDirPath,
-                        selectedTrackIds = selectedTrackIds,
-                        searchQuery = searchQuery,
-                        sortOption = sortOption,
-                        isDryRun = isDryRun,
-                        isScanning = isScanning,
-                        playingTrackId = playingTrack?.id,
+                DjTab.LOCAL -> {
+                    LocalMusicView(
+                        tracks = allTracks,
+                        currentTrack = playingTrack,
                         isPlaying = isPlaying,
-                        onSearchChange = { viewModel.setSearchQuery(it) },
-                        onSelectSource = { viewModel.selectStorageSource(it) },
-                        onNavigateToDir = { viewModel.navigateToDirectory(it) },
-                        onNavigateUp = { viewModel.navigateUpDirectory() },
-                        onToggleSelectTrack = { viewModel.toggleTrackSelection(it) },
-                        onSelectAll = { viewModel.selectAllInCurrentDirectory() },
-                        onClearSelection = { viewModel.clearSelection() },
-                        onSortChange = { viewModel.setSortOption(it) },
-                        onToggleDryRun = { viewModel.toggleDryRun() },
-                        onPlayTrack = { viewModel.playTrack(it) },
-                        onOpenProperties = { inspectingTrackForProperties = it },
-                        onInspectSpectrogram = { track ->
-                            viewModel.inspectTrackSpectrogram(track)
-                            viewModel.selectTab(DjTab.SPECTROGRAM)
-                        },
-                        onAutoTagTrack = { viewModel.autoTagSingleTrack(it) },
-                        onBulkMove = { bulkOperationType = FileOperationType.MOVE },
-                        onBulkTrash = { bulkOperationType = FileOperationType.TRASH },
-                        onBulkAutoTag = { viewModel.performBulkAutoTag() },
-                        onMountSaf = onPickSafFolder,
-                        onPickAudioFiles = onPickAudioFiles,
+                        isScanning = isScanning,
+                        scanProgressText = scanProgressMessage,
                         onScanMediaStore = { viewModel.scanDeviceMediaStore() },
-                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
-                        onOpenAddTrack = { showAddTrackDialog = true }
+                        onPickSafFolder = onPickSafFolder,
+                        onPickAudioFiles = onPickAudioFiles,
+                        onLoadTrack = { viewModel.playTrack(it) },
+                        onInspectSpectrogram = { track ->
+                            viewModel.inspectTrackSpectrogram(track, showTab = true)
+                        }
                     )
                 }
-                DjTab.LIBRARY -> {
-                    LibraryCrateView(
-                        tracks = filteredTracks,
-                        crates = crates,
-                        selectedCrateId = selectedCrateId,
-                        searchQuery = searchQuery,
-                        onSearchChange = { viewModel.setSearchQuery(it) },
-                        onSelectCrate = { viewModel.selectCrate(it) },
-                        onLoadToDeck = { viewModel.playTrack(it) },
+                DjTab.SOUNDCLOUD -> {
+                    SoundCloudTab(
+                        authState = soundCloudAuthState,
+                        likedTracks = soundCloudLikedTracks,
+                        playlists = soundCloudPlaylists,
+                        searchResults = soundCloudSearchResults,
+                        isLoading = soundCloudIsLoading,
+                        currentTrack = playingTrack,
+                        isPlaying = isPlaying,
+                        onConnectSoundCloud = { viewModel.connectSoundCloud(context) },
+                        onDisconnect = { viewModel.disconnectSoundCloud() },
+                        onOpenConfigDialog = { viewModel.openApiConfigDialog() },
+                        onSearch = { viewModel.searchSoundCloud(it) },
+                        onPlayTrack = { viewModel.playSoundCloudTrack(it) },
                         onInspectSpectrogram = { track ->
-                            viewModel.inspectTrackSpectrogram(track)
-                            viewModel.selectTab(DjTab.SPECTROGRAM)
+                            viewModel.inspectTrackSpectrogram(track, showTab = true)
                         },
-                        onAutoTagSingle = { viewModel.autoTagSingleTrack(it) },
-                        onAutoTagAll = { viewModel.runAutoTagAll() },
-                        onDeleteTrack = { viewModel.deleteTrack(it) },
-                        onPickAudioFiles = onPickAudioFiles,
-                        onPickSafFolder = onPickSafFolder,
-                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
-                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
-                        onOpenAddTrack = { showAddTrackDialog = true }
+                        onRefresh = { viewModel.refreshSoundCloud() }
+                    )
+                }
+                DjTab.SPOTIFY -> {
+                    SpotifyTab(
+                        authState = spotifyAuthState,
+                        savedTracks = spotifySavedTracks,
+                        playlists = spotifyPlaylists,
+                        searchResults = spotifySearchResults,
+                        isLoading = spotifyIsLoading,
+                        currentTrack = playingTrack,
+                        isPlaying = isPlaying,
+                        onConnectSpotify = { viewModel.connectSpotify(context) },
+                        onDisconnect = { viewModel.disconnectSpotify() },
+                        onOpenConfigDialog = { viewModel.openApiConfigDialog() },
+                        onSearch = { viewModel.searchSpotify(it) },
+                        onPlayTrack = { viewModel.playSpotifyTrack(it) },
+                        onInspectSpectrogram = { track ->
+                            viewModel.inspectTrackSpectrogram(track, showTab = true)
+                        },
+                        onRefresh = { viewModel.refreshSpotify() }
                     )
                 }
                 DjTab.SPECTROGRAM -> {
                     SpectrogramAnalyzerView(
-                        analyzedTrack = analyzedTrack,
+                        analyzedTrack = analyzedTrack ?: playingTrack ?: allTracks.firstOrNull(),
                         spectrogramData = spectrogramData,
                         allTracks = allTracks,
-                        onSelectTrack = { viewModel.inspectTrackSpectrogram(it) },
-                        onLoadToDeck = { viewModel.playTrack(it) },
-                        isLoading = isSpectrogramLoading
-                    )
-                }
-                DjTab.DUPLICATES -> {
-                    DuplicateFinderSheet(
-                        duplicateMatches = duplicateMatches,
-                        onResolveKeepBest = { viewModel.resolveDuplicateKeepBest(it) },
-                        onInspectSpectrogram = { track ->
-                            viewModel.inspectTrackSpectrogram(track)
-                            viewModel.selectTab(DjTab.SPECTROGRAM)
+                        isPlaying = isPlaying,
+                        currentPositionSec = currentPosSec,
+                        playbackProgress = playbackProgress,
+                        onSelectTrack = { viewModel.inspectTrackSpectrogram(it, showTab = false) },
+                        onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
+                        onSeekToRatio = { ratio ->
+                            viewModel.audioEngine.seekToFraction(ratio)
                         },
-                        onLoadToDeck = { viewModel.playTrack(it) }
+                        onLoadToDeck = { viewModel.playTrack(it) },
+                        isLoading = isSpectrogramLoading,
+                        analysisProgressPercent = analysisProgressPercent
                     )
                 }
                 DjTab.OPERATIONS -> {
@@ -318,61 +304,15 @@ fun MainDjScreen(
                 }
             }
 
-            // Dialogs
-            if (showAddTrackDialog) {
-                AddTrackDialog(
-                    onDismiss = { showAddTrackDialog = false },
-                    onPickRealFiles = {
-                        showAddTrackDialog = false
-                        onPickAudioFiles()
-                    },
-                    onAddTrack = { title, artist, genre, bpm, key, format, bitrate ->
-                        viewModel.addNewTrack(title, artist, genre, bpm, key, format, bitrate)
-                    }
+            // API Configuration Dialog
+            if (showApiConfigDialog) {
+                ApiConfigDialog(
+                    initialSpotifyClientId = viewModel.spotifyRepository.getStoredClientId(),
+                    initialSoundCloudClientId = viewModel.soundCloudRepository.getStoredClientId(),
+                    onSaveSpotifyClientId = { viewModel.saveSpotifyClientId(it) },
+                    onSaveSoundCloudClientId = { viewModel.saveSoundCloudClientId(it) },
+                    onDismiss = { viewModel.closeApiConfigDialog() }
                 )
-            }
-
-            if (inspectingTrackForProperties != null) {
-                FilePropertiesDialog(
-                    track = inspectingTrackForProperties!!,
-                    onDismiss = { inspectingTrackForProperties = null },
-                    onSave = { updated ->
-                        viewModel.updateTrackMetadata(updated)
-                        inspectingTrackForProperties = null
-                    },
-                    onAutoTag = { track ->
-                        viewModel.autoTagSingleTrack(track)
-                    },
-                    onInspectSpectrogram = { track ->
-                        inspectingTrackForProperties = null
-                        viewModel.inspectTrackSpectrogram(track)
-                        viewModel.selectTab(DjTab.SPECTROGRAM)
-                    },
-                    onDelete = { track ->
-                        viewModel.deleteTrack(track)
-                    }
-                )
-            }
-
-            if (bulkOperationType != null) {
-                SafeBulkOperationDialog(
-                    operationType = bulkOperationType!!,
-                    affectedCount = selectedTrackIds.size,
-                    currentPath = currentDirPath,
-                    initialDryRun = isDryRun,
-                    onDismiss = { bulkOperationType = null },
-                    onConfirm = { targetDir, dryRun ->
-                        when (bulkOperationType) {
-                            FileOperationType.MOVE -> viewModel.performBulkMove(targetDir)
-                            FileOperationType.TRASH -> viewModel.performBulkTrash()
-                            else -> {}
-                        }
-                    }
-                )
-            }
-
-            if (isTagging) {
-                AutoTagProgressDialog(message = taggingMessage)
             }
         }
     }
@@ -449,24 +389,23 @@ private fun ScanningProgressBanner(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
-                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f)
             ) {
                 if (isPaused) {
-                    Icon(Icons.Default.Pause, contentDescription = "Paused", tint = NeonAmber, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Pause, contentDescription = "Paused", tint = NeonAmber, modifier = Modifier.size(14.dp))
                 } else {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
+                        modifier = Modifier.size(12.dp),
                         color = DeckACyan,
                         strokeWidth = 2.dp
                     )
                 }
                 Text(
-                    text = message.ifBlank { "Indexing audio files & stems from storage..." },
+                    text = message,
                     color = if (isPaused) NeonAmber else DeckACyan,
                     fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1
                 )
@@ -475,29 +414,16 @@ private fun ScanningProgressBanner(
             if (isBackgroundService) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (isPaused) {
-                        Surface(
-                            modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onResume),
-                            color = NeonAmber,
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text("Resume", color = DjObsidian, fontSize = 9.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                        IconButton(onClick = onResume, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Resume", tint = NeonGreen, modifier = Modifier.size(16.dp))
                         }
                     } else {
-                        Surface(
-                            modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onPause),
-                            color = DjSurfaceElevated,
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text("Pause", color = NeonAmber, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                        IconButton(onClick = onPause, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Pause, contentDescription = "Pause", tint = NeonAmber, modifier = Modifier.size(16.dp))
                         }
                     }
-
-                    Surface(
-                        modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onCancel),
-                        color = DjSurfaceElevated,
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Text("Stop", color = NeonRed, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                    IconButton(onClick = onCancel, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Stop, contentDescription = "Cancel", tint = NeonRed, modifier = Modifier.size(16.dp))
                     }
                 }
             }
@@ -508,75 +434,97 @@ private fun ScanningProgressBanner(
 @Composable
 private fun DjTopAppBar(
     totalTracks: Int,
-    duplicatesCount: Int,
-    currentSourceLabel: String,
+    currentTab: DjTab,
     isScanning: Boolean,
-    onSelectDuplicatesTab: () -> Unit,
+    onOpenConfig: () -> Unit,
     onRescan: () -> Unit
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth().testTag("dj_top_app_bar"),
         color = DjSurfaceDark,
-        border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, DjSurfaceBorder)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Brand & Logo
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .background(DeckACyan, RoundedCornerShape(6.dp)),
-                    contentAlignment = Alignment.Center
+            // App Branding & Active Tab Indicator
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = DeckACyan.copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DeckACyan),
+                    modifier = Modifier.size(32.dp)
                 ) {
-                    Icon(Icons.Default.GraphicEq, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(18.dp))
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.GraphicEq, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(18.dp))
+                    }
                 }
+
                 Column {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "SOUNDSYNC",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 1.sp
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = when (currentTab) {
+                                DjTab.LOCAL -> DeckACyan.copy(alpha = 0.2f)
+                                DjTab.SOUNDCLOUD -> SoundCloudOrange.copy(alpha = 0.2f)
+                                DjTab.SPOTIFY -> SpotifyGreen.copy(alpha = 0.2f)
+                                DjTab.SPECTROGRAM -> NeonPurple.copy(alpha = 0.2f)
+                                DjTab.OPERATIONS -> TextMuted.copy(alpha = 0.2f)
+                            }
+                        ) {
+                            Text(
+                                text = currentTab.title.uppercase(),
+                                color = when (currentTab) {
+                                    DjTab.LOCAL -> DeckACyan
+                                    DjTab.SOUNDCLOUD -> SoundCloudOrange
+                                    DjTab.SPOTIFY -> SpotifyGreen
+                                    DjTab.SPECTROGRAM -> NeonPurple
+                                    DjTab.OPERATIONS -> TextPrimary
+                                },
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Black,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                     Text(
-                        text = "SOUNDSYNC PRO",
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 14.sp,
-                        letterSpacing = 1.sp
-                    )
-                    Text(
-                        text = "Real Android Audio Storage & DJ Lab",
-                        color = DeckACyan,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold
+                        text = "$totalTracks Local Tracks • DJ & Streaming Suite",
+                        color = TextSecondary,
+                        fontSize = 10.sp
                     )
                 }
             }
 
-            // Quick Status Chips
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Storage Source Pill
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = DjSurfaceElevated
-                ) {
-                    Text(
-                        text = currentSourceLabel.uppercase(),
-                        color = DeckACyan,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                    )
+            // Action Icons
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                IconButton(onClick = onOpenConfig, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Settings, contentDescription = "API Config", tint = TextSecondary, modifier = Modifier.size(18.dp))
                 }
 
-                // Total Tracks Count / Rescan Button
                 Surface(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .clickable(enabled = !isScanning, onClick = onRescan),
                     shape = RoundedCornerShape(6.dp),
-                    color = DjSurfaceElevated
+                    color = DjSurfaceCard,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
@@ -586,42 +534,15 @@ private fun DjTopAppBar(
                         if (isScanning) {
                             CircularProgressIndicator(modifier = Modifier.size(10.dp), color = DeckACyan, strokeWidth = 1.5.dp)
                         } else {
-                            Icon(Icons.Default.Refresh, contentDescription = "Rescan", tint = TextSecondary, modifier = Modifier.size(11.dp))
+                            Icon(Icons.Default.Refresh, contentDescription = "Rescan", tint = TextSecondary, modifier = Modifier.size(12.dp))
                         }
                         Text(
-                            text = "$totalTracks TRACKS",
+                            text = "SCAN",
                             color = TextSecondary,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
-                    }
-                }
-
-                // Duplicates alert badge
-                if (duplicatesCount > 0) {
-                    Surface(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable(onClick = onSelectDuplicatesTab),
-                        shape = RoundedCornerShape(6.dp),
-                        color = DeckBPink.copy(alpha = 0.2f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, DeckBPink)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(Icons.Default.Warning, contentDescription = null, tint = DeckBPink, modifier = Modifier.size(12.dp))
-                            Text(
-                                text = "$duplicatesCount DUPS",
-                                color = DeckBPink,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
                     }
                 }
             }
@@ -632,7 +553,6 @@ private fun DjTopAppBar(
 @Composable
 private fun DjBottomNavigationBar(
     selectedTab: DjTab,
-    duplicatesCount: Int,
     onTabSelected: (DjTab) -> Unit
 ) {
     NavigationBar(
@@ -641,31 +561,28 @@ private fun DjBottomNavigationBar(
         tonalElevation = 8.dp
     ) {
         val tabs = listOf(
-            Triple(DjTab.EXPLORER, "Explorer", Icons.Default.FolderOpen),
-            Triple(DjTab.LIBRARY, "Crates", Icons.AutoMirrored.Filled.QueueMusic),
+            Triple(DjTab.LOCAL, "Local", Icons.Default.FolderOpen),
+            Triple(DjTab.SOUNDCLOUD, "SoundCloud", Icons.Default.Cloud),
+            Triple(DjTab.SPOTIFY, "Spotify", Icons.Default.LibraryMusic),
             Triple(DjTab.SPECTROGRAM, "Spectrum", Icons.Default.GraphicEq),
-            Triple(DjTab.DUPLICATES, "Duplicates", Icons.Default.ContentCopy),
-            Triple(DjTab.OPERATIONS, "Storage", Icons.Default.Storage)
+            Triple(DjTab.OPERATIONS, "DJ Tools", Icons.Default.Storage)
         )
 
         tabs.forEach { (tab, title, icon) ->
             val isSelected = selectedTab == tab
+            val tabColor = when (tab) {
+                DjTab.LOCAL -> DeckACyan
+                DjTab.SOUNDCLOUD -> SoundCloudOrange
+                DjTab.SPOTIFY -> SpotifyGreen
+                DjTab.SPECTROGRAM -> DeckACyan
+                DjTab.OPERATIONS -> DeckACyan
+            }
 
             NavigationBarItem(
                 selected = isSelected,
                 onClick = { onTabSelected(tab) },
                 icon = {
-                    if (tab == DjTab.DUPLICATES && duplicatesCount > 0) {
-                        BadgedBox(badge = {
-                            Badge(containerColor = DeckBPink, contentColor = Color.White) {
-                                Text("$duplicatesCount")
-                            }
-                        }) {
-                            Icon(icon, contentDescription = title)
-                        }
-                    } else {
-                        Icon(icon, contentDescription = title)
-                    }
+                    Icon(icon, contentDescription = title)
                 },
                 label = {
                     Text(
@@ -675,9 +592,9 @@ private fun DjBottomNavigationBar(
                     )
                 },
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = DeckACyan,
-                    selectedTextColor = DeckACyan,
-                    indicatorColor = DeckACyan.copy(alpha = 0.15f),
+                    selectedIconColor = tabColor,
+                    selectedTextColor = tabColor,
+                    indicatorColor = tabColor.copy(alpha = 0.15f),
                     unselectedIconColor = TextMuted,
                     unselectedTextColor = TextMuted
                 )

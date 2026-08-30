@@ -1,10 +1,12 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.StrictMode
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -12,10 +14,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.MainDjScreen
 import com.example.ui.MainDjViewModel
 import com.example.ui.theme.SoundSyncTheme
+import com.example.util.DjLogger
 
 class MainActivity : ComponentActivity() {
 
@@ -23,14 +27,44 @@ class MainActivity : ComponentActivity() {
         private const val TAG = "MainActivity"
     }
 
+    private var activeViewModel: MainDjViewModel? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        DjLogger.startTiming("APP_START", "SoundSync cold launch")
         super.onCreate(savedInstanceState)
         Log.d(TAG, "onCreate: Activity starting up. Auto-playback is strictly prohibited.")
+
+        if (BuildConfig.DEBUG) {
+            StrictMode.setThreadPolicy(
+                StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads()
+                    .detectDiskWrites()
+                    .detectNetwork()
+                    .penaltyLog()
+                    .build()
+            )
+            StrictMode.setVmPolicy(
+                StrictMode.VmPolicy.Builder()
+                    .detectLeakedSqlLiteObjects()
+                    .detectLeakedClosableObjects()
+                    .penaltyLog()
+                    .build()
+            )
+        }
+
         enableEdgeToEdge()
 
         setContent {
             SoundSyncTheme {
                 val viewModel: MainDjViewModel = viewModel()
+                activeViewModel = viewModel
+
+                // Handle incoming OAuth callback URIs if any
+                LaunchedEffect(Unit) {
+                    intent?.data?.let { uri ->
+                        viewModel.handleDeepLinkUri(uri)
+                    }
+                }
 
                 // Permission Launcher
                 val permissionLauncher = rememberLauncherForActivityResult(
@@ -98,6 +132,15 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
+        }
+        DjLogger.endTiming("APP_START", "UI content set complete")
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.data?.let { uri ->
+            Log.d(TAG, "onNewIntent received URI: $uri")
+            activeViewModel?.handleDeepLinkUri(uri)
         }
     }
 

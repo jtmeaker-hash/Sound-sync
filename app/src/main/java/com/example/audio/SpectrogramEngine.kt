@@ -50,21 +50,32 @@ object SpectrogramEngine {
      * Generates a real STFT spectrogram and acoustic quality verification for the given track.
      * Guaranteed to execute on Dispatchers.Default / IO with zero main thread blocking.
      */
-    suspend fun analyzeTrack(context: Context, track: Track): SpectrogramAnalysis = withContext(Dispatchers.Default) {
+    suspend fun analyzeTrack(
+        context: Context,
+        track: Track,
+        onProgress: (percent: Int) -> Unit = {}
+    ): SpectrogramAnalysis = withContext(Dispatchers.Default) {
         val startTime = System.currentTimeMillis()
+        com.example.util.DjLogger.startTiming("SPECTROGRAM_START", "STFT analysis for '${track.title}'")
         Log.d(TAG, "Selected track analysis started for: '${track.title}' (id=${track.id})")
 
         // 1. Check cache first
         analysisCache.get(track.id)?.let { cached ->
+            com.example.util.DjLogger.endTiming("SPECTROGRAM_END", "Retrieved from cache for '${track.title}'")
             Log.d(TAG, "Spectrogram retrieved from LRU cache in ${System.currentTimeMillis() - startTime}ms for '${track.title}'")
+            onProgress(100)
             return@withContext cached
         }
+
+        onProgress(15)
 
         // 2. Decode real mono PCM samples from track source
         val decodeStartTime = System.currentTimeMillis()
         val decodedAudio = AudioDecoder.decodeToMonoPcm(context, track.filePath, maxDurationSeconds = 240)
         val decodeTime = System.currentTimeMillis() - decodeStartTime
         Log.d(TAG, "PCM audio decoding finished in ${decodeTime}ms for '${track.title}'")
+
+        onProgress(50)
 
         val spectrogramStartTime = System.currentTimeMillis()
         val analysis = if (decodedAudio != null && decodedAudio.samples.size >= FFT_SIZE) {
@@ -74,7 +85,10 @@ object SpectrogramEngine {
             computeDeterministicSpectrogram(track)
         }
 
+        onProgress(100)
+
         val spectroTime = System.currentTimeMillis() - spectrogramStartTime
+        com.example.util.DjLogger.endTiming("SPECTROGRAM_END", "Ceiling: ${String.format("%.1f", analysis.cutoffKhz)} kHz for '${track.title}'")
         Log.d(TAG, "Spectrogram generation time: ${spectroTime}ms. Total analysis time: ${System.currentTimeMillis() - startTime}ms for '${track.title}' (Ceiling: ${String.format("%.1f", analysis.cutoffKhz)} kHz)")
 
         // Cache result

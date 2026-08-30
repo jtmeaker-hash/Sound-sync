@@ -64,6 +64,7 @@ object MediaScannerHelper {
         val sortOrder = "${MediaStore.Audio.Media.DATE_MODIFIED} DESC"
 
         val scanStartTime = System.currentTimeMillis()
+        com.example.util.DjLogger.startTiming("MEDIA_SCAN_START", "Scanning MediaStore audio repository")
         Log.d(TAG, "Library scan started via MediaStore")
 
         var totalIndexed = 0
@@ -181,6 +182,7 @@ object MediaScannerHelper {
                 Log.d(TAG, "Metadata processing final batch saved in ${System.currentTimeMillis() - batchStartTime}ms")
                 currentBatch.clear()
             }
+            com.example.util.DjLogger.endTiming("MEDIA_SCAN_END", "Total indexed tracks: $totalIndexed")
             Log.d(TAG, "Library scan finished. Total indexed tracks: $totalIndexed in ${System.currentTimeMillis() - scanStartTime}ms")
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException querying MediaStore: ${e.message}", e)

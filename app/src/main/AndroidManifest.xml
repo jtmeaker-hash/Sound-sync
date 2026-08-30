@@ -29,6 +29,19 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- OAuth Redirect Intent Filter for Spotify and SoundCloud -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="soundsync"
+                    android:host="spotify-callback" />
+                <data
+                    android:scheme="soundsync"
+                    android:host="soundcloud-callback" />
+            </intent-filter>
         </activity>
 
         <service
