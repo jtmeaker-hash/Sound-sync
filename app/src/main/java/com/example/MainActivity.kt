@@ -1,21 +1,94 @@
 package com.example
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.MainDjScreen
+import com.example.ui.MainDjViewModel
 import com.example.ui.theme.SoundSyncTheme
 
 class MainActivity : ComponentActivity() {
-  override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
-    enableEdgeToEdge()
-    setContent {
-      SoundSyncTheme {
-        MainDjScreen()
-      }
-    }
-  }
-}
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+
+        setContent {
+            SoundSyncTheme {
+                val viewModel: MainDjViewModel = viewModel()
+
+                // Permission Launcher
+                val permissionLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.RequestMultiplePermissions()
+                ) { permissions ->
+                    val isGranted = permissions.values.any { it }
+                    viewModel.onPermissionResult(isGranted)
+                }
+
+                // Storage Access Framework (SAF) Folder Picker Launcher
+                val safFolderLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.OpenDocumentTree()
+                ) { uri: Uri? ->
+                    if (uri != null) {
+                        viewModel.importSafFolder(uri)
+                    }
+                }
+
+                // Multiple Audio Files Picker Launcher
+                val audioFilesPickerLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.OpenMultipleDocuments()
+                ) { uris: List<Uri> ->
+                    if (uris.isNotEmpty()) {
+                        viewModel.importAudioFiles(uris)
+                    }
+                }
+
+                MainDjScreen(
+                    viewModel = viewModel,
+                    onRequestStoragePermission = {
+                        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            arrayOf(
+                                Manifest.permission.READ_MEDIA_AUDIO,
+                                Manifest.permission.POST_NOTIFICATIONS
+                            )
+                        } else {
+                            arrayOf(
+                                Manifest.permission.READ_EXTERNAL_STORAGE,
+                                Manifest.permission.WRITE_EXTERNAL_STORAGE
+                            )
+                        }
+                        permissionLauncher.launch(perms)
+                    },
+                    onPickSafFolder = {
+                        safFolderLauncher.launch(null)
+                    },
+                    onPickAudioFiles = {
+                        audioFilesPickerLauncher.launch(
+                            arrayOf(
+                                "audio/*",
+                                "audio/mpeg",
+                                "audio/mp3",
+                                "audio/flac",
+                                "audio/wav",
+                                "audio/x-wav",
+                                "audio/aac",
+                                "audio/m4a",
+                                "audio/ogg",
+                                "application/ogg"
+                            )
+                        )
+                    }
+                )
+            }
+        }
+    }
+}

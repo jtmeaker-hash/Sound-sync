@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -44,8 +45,10 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
@@ -61,6 +64,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -115,6 +119,7 @@ fun DjFileExplorerView(
     searchQuery: String,
     sortOption: ExplorerSortOption,
     isDryRun: Boolean,
+    isScanning: Boolean,
     playingTrackId: String?,
     isPlaying: Boolean,
     onSearchChange: (String) -> Unit,
@@ -134,6 +139,9 @@ fun DjFileExplorerView(
     onBulkTrash: () -> Unit,
     onBulkAutoTag: () -> Unit,
     onMountSaf: () -> Unit,
+    onPickAudioFiles: () -> Unit,
+    onScanMediaStore: () -> Unit,
+    onLoadDemoTracks: () -> Unit,
     onOpenAddTrack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -145,7 +153,7 @@ fun DjFileExplorerView(
             .background(DjObsidian)
             .testTag("dj_file_explorer_view")
     ) {
-        // 1. Storage Source Selector Bar (Internal, USB SSD, SD Card, Downloads, Cloud)
+        // 1. Storage Source Selector Bar (All, Internal, SD Card, USB, SAF Folders)
         StorageSourceSelectorBar(
             sources = storageSources,
             currentSourceId = currentSourceId,
@@ -153,7 +161,7 @@ fun DjFileExplorerView(
             onMountSaf = onMountSaf
         )
 
-        // 2. Search & Filter Bar
+        // 2. Search & Action Bar
         ExplorerSearchBar(
             searchQuery = searchQuery,
             onSearchChange = onSearchChange,
@@ -161,6 +169,7 @@ fun DjFileExplorerView(
             isDryRun = isDryRun,
             onToggleDryRun = onToggleDryRun,
             onOpenSort = { showSortMenu = true },
+            onPickAudioFiles = onPickAudioFiles,
             onOpenAddTrack = onOpenAddTrack
         )
 
@@ -257,6 +266,10 @@ fun DjFileExplorerView(
                 item {
                     EmptyFolderPlaceholder(
                         currentPath = currentPath,
+                        onScanMediaStore = onScanMediaStore,
+                        onMountSaf = onMountSaf,
+                        onPickAudioFiles = onPickAudioFiles,
+                        onLoadDemoTracks = onLoadDemoTracks,
                         onOpenAddTrack = onOpenAddTrack
                     )
                 }
@@ -350,7 +363,8 @@ private fun StorageSourceSelectorBar(
                 Surface(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable(onClick = onMountSaf),
+                        .clickable(onClick = onMountSaf)
+                        .testTag("mount_saf_button"),
                     shape = RoundedCornerShape(6.dp),
                     color = DjSurfaceElevated,
                     border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
@@ -361,7 +375,7 @@ private fun StorageSourceSelectorBar(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Icon(Icons.Default.AddCircleOutline, contentDescription = null, tint = NeonAmber, modifier = Modifier.size(13.dp))
-                        Text("+ SAF Folder", color = NeonAmber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("+ Pick Folder", color = NeonAmber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -377,6 +391,7 @@ private fun ExplorerSearchBar(
     isDryRun: Boolean,
     onToggleDryRun: () -> Unit,
     onOpenSort: () -> Unit,
+    onPickAudioFiles: () -> Unit,
     onOpenAddTrack: () -> Unit
 ) {
     Row(
@@ -451,6 +466,22 @@ private fun ExplorerSearchBar(
             }
         }
 
+        // Pick Audio Files Button
+        Surface(
+            modifier = Modifier
+                .height(44.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onPickAudioFiles)
+                .testTag("pick_files_button"),
+            shape = RoundedCornerShape(8.dp),
+            color = DjSurfaceElevated,
+            border = androidx.compose.foundation.BorderStroke(1.dp, DeckACyan)
+        ) {
+            Box(modifier = Modifier.padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.AudioFile, contentDescription = "Pick Audio Files", tint = DeckACyan, modifier = Modifier.size(18.dp))
+            }
+        }
+
         // Add File/Track Button
         Surface(
             modifier = Modifier
@@ -511,11 +542,12 @@ private fun BreadcrumbNavigationBar(
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
-                        text = "/",
-                        color = TextMuted,
+                        text = if (segments.isEmpty()) "ALL AUDIO" else "/",
+                        color = if (segments.isEmpty()) DeckACyan else TextMuted,
                         fontSize = 11.sp,
+                        fontWeight = if (segments.isEmpty()) FontWeight.Bold else FontWeight.Normal,
                         fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.clickable { onNavigateToDir("/") }
+                        modifier = Modifier.clickable { onNavigateToDir("") }
                     )
 
                     var accPath = ""
@@ -772,7 +804,7 @@ private fun DjTrackFileRow(
                 )
             }
 
-            // Track Details (Title, Artist, Genre)
+            // Track Details (Title, Artist, Genre, File path)
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -799,6 +831,14 @@ private fun DjTrackFileRow(
                     fontSize = 10.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+
+                // Path / Size details
+                Text(
+                    text = "${track.format} · ${String.format(Locale.US, "%.1f", track.fileSizeMb)} MB",
+                    color = TextMuted,
+                    fontSize = 8.5.sp,
+                    fontFamily = FontFamily.Monospace
                 )
             }
 
@@ -899,12 +939,16 @@ private fun DjTrackFileRow(
 @Composable
 private fun EmptyFolderPlaceholder(
     currentPath: String,
+    onScanMediaStore: () -> Unit,
+    onMountSaf: () -> Unit,
+    onPickAudioFiles: () -> Unit,
+    onLoadDemoTracks: () -> Unit,
     onOpenAddTrack: () -> Unit
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 24.dp),
+            .padding(vertical = 16.dp),
         shape = RoundedCornerShape(12.dp),
         color = DjSurfaceDark,
         border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
@@ -912,21 +956,72 @@ private fun EmptyFolderPlaceholder(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(24.dp),
+                .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(Icons.Default.FolderOpen, contentDescription = null, tint = TextMuted, modifier = Modifier.size(42.dp))
-            Text("No Audio Tracks in this Folder", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            Text(currentPath, color = TextSecondary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-            Button(
-                onClick = onOpenAddTrack,
-                colors = ButtonDefaults.buttonColors(containerColor = DeckACyan, contentColor = DjObsidian),
-                shape = RoundedCornerShape(8.dp)
+            Icon(Icons.Default.FolderOpen, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(44.dp))
+            Text("Ready to Index Real Audio Files", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text(
+                text = "Connect real audio files on your phone storage, SD card, or USB drive:",
+                color = TextSecondary,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Default
+            )
+
+            // Direct Action Buttons
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Import Audio File Here", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                // 1. Scan Phone MediaStore
+                Button(
+                    onClick = onScanMediaStore,
+                    colors = ButtonDefaults.buttonColors(containerColor = DeckACyan, contentColor = DjObsidian),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("empty_scan_device_button")
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Scan Entire Device Audio (MediaStore)", fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                }
+
+                // 2. Pick SAF Folder
+                Button(
+                    onClick = onMountSaf,
+                    colors = ButtonDefaults.buttonColors(containerColor = DjSurfaceElevated, contentColor = NeonAmber),
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, NeonAmber),
+                    modifier = Modifier.fillMaxWidth().testTag("empty_pick_folder_button")
+                ) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null, tint = NeonAmber, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Select Specific Folder from Storage (SAF)", fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                }
+
+                // 3. Pick Individual Audio Files
+                Button(
+                    onClick = onPickAudioFiles,
+                    colors = ButtonDefaults.buttonColors(containerColor = DjSurfaceElevated, contentColor = TextPrimary),
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+                    modifier = Modifier.fillMaxWidth().testTag("empty_pick_files_button")
+                ) {
+                    Icon(Icons.Default.AudioFile, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Pick Audio Files (.mp3, .flac, .wav, .m4a)", fontWeight = FontWeight.Normal, fontSize = 11.5.sp)
+                }
+
+                // 4. Load Demo Tracks (Optional)
+                OutlinedButton(
+                    onClick = onLoadDemoTracks,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("empty_load_demo_button")
+                ) {
+                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = TextMuted, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Load Example Demo Tracks (Optional)", color = TextSecondary, fontSize = 11.sp)
+                }
             }
         }
     }

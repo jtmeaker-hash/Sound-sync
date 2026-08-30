@@ -4,6 +4,11 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.media.MediaPlayer
+import android.media.PlaybackParams
+import android.net.Uri
+import android.os.Build
+import android.util.Log
 import com.example.model.Track
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -21,6 +27,8 @@ class DjAudioEngine(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Default)
     private var playbackJob: Job? = null
     private var audioTrack: AudioTrack? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private var isUsingMediaPlayer = false
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying = _isPlaying.asStateFlow()
@@ -35,7 +43,7 @@ class DjAudioEngine(private val context: Context) {
     val currentPositionSec = _currentPositionSec.asStateFlow()
 
     // DJ Deck controls state
-    private val _pitchPercent = MutableStateFlow(0.0f) // -8% to +8%
+    private val _pitchPercent = MutableStateFlow(0.0f) // -16% to +16%
     val pitchPercent = _pitchPercent.asStateFlow()
 
     private val _effectiveBpm = MutableStateFlow(126.0)
@@ -62,23 +70,104 @@ class DjAudioEngine(private val context: Context) {
     private var activeCueSeconds: Int = 0
 
     fun loadTrack(track: Track) {
+        val wasPlaying = _isPlaying.value
+        pause()
+        releasePlayers()
+
         _currentTrack.value = track
         _effectiveBpm.value = track.bpm * (1.0 + _pitchPercent.value / 100.0)
         _playbackProgress.value = 0f
         _currentPositionSec.value = 0
         activeCueSeconds = 0
         generateStaticWaveform(track)
+
+        prepareMediaPlayerForTrack(track)
+
+        if (wasPlaying) {
+            play()
+        }
+    }
+
+    private fun prepareMediaPlayerForTrack(track: Track) {
+        try {
+            val uriOrPath = track.filePath
+            val mp = MediaPlayer()
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+
+            var prepared = false
+            if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
+                mp.setDataSource(context, Uri.parse(uriOrPath))
+                mp.prepare()
+                prepared = true
+            } else if (File(uriOrPath).exists() && File(uriOrPath).canRead()) {
+                mp.setDataSource(uriOrPath)
+                mp.prepare()
+                prepared = true
+            }
+
+            if (prepared) {
+                applyPlaybackParams(mp)
+                mp.setOnCompletionListener {
+                    if (_activeLoopBars.value > 0) {
+                        seekToSecond(activeCueSeconds)
+                        mp.start()
+                    } else {
+                        seekToSecond(0)
+                        pause()
+                    }
+                }
+                mp.setOnErrorListener { _, what, extra ->
+                    Log.w("DjAudioEngine", "MediaPlayer error: $what, $extra")
+                    isUsingMediaPlayer = false
+                    true
+                }
+                mediaPlayer = mp
+                isUsingMediaPlayer = true
+            } else {
+                mp.release()
+                isUsingMediaPlayer = false
+            }
+        } catch (e: Exception) {
+            Log.d("DjAudioEngine", "Cannot use MediaPlayer for path '${track.filePath}', falling back to synthesis: ${e.message}")
+            isUsingMediaPlayer = false
+        }
     }
 
     fun play() {
         if (_currentTrack.value == null) return
         _isPlaying.value = true
-        startAudioSynthesis()
+
+        if (isUsingMediaPlayer && mediaPlayer != null) {
+            try {
+                applyPlaybackParams(mediaPlayer)
+                mediaPlayer?.start()
+                startMediaPlayerTracking()
+            } catch (e: Exception) {
+                isUsingMediaPlayer = false
+                startAudioSynthesis()
+            }
+        } else {
+            startAudioSynthesis()
+        }
     }
 
     fun pause() {
         _isPlaying.value = false
-        stopAudioSynthesis()
+        playbackJob?.cancel()
+        if (isUsingMediaPlayer && mediaPlayer != null) {
+            try {
+                if (mediaPlayer?.isPlaying == true) {
+                    mediaPlayer?.pause()
+                }
+            } catch (ignored: Exception) {}
+        } else {
+            stopAudioSynthesis()
+        }
     }
 
     fun togglePlayPause() {
@@ -91,7 +180,6 @@ class DjAudioEngine(private val context: Context) {
             seekToSecond(activeCueSeconds)
         } else {
             seekToSecond(activeCueSeconds)
-            // Stutter cue effect
             play()
         }
     }
@@ -109,6 +197,10 @@ class DjAudioEngine(private val context: Context) {
         _pitchPercent.value = percent.coerceIn(-16f, 16f)
         val base = _currentTrack.value?.bpm ?: 126.0
         _effectiveBpm.value = base * (1.0 + _pitchPercent.value / 100.0)
+
+        if (isUsingMediaPlayer && mediaPlayer != null) {
+            applyPlaybackParams(mediaPlayer)
+        }
     }
 
     fun setEq(low: Float, mid: Float, high: Float) {
@@ -149,6 +241,60 @@ class DjAudioEngine(private val context: Context) {
         val clamped = sec.coerceIn(0, track.durationSeconds)
         _currentPositionSec.value = clamped
         _playbackProgress.value = if (track.durationSeconds > 0) clamped.toFloat() / track.durationSeconds else 0f
+
+        if (isUsingMediaPlayer && mediaPlayer != null) {
+            try {
+                mediaPlayer?.seekTo(clamped * 1000)
+            } catch (ignored: Exception) {}
+        }
+    }
+
+    private fun applyPlaybackParams(mp: MediaPlayer?) {
+        if (mp == null) return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val speed = (1.0f + _pitchPercent.value / 100.0f).coerceIn(0.5f, 2.0f)
+                val params = PlaybackParams().apply {
+                    this.speed = speed
+                    this.pitch = speed
+                }
+                mp.playbackParams = params
+            }
+        } catch (e: Exception) {
+            Log.w("DjAudioEngine", "Cannot apply playback params", e)
+        }
+    }
+
+    private fun startMediaPlayerTracking() {
+        playbackJob?.cancel()
+        playbackJob = scope.launch {
+            while (isActive && _isPlaying.value) {
+                val mp = mediaPlayer
+                val track = _currentTrack.value
+                if (mp != null && track != null) {
+                    try {
+                        val currentMs = mp.currentPosition
+                        val currentSec = currentMs / 1000
+                        _currentPositionSec.value = currentSec
+                        val durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000 else mp.duration
+                        if (durationMs > 0) {
+                            _playbackProgress.value = (currentMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                        }
+
+                        // Check active loop
+                        if (_activeLoopBars.value > 0) {
+                            val currentBpm = _effectiveBpm.value
+                            val loopLengthSec = (_activeLoopBars.value * 4 * 60 / currentBpm).toInt().coerceAtLeast(2)
+                            val startLoopSec = activeCueSeconds
+                            if (currentSec >= startLoopSec + loopLengthSec) {
+                                seekToSecond(startLoopSec)
+                            }
+                        }
+                    } catch (ignored: Exception) {}
+                }
+                delay(100)
+            }
+        }
     }
 
     private fun generateStaticWaveform(track: Track) {
@@ -231,10 +377,8 @@ class DjAudioEngine(private val context: Context) {
                         // Filter effect
                         val filter = _filterKnob.value
                         if (filter < 0.45f) {
-                            // Low pass filter
                             sample *= (filter / 0.45f)
                         } else if (filter > 0.55f) {
-                            // High pass filter
                             val hpRatio = (filter - 0.55f) / 0.45f
                             sample = (sample - (sin(phase) * 0.2 * (1.0 - hpRatio)))
                         }
@@ -284,8 +428,18 @@ class DjAudioEngine(private val context: Context) {
         audioTrack = null
     }
 
+    private fun releasePlayers() {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+        } catch (ignored: Exception) {}
+        mediaPlayer = null
+        stopAudioSynthesis()
+    }
+
     fun release() {
         pause()
+        releasePlayers()
         playbackJob?.cancel()
     }
 }

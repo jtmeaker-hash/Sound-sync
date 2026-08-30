@@ -13,6 +13,9 @@ interface TrackDao {
     @Query("SELECT * FROM tracks ORDER BY dateAdded DESC")
     fun getAllTracks(): Flow<List<TrackEntity>>
 
+    @Query("SELECT * FROM tracks ORDER BY dateAdded DESC")
+    suspend fun getAllTracksSync(): List<TrackEntity>
+
     @Query("SELECT * FROM tracks WHERE crateId = :crateId ORDER BY bpm ASC")
     fun getTracksByCrate(crateId: String): Flow<List<TrackEntity>>
 
@@ -33,6 +36,9 @@ interface TrackDao {
 
     @Query("DELETE FROM tracks WHERE id = :id")
     suspend fun deleteTrackById(id: String)
+
+    @Query("DELETE FROM tracks")
+    suspend fun deleteAllTracks()
 
     @Query("SELECT * FROM crates")
     fun getAllCrates(): Flow<List<CrateEntity>>

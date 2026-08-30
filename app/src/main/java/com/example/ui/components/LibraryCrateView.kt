@@ -21,14 +21,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
@@ -40,6 +44,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -92,6 +97,10 @@ fun LibraryCrateView(
     onAutoTagSingle: (Track) -> Unit,
     onAutoTagAll: () -> Unit,
     onDeleteTrack: (Track) -> Unit,
+    onPickAudioFiles: () -> Unit,
+    onPickSafFolder: () -> Unit,
+    onScanMediaStore: () -> Unit,
+    onLoadDemoTracks: () -> Unit,
     onOpenAddTrack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -204,11 +213,46 @@ fun LibraryCrateView(
 
             // Track List
             if (tracks.isEmpty()) {
-                Box(
+                Surface(
                     modifier = Modifier.fillMaxWidth().weight(1f),
-                    contentAlignment = Alignment.Center
+                    color = DjSurfaceDark,
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
                 ) {
-                    Text("No tracks found matching criteria.", color = TextSecondary, fontSize = 13.sp)
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(Icons.Default.AudioFile, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(40.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("No Audio Tracks in this Crate", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("Scan device music or import audio files from your storage", color = TextSecondary, fontSize = 11.sp)
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onScanMediaStore,
+                                colors = ButtonDefaults.buttonColors(containerColor = DeckACyan, contentColor = DjObsidian),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Scan Storage", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+
+                            Button(
+                                onClick = onPickAudioFiles,
+                                colors = ButtonDefaults.buttonColors(containerColor = DjSurfaceElevated, contentColor = TextPrimary),
+                                shape = RoundedCornerShape(8.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                            ) {
+                                Icon(Icons.Default.AudioFile, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Pick Files", fontSize = 11.sp)
+                            }
+                        }
+                    }
                 }
             } else {
                 LazyColumn(
@@ -228,7 +272,7 @@ fun LibraryCrateView(
             }
         }
 
-        // Floating Action Button to Add New Stem/Track
+        // Floating Action Button to Add / Import New Stem/Track
         FloatingActionButton(
             onClick = onOpenAddTrack,
             modifier = Modifier

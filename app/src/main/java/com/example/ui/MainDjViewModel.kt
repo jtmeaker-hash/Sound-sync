@@ -1,6 +1,11 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Context
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.analysis.AiAutoTagger
@@ -8,7 +13,7 @@ import com.example.analysis.DuplicateDetector
 import com.example.audio.DjAudioEngine
 import com.example.audio.SpectrogramEngine
 import com.example.data.AppDatabase
-import com.example.data.CrateEntity
+import com.example.data.SourceFolderEntity
 import com.example.data.TrackEntity
 import com.example.model.AudioQualityRating
 import com.example.model.DjCrate
@@ -23,6 +28,11 @@ import com.example.model.StorageSource
 import com.example.model.StorageSourceType
 import com.example.model.SyncState
 import com.example.model.Track
+import com.example.service.AudioScanService
+import com.example.service.AudioScanState
+import com.example.storage.LocalFileSystemScanner
+import com.example.storage.MediaScannerHelper
+import com.example.storage.SafStorageManager
 import com.example.sync.CloudSyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +44,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 
 enum class DjTab(val title: String, val iconName: String) {
@@ -41,13 +52,14 @@ enum class DjTab(val title: String, val iconName: String) {
     LIBRARY("Crates & Tags", "queue_music"),
     SPECTROGRAM("Spectrum Lab", "graphic_eq"),
     DUPLICATES("Duplicates", "content_copy"),
-    OPERATIONS("Hub & Cloud", "storage")
+    OPERATIONS("Hub & Storage", "storage")
 }
 
 class MainDjViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
     private val trackDao = db.trackDao()
+    private val sourceFolderDao = db.sourceFolderDao()
 
     val audioEngine = DjAudioEngine(application)
 
@@ -57,11 +69,24 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
 
+    // Permission and Scanning State
+    private val _hasStoragePermission = MutableStateFlow(checkInitialStoragePermission())
+    val hasStoragePermission = _hasStoragePermission.asStateFlow()
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning = _isScanning.asStateFlow()
+
+    private val _scanProgressMessage = MutableStateFlow("")
+    val scanProgressMessage = _scanProgressMessage.asStateFlow()
+
+    // Background DocumentFile AudioScanService State
+    val scanServiceState: StateFlow<AudioScanState> = AudioScanService.scanState
+
     // File Explorer Navigation State
-    private val _currentStorageSourceId = MutableStateFlow("internal")
+    private val _currentStorageSourceId = MutableStateFlow("all")
     val currentStorageSourceId = _currentStorageSourceId.asStateFlow()
 
-    private val _currentDirectoryPath = MutableStateFlow("/storage/emulated/0/Music")
+    private val _currentDirectoryPath = MutableStateFlow("")
     val currentDirectoryPath = _currentDirectoryPath.asStateFlow()
 
     private val _selectedTrackIds = MutableStateFlow<Set<String>>(emptySet())
@@ -70,7 +95,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _explorerSortOption = MutableStateFlow(ExplorerSortOption.NAME_ASC)
     val explorerSortOption = _explorerSortOption.asStateFlow()
 
-    private val _explorerViewMode = MutableStateFlow("detailed") // "detailed", "compact", "grid"
+    private val _explorerViewMode = MutableStateFlow("detailed")
     val explorerViewMode = _explorerViewMode.asStateFlow()
 
     private val _isDryRunEnabled = MutableStateFlow(false)
@@ -106,37 +131,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _crates = MutableStateFlow(CloudSyncManager.getInitialCrates())
     val crates = _crates.asStateFlow()
 
-    private val _storageSources = MutableStateFlow(
-        listOf(
-            StorageSource("internal", StorageSourceType.INTERNAL, "Internal Storage", "/storage/emulated/0/Music", true, 4, 184.2, 512.0),
-            StorageSource("usb_ssd", StorageSourceType.USB_SSD, "USB-C SSD (Crucial X8)", "/mnt/media_rw/USB_DJ_VAULT/Tracks", true, 2, 842.0, 1024.0),
-            StorageSource("sd_card", StorageSourceType.SD_CARD, "MicroSD (SanDisk 512G)", "/storage/0000-0000/DJ_Sets", true, 1, 310.5, 512.0),
-            StorageSource("downloads", StorageSourceType.DOWNLOADS, "Downloads", "/storage/emulated/0/Download", true, 1, 45.0, 512.0),
-            StorageSource("cloud_vault", StorageSourceType.CLOUD_VAULT, "Cloud Vault Sync", "/storage/emulated/0/SoundSync/CloudCache", true, 1, 100.0, 200.0)
-        )
-    )
+    private val _storageSources = MutableStateFlow<List<StorageSource>>(emptyList())
     val storageSources = _storageSources.asStateFlow()
 
-    private val _operationJournal = MutableStateFlow(
-        listOf(
-            OperationJournalItem(
-                id = "op_1",
-                timestamp = System.currentTimeMillis() - 600000,
-                operationType = FileOperationType.AUTO_TAG,
-                affectedTracksCount = 7,
-                summary = "AI Auto-tagged 7 tracks with Camelot keys & DJ energy",
-                canUndo = true
-            ),
-            OperationJournalItem(
-                id = "op_2",
-                timestamp = System.currentTimeMillis() - 1800000,
-                operationType = FileOperationType.MOVE,
-                affectedTracksCount = 2,
-                summary = "Moved 2 tracks to /USB_DJ_VAULT/Tracks/Techno",
-                canUndo = true
-            )
-        )
-    )
+    private val _operationJournal = MutableStateFlow<List<OperationJournalItem>>(emptyList())
     val operationJournal = _operationJournal.asStateFlow()
 
     // Real database tracks flow
@@ -154,14 +152,14 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     ) { tracks, dirPath, sourceId, query, sortOpt ->
         val filtered = tracks.filter { track ->
             val matchesSource = sourceId == "all" || track.sourceId == sourceId ||
-                (sourceId == "internal" && track.directoryPath.startsWith("/storage/emulated/0/Music")) ||
-                (sourceId == "usb_ssd" && track.directoryPath.contains("USB")) ||
-                (sourceId == "sd_card" && track.directoryPath.contains("0000-0000")) ||
-                (sourceId == "downloads" && track.directoryPath.contains("Download")) ||
-                (sourceId == "cloud_vault" && track.directoryPath.contains("CloudCache"))
+                (sourceId == "internal" && (track.directoryPath.contains("emulated/0") || track.directoryPath.startsWith("/storage/emulated/0"))) ||
+                (sourceId == "downloads" && track.directoryPath.contains("Download", ignoreCase = true)) ||
+                (sourceId == "sd_card" && (track.directoryPath.contains("storage/") && !track.directoryPath.contains("emulated/0")))
 
-            val matchesDir = dirPath.isBlank() || track.directoryPath.startsWith(dirPath) || dirPath == "/" || sourceId == "all"
-            
+            val matchesDir = dirPath.isBlank() || dirPath == "/" || sourceId == "all" ||
+                track.directoryPath.equals(dirPath, ignoreCase = true) ||
+                track.directoryPath.startsWith(dirPath, ignoreCase = true)
+
             val matchesQuery = query.isBlank() ||
                 track.title.contains(query, ignoreCase = true) ||
                 track.artist.contains(query, ignoreCase = true) ||
@@ -191,27 +189,39 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         _currentStorageSourceId
     ) { tracks, dirPath, sourceId ->
         val subDirs = mutableMapOf<String, MutableList<Track>>()
-        tracks.forEach { track ->
-            val trackDir = track.directoryPath
-            if (trackDir.startsWith(dirPath) && trackDir != dirPath) {
-                val relative = trackDir.removePrefix(dirPath).trimStart('/')
-                val folderName = relative.substringBefore('/')
-                if (folderName.isNotBlank()) {
-                    val fullSubPath = if (dirPath.endsWith("/")) "$dirPath$folderName" else "$dirPath/$folderName"
-                    subDirs.getOrPut(fullSubPath) { mutableListOf() }.add(track)
+        
+        if (dirPath.isNotBlank() && dirPath != "/") {
+            tracks.forEach { track ->
+                val trackDir = track.directoryPath
+                if (trackDir.startsWith(dirPath, ignoreCase = true) && !trackDir.equals(dirPath, ignoreCase = true)) {
+                    val relative = trackDir.removePrefix(dirPath).trimStart('/')
+                    val folderName = relative.substringBefore('/')
+                    if (folderName.isNotBlank()) {
+                        val fullSubPath = if (dirPath.endsWith("/")) "$dirPath$folderName" else "$dirPath/$folderName"
+                        subDirs.getOrPut(fullSubPath) { mutableListOf() }.add(track)
+                    }
+                }
+            }
+        } else {
+            // Group by top-level directories
+            tracks.forEach { track ->
+                val trackDir = track.directoryPath
+                if (trackDir.isNotBlank()) {
+                    subDirs.getOrPut(trackDir) { mutableListOf() }.add(track)
                 }
             }
         }
 
         subDirs.map { (path, folderTracks) ->
+            val name = if (path.contains('/')) path.substringAfterLast('/') else path
             FolderItem(
-                name = path.substringAfterLast('/'),
+                name = name.ifBlank { "Root Storage" },
                 path = path,
                 trackCount = folderTracks.size,
                 subFolderCount = 0,
                 totalSizeMb = folderTracks.sumOf { it.fileSizeMb }
             )
-        }.sortedBy { it.name }
+        }.sortedBy { it.name.lowercase() }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Filtered tracks for Library view
@@ -250,23 +260,267 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     init {
-        bootstrapInitialData()
+        initializeStorageAndData()
+        observeBackgroundScanner()
     }
 
-    private fun bootstrapInitialData() {
+    private fun observeBackgroundScanner() {
+        viewModelScope.launch {
+            var wasScanning = false
+            AudioScanService.scanState.collect { state ->
+                if (wasScanning && !state.isScanning && state.isCompleted) {
+                    refreshStorageSourcesList()
+                    showSnackbar("Background scan finished: ${state.totalIndexedInLastRun} audio tracks indexed successfully!")
+                }
+                wasScanning = state.isScanning
+            }
+        }
+    }
+
+    private fun checkInitialStoragePermission(): Boolean {
+        val app = getApplication<Application>()
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun onPermissionResult(isGranted: Boolean) {
+        _hasStoragePermission.value = isGranted
+        if (isGranted) {
+            showSnackbar("Storage access granted! Scanning device audio library...")
+            scanDeviceMediaStore()
+        } else {
+            showSnackbar("Storage permission denied. You can import audio files individually or pick folders via SAF.")
+        }
+    }
+
+    private fun initializeStorageAndData() {
         viewModelScope.launch(Dispatchers.IO) {
-            val count = trackDao.getTrackCount()
-            if (count == 0) {
-                val initial = CloudSyncManager.getInitialSampleTracks()
-                trackDao.insertTracks(initial.map { TrackEntity.fromTrack(it) })
+            refreshStorageSourcesList()
+
+            val existingCount = trackDao.getTrackCount()
+            if (existingCount == 0 && _hasStoragePermission.value) {
+                // Auto scan MediaStore on initial launch if permission is granted
+                scanDeviceMediaStoreInternal()
+            } else if (existingCount > 0) {
+                // Load first track for audio preview
+                val firstTrack = trackDao.getAllTracksSync().firstOrNull()?.toTrack()
+                if (firstTrack != null) {
+                    withContext(Dispatchers.Main) {
+                        audioEngine.loadTrack(firstTrack)
+                        inspectTrackSpectrogram(firstTrack)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun refreshStorageSourcesList() {
+        val app = getApplication<Application>()
+        val physicalSources = LocalFileSystemScanner.getAvailableStorageSources(app)
+        val savedSafFolders = sourceFolderDao.getAllSourceFoldersSync()
+
+        val safSources = savedSafFolders.map { sf ->
+            StorageSource(
+                id = sf.id,
+                type = StorageSourceType.SD_CARD,
+                label = sf.label,
+                path = sf.uriString,
+                isOnline = sf.isOnline,
+                trackCount = sf.trackCount,
+                freeSpaceGb = sf.freeSpaceGb,
+                totalSpaceGb = sf.totalSpaceGb,
+                lastScanned = sf.lastScanned
+            )
+        }
+
+        val allSources: List<StorageSource> = listOf(
+            StorageSource("all", StorageSourceType.INTERNAL, "All Storage", "", true, trackDao.getTrackCount(), 100.0, 512.0)
+        ) + physicalSources + safSources
+
+        _storageSources.value = allSources
+    }
+
+    fun scanDeviceMediaStore() {
+        viewModelScope.launch(Dispatchers.IO) {
+            scanDeviceMediaStoreInternal()
+        }
+    }
+
+    private suspend fun scanDeviceMediaStoreInternal() {
+        val app = getApplication<Application>()
+        _isScanning.value = true
+        _scanProgressMessage.value = "Scanning MediaStore audio repository..."
+
+        try {
+            val scannedTracks = MediaScannerHelper.scanDeviceAudio(app) { current, total, title ->
+                _scanProgressMessage.value = "Scanning audio files: $current of $total ($title)..."
             }
 
-            // Load initial track for preview
-            val first = trackDao.getTrackById("track_1")?.toTrack()
-                ?: CloudSyncManager.getInitialSampleTracks().first()
+            if (scannedTracks.isNotEmpty()) {
+                val entities = scannedTracks.map { TrackEntity.fromTrack(it) }
+                trackDao.insertTracks(entities)
+                refreshStorageSourcesList()
+
+                val first = scannedTracks.first()
+                withContext(Dispatchers.Main) {
+                    audioEngine.loadTrack(first)
+                    inspectTrackSpectrogram(first)
+                    showSnackbar("Successfully indexed ${scannedTracks.size} audio tracks from phone storage!")
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    showSnackbar("No audio files detected in MediaStore. You can select a folder or pick audio files.")
+                }
+            }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                showSnackbar("Error scanning storage: ${e.localizedMessage}")
+            }
+        } finally {
+            _isScanning.value = false
+            _scanProgressMessage.value = ""
+        }
+    }
+
+    fun importSafFolder(treeUri: Uri) {
+        val app = getApplication<Application>()
+        val folderName = treeUri.lastPathSegment?.substringAfterLast(':') ?: "Audio Storage"
+        
+        // Take persistable permission
+        SafStorageManager.takePersistablePermissions(app, treeUri)
+        
+        // Launch DocumentFile background scanning service
+        startBackgroundScanService(treeUri, folderName)
+        showSnackbar("Starting background DocumentFile scanner for '$folderName'...")
+    }
+
+    fun startBackgroundScanService(treeUri: Uri, label: String = "Audio Storage") {
+        val app = getApplication<Application>()
+        SafStorageManager.takePersistablePermissions(app, treeUri)
+        val sourceId = "saf_${treeUri.hashCode().toLong().let { if (it < 0) -it else it }}"
+        AudioScanService.startScan(app, treeUri, label, sourceId)
+    }
+
+    fun pauseScanService() {
+        val app = getApplication<Application>()
+        AudioScanService.pauseScan(app)
+        showSnackbar("Scanning paused.")
+    }
+
+    fun resumeScanService() {
+        val app = getApplication<Application>()
+        AudioScanService.resumeScan(app)
+        showSnackbar("Resuming scan...")
+    }
+
+    fun cancelScanService() {
+        val app = getApplication<Application>()
+        AudioScanService.cancelScan(app)
+        showSnackbar("Scanning cancelled.")
+    }
+
+    fun importAudioFiles(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            _isScanning.value = true
+            _scanProgressMessage.value = "Importing ${uris.size} audio files..."
+
+            val imported = mutableListOf<Track>()
+            for ((index, uri) in uris.withIndex()) {
+                _scanProgressMessage.value = "Importing file (${index + 1}/${uris.size})..."
+                val track = MediaScannerHelper.extractTrackFromUri(app, uri)
+                if (track != null) {
+                    imported.add(track)
+                }
+            }
+
+            if (imported.isNotEmpty()) {
+                trackDao.insertTracks(imported.map { TrackEntity.fromTrack(it) })
+                refreshStorageSourcesList()
+
+                val log = OperationJournalItem(
+                    id = "op_${UUID.randomUUID().toString().take(6)}",
+                    timestamp = System.currentTimeMillis(),
+                    operationType = FileOperationType.COPY,
+                    affectedTracksCount = imported.size,
+                    summary = "Imported ${imported.size} audio files from storage"
+                )
+                _operationJournal.value = listOf(log) + _operationJournal.value
+
+                val first = imported.first()
+                withContext(Dispatchers.Main) {
+                    audioEngine.loadTrack(first)
+                    inspectTrackSpectrogram(first)
+                    showSnackbar("Successfully imported ${imported.size} audio files!")
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    showSnackbar("Could not read audio data from selected files.")
+                }
+            }
+
+            _isScanning.value = false
+            _scanProgressMessage.value = ""
+        }
+    }
+
+    fun loadDemoTracks() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val samples = CloudSyncManager.getInitialSampleTracks()
+            trackDao.insertTracks(samples.map { TrackEntity.fromTrack(it) })
+            refreshStorageSourcesList()
+
+            val first = samples.first()
             withContext(Dispatchers.Main) {
                 audioEngine.loadTrack(first)
                 inspectTrackSpectrogram(first)
+                showSnackbar("Loaded ${samples.size} DJ demo tracks with Camelot keys and cues!")
+            }
+        }
+    }
+
+    fun clearLibrary() {
+        viewModelScope.launch(Dispatchers.IO) {
+            trackDao.deleteAllTracks()
+            refreshStorageSourcesList()
+            withContext(Dispatchers.Main) {
+                showSnackbar("Cleared DJ audio library.")
+            }
+        }
+    }
+
+    fun cleanMissingFiles() {
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val tracks: List<TrackEntity> = trackDao.getAllTracksSync()
+            var missingCount = 0
+            for (t in tracks) {
+                var exists = false
+                val path: String = t.filePath
+                if (path.startsWith("content://")) {
+                    try {
+                        val fd = app.contentResolver.openFileDescriptor(Uri.parse(path), "r")
+                        if (fd != null) {
+                            fd.close()
+                            exists = true
+                        }
+                    } catch (ignored: Exception) {}
+                } else {
+                    exists = File(path).exists()
+                }
+
+                if (!exists && !path.startsWith("demo://") && !path.contains("/Music/Tech House/")) {
+                    trackDao.deleteTrackById(t.id)
+                    missingCount++
+                }
+            }
+            refreshStorageSourcesList()
+            withContext(Dispatchers.Main) {
+                showSnackbar("Library cleaned: Removed $missingCount deleted/missing tracks.")
             }
         }
     }
@@ -284,6 +538,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         val src = _storageSources.value.firstOrNull { it.id == sourceId }
         if (src != null) {
             _currentDirectoryPath.value = src.path
+        } else {
+            _currentDirectoryPath.value = ""
         }
         _selectedTrackIds.value = emptySet()
     }
@@ -295,8 +551,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun navigateUp() {
         val current = _currentDirectoryPath.value
-        val parent = if (current.contains('/')) current.substringBeforeLast('/') else "/"
-        _currentDirectoryPath.value = if (parent.isBlank()) "/" else parent
+        val parent = if (current.contains('/')) current.substringBeforeLast('/') else ""
+        _currentDirectoryPath.value = parent
         _selectedTrackIds.value = emptySet()
     }
 
@@ -428,7 +684,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun mountSafDirectory() = mountSafStorageFolder()
+    fun mountSafDirectory() {
+        // Handled via SAF callback from UI
+    }
 
     fun undoJournalOperation(journalId: String) = undoOperation(journalId)
 
@@ -438,7 +696,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch(Dispatchers.IO) {
             val tracksToMove = allTracks.value.filter { selectedIds.contains(it.id) }
-            
+
             if (isDryRun) {
                 withContext(Dispatchers.Main) {
                     showSnackbar("[DRY RUN SIMULATION] Would move ${tracksToMove.size} files to $targetDirectory with 0 conflicts.")
@@ -507,12 +765,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             current[index] = item.copy(isUndone = true)
             _operationJournal.value = current
             showSnackbar("Undid operation: ${item.summary}")
-        }
-    }
-
-    fun mountSafStorageFolder() {
-        viewModelScope.launch {
-            showSnackbar("Storage Access Framework: Mounted external USB/SD folder with persistent permission.")
         }
     }
 
@@ -614,7 +866,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
             val newTrack = Track(
                 id = "track_${UUID.randomUUID().toString().take(8)}",
-                title = title.ifBlank { "Untitled DJ Stem" },
+                title = title.ifBlank { "Untitled Audio Track" },
                 artist = artist.ifBlank { "Unknown Artist" },
                 genre = genre,
                 bpm = bpm,
@@ -626,7 +878,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 directoryPath = curDir,
                 isOfflineReady = true,
                 syncState = SyncState.SYNCED,
-                platforms = listOf(MusicPlatform.LOCAL, MusicPlatform.GOOGLE_DRIVE),
+                platforms = listOf(MusicPlatform.LOCAL),
                 sourceId = _currentStorageSourceId.value
             )
 
@@ -634,16 +886,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             trackDao.insertTrack(TrackEntity.fromTrack(tagged))
 
             withContext(Dispatchers.Main) {
-                showSnackbar("Added & AI tagged '${tagged.title}' (${tagged.musicalKey} · ${tagged.bpm} BPM)")
+                showSnackbar("Added & AI tagged '${tagged.title}' (${tagged.musicalKey} · ${tagged.bpm.toInt()} BPM)")
             }
         }
     }
 
     fun triggerCloudSync() {
         viewModelScope.launch {
-            showSnackbar("Syncing DJ library across Beatport, Spotify, SoundCloud & Cloud Storage...")
-            kotlinx.coroutines.delay(1200)
-            showSnackbar("All tracks & cue metadata in sync with Cloud Vault!")
+            showSnackbar("Syncing DJ library across local devices & storage...")
+            kotlinx.coroutines.delay(800)
+            showSnackbar("All local tracks & cue metadata in sync!")
         }
     }
 
@@ -664,4 +916,3 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         audioEngine.release()
     }
 }
-

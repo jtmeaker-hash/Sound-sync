@@ -5,9 +5,10 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [TrackEntity::class, CrateEntity::class], version = 1, exportSchema = false)
+@Database(entities = [TrackEntity::class, CrateEntity::class, SourceFolderEntity::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun trackDao(): TrackDao
+    abstract fun sourceFolderDao(): SourceFolderDao
 
     companion object {
         @Volatile

@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,13 +18,24 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -69,6 +81,7 @@ import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceCard
 import com.example.ui.theme.DjSurfaceDark
 import com.example.ui.theme.DjSurfaceElevated
+import com.example.ui.theme.NeonAmber
 import com.example.ui.theme.NeonGreen
 import com.example.ui.theme.NeonPurple
 import com.example.ui.theme.NeonRed
@@ -78,7 +91,10 @@ import com.example.ui.theme.TextSecondary
 
 @Composable
 fun MainDjScreen(
-    viewModel: MainDjViewModel = viewModel()
+    viewModel: MainDjViewModel = viewModel(),
+    onRequestStoragePermission: () -> Unit = {},
+    onPickSafFolder: () -> Unit = {},
+    onPickAudioFiles: () -> Unit = {}
 ) {
     val selectedTab by viewModel.selectedTab.collectAsState()
     val allTracks by viewModel.allTracks.collectAsState()
@@ -91,6 +107,11 @@ fun MainDjScreen(
     val sortOption by viewModel.explorerSortOption.collectAsState()
     val isDryRun by viewModel.isDryRunEnabled.collectAsState()
     val operationJournal by viewModel.operationJournal.collectAsState()
+
+    val hasStoragePermission by viewModel.hasStoragePermission.collectAsState()
+    val isScanning by viewModel.isScanning.collectAsState()
+    val scanProgressMessage by viewModel.scanProgressMessage.collectAsState()
+    val scanServiceState by viewModel.scanServiceState.collectAsState()
 
     val filteredTracks by viewModel.filteredTracks.collectAsState()
     val duplicateMatches by viewModel.duplicateMatches.collectAsState()
@@ -123,12 +144,38 @@ fun MainDjScreen(
         containerColor = DjObsidian,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            DjTopAppBar(
-                totalTracks = allTracks.size,
-                duplicatesCount = duplicateMatches.size,
-                currentSourceLabel = storageSources.find { it.id == currentSourceId }?.label ?: "Storage",
-                onSelectDuplicatesTab = { viewModel.selectTab(DjTab.DUPLICATES) }
-            )
+            Column(modifier = Modifier.fillMaxWidth()) {
+                DjTopAppBar(
+                    totalTracks = allTracks.size,
+                    duplicatesCount = duplicateMatches.size,
+                    currentSourceLabel = storageSources.find { it.id == currentSourceId }?.label ?: "Storage",
+                    isScanning = isScanning,
+                    onSelectDuplicatesTab = { viewModel.selectTab(DjTab.DUPLICATES) },
+                    onRescan = { viewModel.scanDeviceMediaStore() }
+                )
+
+                // Storage Permission Request Banner (if not granted)
+                if (!hasStoragePermission) {
+                    PermissionRequestBanner(onRequestPermission = onRequestStoragePermission)
+                }
+
+                // Scanning Progress Banner (foreground MediaStore or DocumentFile Background Service)
+                AnimatedVisibility(visible = isScanning || scanServiceState.isScanning || scanServiceState.isPaused) {
+                    val msg = when {
+                        scanServiceState.isPaused -> "DocumentFile Scan Paused: ${scanServiceState.filesIndexed} tracks indexed"
+                        scanServiceState.isScanning -> "DocumentFile Scan: [${scanServiceState.filesIndexed}/${scanServiceState.filesDiscovered}] ${scanServiceState.currentFile.ifBlank { scanServiceState.currentDirectory }}"
+                        else -> scanProgressMessage
+                    }
+                    ScanningProgressBanner(
+                        message = msg,
+                        isPaused = scanServiceState.isPaused,
+                        isBackgroundService = scanServiceState.isScanning || scanServiceState.isPaused,
+                        onPause = { viewModel.pauseScanService() },
+                        onResume = { viewModel.resumeScanService() },
+                        onCancel = { viewModel.cancelScanService() }
+                    )
+                }
+            }
         },
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -176,6 +223,7 @@ fun MainDjScreen(
                         searchQuery = searchQuery,
                         sortOption = sortOption,
                         isDryRun = isDryRun,
+                        isScanning = isScanning,
                         playingTrackId = playingTrack?.id,
                         isPlaying = isPlaying,
                         onSearchChange = { viewModel.setSearchQuery(it) },
@@ -197,7 +245,10 @@ fun MainDjScreen(
                         onBulkMove = { bulkOperationType = FileOperationType.MOVE },
                         onBulkTrash = { bulkOperationType = FileOperationType.TRASH },
                         onBulkAutoTag = { viewModel.performBulkAutoTag() },
-                        onMountSaf = { viewModel.mountSafDirectory() },
+                        onMountSaf = onPickSafFolder,
+                        onPickAudioFiles = onPickAudioFiles,
+                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
+                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
                         onOpenAddTrack = { showAddTrackDialog = true }
                     )
                 }
@@ -217,6 +268,10 @@ fun MainDjScreen(
                         onAutoTagSingle = { viewModel.autoTagSingleTrack(it) },
                         onAutoTagAll = { viewModel.runAutoTagAll() },
                         onDeleteTrack = { viewModel.deleteTrack(it) },
+                        onPickAudioFiles = onPickAudioFiles,
+                        onPickSafFolder = onPickSafFolder,
+                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
+                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
                         onOpenAddTrack = { showAddTrackDialog = true }
                     )
                 }
@@ -244,10 +299,19 @@ fun MainDjScreen(
                     OperationsAndCloudView(
                         storageSources = storageSources,
                         operationJournal = operationJournal,
+                        scanServiceState = scanServiceState,
                         onTriggerSync = { viewModel.triggerCloudSync() },
                         onExportRekordbox = { viewModel.exportRekordboxXml() },
                         onUndoOperation = { viewModel.undoJournalOperation(it) },
-                        onMountSaf = { viewModel.mountSafDirectory() }
+                        onMountSaf = onPickSafFolder,
+                        onPickAudioFiles = onPickAudioFiles,
+                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
+                        onCleanMissingFiles = { viewModel.cleanMissingFiles() },
+                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
+                        onClearLibrary = { viewModel.clearLibrary() },
+                        onPauseScan = { viewModel.pauseScanService() },
+                        onResumeScan = { viewModel.resumeScanService() },
+                        onCancelScan = { viewModel.cancelScanService() }
                     )
                 }
             }
@@ -256,6 +320,10 @@ fun MainDjScreen(
             if (showAddTrackDialog) {
                 AddTrackDialog(
                     onDismiss = { showAddTrackDialog = false },
+                    onPickRealFiles = {
+                        showAddTrackDialog = false
+                        onPickAudioFiles()
+                    },
                     onAddTrack = { title, artist, genre, bpm, key, format, bitrate ->
                         viewModel.addNewTrack(title, artist, genre, bpm, key, format, bitrate)
                     }
@@ -309,11 +377,140 @@ fun MainDjScreen(
 }
 
 @Composable
+private fun PermissionRequestBanner(
+    onRequestPermission: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = NeonAmber.copy(alpha = 0.15f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, NeonAmber)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.Security, contentDescription = null, tint = NeonAmber, modifier = Modifier.size(20.dp))
+                Column {
+                    Text(
+                        text = "STORAGE PERMISSION REQUIRED",
+                        color = NeonAmber,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = "Grant audio storage access to scan device tracks automatically.",
+                        color = TextPrimary,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+
+            Button(
+                onClick = onRequestPermission,
+                colors = ButtonDefaults.buttonColors(containerColor = NeonAmber, contentColor = DjObsidian),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.testTag("grant_permission_button")
+            ) {
+                Text("Grant", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScanningProgressBanner(
+    message: String,
+    isPaused: Boolean = false,
+    isBackgroundService: Boolean = false,
+    onPause: () -> Unit = {},
+    onResume: () -> Unit = {},
+    onCancel: () -> Unit = {}
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (isPaused) NeonAmber.copy(alpha = 0.15f) else DeckACyan.copy(alpha = 0.15f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (isPaused) NeonAmber else DeckACyan)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (isPaused) {
+                    Icon(Icons.Default.Pause, contentDescription = "Paused", tint = NeonAmber, modifier = Modifier.size(16.dp))
+                } else {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        color = DeckACyan,
+                        strokeWidth = 2.dp
+                    )
+                }
+                Text(
+                    text = message.ifBlank { "Indexing audio files & stems from storage..." },
+                    color = if (isPaused) NeonAmber else DeckACyan,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
+
+            if (isBackgroundService) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (isPaused) {
+                        Surface(
+                            modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onResume),
+                            color = NeonAmber,
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text("Resume", color = DjObsidian, fontSize = 9.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                        }
+                    } else {
+                        Surface(
+                            modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onPause),
+                            color = DjSurfaceElevated,
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text("Pause", color = NeonAmber, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                        }
+                    }
+
+                    Surface(
+                        modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onCancel),
+                        color = DjSurfaceElevated,
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text("Stop", color = NeonRed, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DjTopAppBar(
     totalTracks: Int,
     duplicatesCount: Int,
     currentSourceLabel: String,
-    onSelectDuplicatesTab: () -> Unit
+    isScanning: Boolean,
+    onSelectDuplicatesTab: () -> Unit,
+    onRescan: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth().testTag("dj_top_app_bar"),
@@ -346,9 +543,9 @@ private fun DjTopAppBar(
                         letterSpacing = 1.sp
                     )
                     Text(
-                        text = "Hybrid DJ File Explorer & Lab",
+                        text = "Real Android Audio Storage & DJ Lab",
                         color = DeckACyan,
-                        fontSize = 10.sp,
+                        fontSize = 9.5.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -371,19 +568,32 @@ private fun DjTopAppBar(
                     )
                 }
 
-                // Total Tracks Count
+                // Total Tracks Count / Rescan Button
                 Surface(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(enabled = !isScanning, onClick = onRescan),
                     shape = RoundedCornerShape(6.dp),
                     color = DjSurfaceElevated
                 ) {
-                    Text(
-                        text = "$totalTracks TRACKS",
-                        color = TextSecondary,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (isScanning) {
+                            CircularProgressIndicator(modifier = Modifier.size(10.dp), color = DeckACyan, strokeWidth = 1.5.dp)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "Rescan", tint = TextSecondary, modifier = Modifier.size(11.dp))
+                        }
+                        Text(
+                            text = "$totalTracks TRACKS",
+                            color = TextSecondary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 }
 
                 // Duplicates alert badge
