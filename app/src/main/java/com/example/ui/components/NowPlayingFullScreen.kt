@@ -1,7 +1,6 @@
 package com.example.ui.components
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,10 +36,19 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +69,9 @@ import com.example.ui.theme.NeonGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.util.AlbumArtHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /**
@@ -536,6 +547,8 @@ fun NowPlayingFullScreen(
 
 /**
  * Clean Album Artwork View for Now Playing screen.
+ * Loads actual embedded artwork from the track file asynchronously.
+ * Shows a styled placeholder only when artwork truly isn't available.
  */
 @Composable
 private fun NowPlayingArtwork(
@@ -543,6 +556,35 @@ private fun NowPlayingArtwork(
     isPlaying: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    var artworkBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var lastLoadedTrackId by remember { mutableStateOf<String?>(null) }
+
+    // Load artwork asynchronously whenever the track changes
+    LaunchedEffect(track.id, track.filePath) {
+        // Reset state for new track immediately to avoid showing stale artwork
+        if (lastLoadedTrackId != track.id) {
+            artworkBitmap = null
+            isLoading = true
+        }
+        lastLoadedTrackId = track.id
+
+        val bitmap = withContext(Dispatchers.IO) {
+            try {
+                AlbumArtHelper.getArtworkForTrack(context, track, 512)
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        // Only update if this is still the current track (avoid stale load races)
+        if (lastLoadedTrackId == track.id) {
+            artworkBitmap = bitmap?.asImageBitmap()
+            isLoading = false
+        }
+    }
+
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
@@ -550,50 +592,98 @@ private fun NowPlayingArtwork(
             .border(1.dp, DjSurfaceBorder, RoundedCornerShape(16.dp)),
         contentAlignment = Alignment.Center
     ) {
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = DjSurfaceCard,
-            border = androidx.compose.foundation.BorderStroke(2.dp, DeckACyan),
-            shadowElevation = 12.dp,
-            modifier = Modifier.size(180.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        androidx.compose.ui.graphics.Brush.radialGradient(
-                            listOf(Color(0xFF1B2A4A), Color(0xFF0B111F))
-                        )
-                    ),
-                contentAlignment = Alignment.Center
+        if (artworkBitmap != null) {
+            // Display actual album artwork with rounded container
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color.Transparent,
+                border = androidx.compose.foundation.BorderStroke(2.dp, DeckACyan),
+                shadowElevation = 12.dp,
+                modifier = Modifier.size(240.dp)
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(12.dp)
+                androidx.compose.foundation.Image(
+                    bitmap = artworkBitmap!!,
+                    contentDescription = "${track.title} album artwork",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(18.dp))
+                )
+            }
+        } else if (isLoading) {
+            // Loading state: subtle pulsing indicator
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = DjSurfaceCard,
+                border = androidx.compose.foundation.BorderStroke(2.dp, DeckACyan.copy(alpha = 0.4f)),
+                shadowElevation = 8.dp,
+                modifier = Modifier.size(180.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            androidx.compose.ui.graphics.Brush.radialGradient(
+                                listOf(Color(0xFF1B2A4A), Color(0xFF0B111F))
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.Album,
                         contentDescription = null,
-                        tint = DeckACyan,
+                        tint = DeckACyan.copy(alpha = 0.5f),
                         modifier = Modifier.size(54.dp)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = if (track.genre.isNotBlank() && track.genre != "Unknown") track.genre.uppercase() else "AUDIO TRACK",
-                        color = DeckACyan,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "${track.bitrateKbps}K ${track.format.uppercase()}",
-                        color = TextSecondary,
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        textAlign = TextAlign.Center
-                    )
+                }
+            }
+        } else {
+            // Fallback placeholder: no artwork available for this track
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = DjSurfaceCard,
+                border = androidx.compose.foundation.BorderStroke(2.dp, DeckACyan),
+                shadowElevation = 12.dp,
+                modifier = Modifier.size(180.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            androidx.compose.ui.graphics.Brush.radialGradient(
+                                listOf(Color(0xFF1B2A4A), Color(0xFF0B111F))
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Album,
+                            contentDescription = null,
+                            tint = DeckACyan,
+                            modifier = Modifier.size(54.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = if (track.genre.isNotBlank() && track.genre != "Unknown") track.genre.uppercase() else "AUDIO TRACK",
+                            color = DeckACyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${track.bitrateKbps}K ${track.format.uppercase()}",
+                            color = TextSecondary,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         }

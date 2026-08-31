@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -43,6 +42,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +54,10 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -57,6 +65,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.util.AlbumArtHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.audio.WaveformData
 import com.example.model.NowPlayingDisplayMode
 import com.example.model.Track
@@ -469,6 +480,7 @@ fun NowPlayingView(
 
 /**
  * High-definition vinyl album art display with DJ deck styling.
+ * Loads actual embedded artwork from the track file asynchronously.
  */
 @Composable
 private fun AlbumArtworkDisplay(
@@ -476,6 +488,34 @@ private fun AlbumArtworkDisplay(
     isPlaying: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    var artworkBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var lastLoadedTrackId by remember { mutableStateOf<String?>(null) }
+
+    // Load artwork asynchronously whenever the track changes
+    LaunchedEffect(track.id, track.filePath) {
+        if (lastLoadedTrackId != track.id) {
+            artworkBitmap = null
+            isLoading = true
+        }
+        lastLoadedTrackId = track.id
+
+        val bitmap = withContext(Dispatchers.IO) {
+            try {
+                AlbumArtHelper.getArtworkForTrack(context, track, 512)
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        // Only update if this is still the current track
+        if (lastLoadedTrackId == track.id) {
+            artworkBitmap = bitmap?.asImageBitmap()
+            isLoading = false
+        }
+    }
+
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
@@ -483,81 +523,129 @@ private fun AlbumArtworkDisplay(
             .border(1.dp, DjSurfaceBorder, RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center
     ) {
-        // Ambient vinyl groove canvas
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val center = Offset(size.width / 2f, size.height / 2f)
-            val maxR = min(size.width, size.height) * 0.44f
-
-            // Outer Vinyl Disc
-            drawCircle(
-                color = Color(0xFF141722),
-                radius = maxR,
-                center = center
-            )
-
-            // Grooves
-            for (r in listOf(0.9f, 0.82f, 0.74f, 0.66f, 0.58f)) {
+        if (artworkBitmap != null) {
+            // Ambient vinyl groove canvas behind artwork
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val maxR = min(size.width, size.height) * 0.44f
                 drawCircle(
-                    color = Color(0xFF1C2233),
-                    radius = maxR * r,
+                    color = Color(0xFF141722),
+                    radius = maxR,
+                    center = center
+                )
+                for (r in listOf(0.9f, 0.82f, 0.74f, 0.66f, 0.58f)) {
+                    drawCircle(
+                        color = Color(0xFF1C2233),
+                        radius = maxR * r,
+                        center = center,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
+                    )
+                }
+                drawCircle(
+                    color = if (isPlaying) DeckACyan.copy(alpha = 0.4f) else Color(0x2200F0FF),
+                    radius = maxR,
                     center = center,
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
                 )
             }
 
-            // Glowing Outer Rim
-            drawCircle(
-                color = if (isPlaying) DeckACyan.copy(alpha = 0.4f) else Color(0x2200F0FF),
-                radius = maxR,
-                center = center,
-                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
-            )
-        }
-
-        // Center Album Art Badge
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = DjSurfaceCard,
-            border = androidx.compose.foundation.BorderStroke(2.dp, DeckACyan),
-            shadowElevation = 12.dp,
-            modifier = Modifier.size(130.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.radialGradient(
-                            listOf(Color(0xFF1B2A4A), Color(0xFF0B111F))
-                        )
-                    ),
-                contentAlignment = Alignment.Center
+            // Center: actual album artwork
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color.Transparent,
+                border = androidx.compose.foundation.BorderStroke(2.dp, DeckACyan),
+                shadowElevation = 12.dp,
+                modifier = Modifier.size(180.dp)
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(8.dp)
+                androidx.compose.foundation.Image(
+                    bitmap = artworkBitmap!!,
+                    contentDescription = "${track.title} album artwork",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(14.dp))
+                )
+            }
+        } else {
+            // Ambient vinyl groove canvas (placeholder mode)
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val maxR = min(size.width, size.height) * 0.44f
+                drawCircle(
+                    color = Color(0xFF141722),
+                    radius = maxR,
+                    center = center
+                )
+                for (r in listOf(0.9f, 0.82f, 0.74f, 0.66f, 0.58f)) {
+                    drawCircle(
+                        color = Color(0xFF1C2233),
+                        radius = maxR * r,
+                        center = center,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
+                    )
+                }
+                drawCircle(
+                    color = if (isPlaying) DeckACyan.copy(alpha = 0.4f) else Color(0x2200F0FF),
+                    radius = maxR,
+                    center = center,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
+                )
+            }
+
+            // Placeholder badge
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = DjSurfaceCard,
+                border = androidx.compose.foundation.BorderStroke(2.dp, DeckACyan),
+                shadowElevation = 12.dp,
+                modifier = Modifier.size(130.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.radialGradient(
+                                listOf(Color(0xFF1B2A4A), Color(0xFF0B111F))
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.MusicNote,
-                        contentDescription = null,
-                        tint = DeckACyan,
-                        modifier = Modifier.size(36.dp)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = track.genre.uppercase(),
-                        color = DeckACyan,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = "${track.bitrateKbps}K ${track.format}",
-                        color = TextSecondary,
-                        fontSize = 8.sp,
-                        fontFamily = FontFamily.Monospace,
-                        textAlign = TextAlign.Center
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(8.dp)
+                    ) {
+                        if (isLoading) {
+                            Icon(
+                                imageVector = Icons.Default.Album,
+                                contentDescription = null,
+                                tint = DeckACyan.copy(alpha = 0.5f),
+                                modifier = Modifier.size(36.dp)
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.MusicNote,
+                                contentDescription = null,
+                                tint = DeckACyan,
+                                modifier = Modifier.size(36.dp)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = track.genre.uppercase(),
+                                color = DeckACyan,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                text = "${track.bitrateKbps}K ${track.format}",
+                                color = TextSecondary,
+                                fontSize = 8.sp,
+                                fontFamily = FontFamily.Monospace,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
                 }
             }
         }

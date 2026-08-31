@@ -111,8 +111,27 @@ class DjAudioEngine(private val context: Context) {
 
     private var activeCueSeconds: Int = 0
 
+    // Haas Surround Effect
+    private val haasEffect = HaasSurroundEffect()
+    private val _haasEnabled = MutableStateFlow(false)
+    val haasEnabled = _haasEnabled.asStateFlow()
+
+    private val _haasAmount = MutableStateFlow(HaasSurroundEffect.DEFAULT_AMOUNT)
+    val haasAmount = _haasAmount.asStateFlow()
+
+    private val _haasDelayMs = MutableStateFlow(HaasSurroundEffect.DEFAULT_DELAY_MS)
+    val haasDelayMs = _haasDelayMs.asStateFlow()
+
     init {
         Log.d(TAG, "DjAudioEngine initialized in PAUSED/IDLE state. Auto-play is strictly disabled.")
+        // Restore persisted Haas settings
+        val savedHaas = HaasSurroundEffect.loadSettings(context)
+        _haasEnabled.value = savedHaas.isEnabled
+        _haasAmount.value = savedHaas.amount
+        _haasDelayMs.value = savedHaas.delayMs
+        haasEffect.setEnabled(savedHaas.isEnabled)
+        haasEffect.setAmount(savedHaas.amount)
+        haasEffect.setDelayMs(savedHaas.delayMs)
     }
 
     private var prepareJob: Job? = null
@@ -154,6 +173,9 @@ class DjAudioEngine(private val context: Context) {
         _currentPositionMs.value = initialSec * 1000L
         _playbackProgress.value = if (duration > 0) (initialSec.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
         activeCueSeconds = 0
+
+        // Reset Haas delay buffer to avoid stale cross-track artifacts
+        haasEffect.reset()
 
         // Immediately check if waveform is already cached for this exact file identity
         val cacheKey = WaveformCache.getCacheKey(track, context)
@@ -444,6 +466,38 @@ class DjAudioEngine(private val context: Context) {
         _filterKnob.value = value.coerceIn(0f, 1f)
     }
 
+    // ── Haas Surround Effect Controls ──────────────────────────────────────
+
+    fun setHaasEnabled(enabled: Boolean) {
+        _haasEnabled.value = enabled
+        haasEffect.setEnabled(enabled)
+        HaasSurroundEffect.saveSettings(
+            context,
+            HaasSurroundEffect.HaasSettings(enabled, _haasAmount.value, _haasDelayMs.value)
+        )
+        Log.d(TAG, "Haas Surround ${if (enabled) "enabled" else "disabled"}")
+    }
+
+    fun setHaasAmount(amount: Float) {
+        val clamped = amount.coerceIn(HaasSurroundEffect.MIN_AMOUNT, HaasSurroundEffect.MAX_AMOUNT)
+        _haasAmount.value = clamped
+        haasEffect.setAmount(clamped)
+        HaasSurroundEffect.saveSettings(
+            context,
+            HaasSurroundEffect.HaasSettings(_haasEnabled.value, clamped, _haasDelayMs.value)
+        )
+    }
+
+    fun setHaasDelayMs(delayMs: Float) {
+        val clamped = delayMs.coerceIn(HaasSurroundEffect.MIN_DELAY_MS, HaasSurroundEffect.MAX_DELAY_MS)
+        _haasDelayMs.value = clamped
+        haasEffect.setDelayMs(clamped)
+        HaasSurroundEffect.saveSettings(
+            context,
+            HaasSurroundEffect.HaasSettings(_haasEnabled.value, _haasAmount.value, clamped)
+        )
+    }
+
     fun toggleLoop(bars: Int) {
         if (_activeLoopBars.value == bars) {
             _activeLoopBars.value = 0
@@ -558,7 +612,7 @@ class DjAudioEngine(private val context: Context) {
             val sampleRate = 22050
             val minBuf = AudioTrack.getMinBufferSize(
                 sampleRate,
-                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.CHANNEL_OUT_STEREO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
             val bufferSize = if (minBuf > 0) minBuf.coerceAtLeast(4096) else 4096
@@ -576,7 +630,7 @@ class DjAudioEngine(private val context: Context) {
                         AudioFormat.Builder()
                             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                             .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                             .build()
                     )
                     .setBufferSizeInBytes(bufferSize)
@@ -595,7 +649,10 @@ class DjAudioEngine(private val context: Context) {
 
                 localTrack.play()
 
-                val buffer = ShortArray(bufferSize / 2)
+                // Mono synth buffer
+                val monoBuffer = ShortArray(bufferSize / 2)
+                // Stereo interleaved output buffer (L, R, L, R, ...)
+                val stereoBuffer = ShortArray(bufferSize)
                 var phase = 0.0
                 var step = 0
 
@@ -604,7 +661,8 @@ class DjAudioEngine(private val context: Context) {
                     val currentBpm = _effectiveBpm.value.coerceIn(20.0, 300.0)
                     val beatPeriodSamples = (sampleRate * 60.0 / currentBpm).toInt().coerceAtLeast(100)
 
-                    for (i in buffer.indices) {
+                    // Generate mono synth samples
+                    for (i in monoBuffer.indices) {
                         step++
                         val beatPos = step % beatPeriodSamples
                         val isKickTime = beatPos < (sampleRate * 0.15)
@@ -642,12 +700,23 @@ class DjAudioEngine(private val context: Context) {
                         }
 
                         val shortSample = (sample.coerceIn(-1.0, 1.0) * Short.MAX_VALUE * 0.4).toInt().toShort()
-                        buffer[i] = shortSample
+                        monoBuffer[i] = shortSample
+                    }
+
+                    // Interleave mono → stereo (duplicate L/R for clean center image)
+                    for (i in monoBuffer.indices) {
+                        stereoBuffer[i * 2] = monoBuffer[i]
+                        stereoBuffer[i * 2 + 1] = monoBuffer[i]
+                    }
+
+                    // Apply Haas Surround Effect on stereo buffer (cross-channel delay)
+                    if (haasEffect.isActive) {
+                        haasEffect.process(stereoBuffer, 0, monoBuffer.size)
                     }
 
                     synchronized(audioTrackLock) {
                         if (audioTrack == localTrack && localTrack.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                            localTrack.write(buffer, 0, buffer.size)
+                            localTrack.write(stereoBuffer, 0, stereoBuffer.size)
                         }
                     }
 
