@@ -157,6 +157,14 @@ fun MainDjScreen(
     val playbackProgress by viewModel.audioEngine.playbackProgress.collectAsState()
     val currentPositionMs by viewModel.currentPositionMs.collectAsState()
 
+    // EQ & Haas Audio Effect States
+    val eqLow by viewModel.audioEngine.eqLow.collectAsState()
+    val eqMid by viewModel.audioEngine.eqMid.collectAsState()
+    val eqHigh by viewModel.audioEngine.eqHigh.collectAsState()
+    val haasEnabled by viewModel.audioEngine.haasEnabled.collectAsState()
+    val haasAmount by viewModel.audioEngine.haasAmount.collectAsState()
+    val haasDelayMs by viewModel.audioEngine.haasDelayMs.collectAsState()
+
     // SoundSync In-App Update States
     val updateState by viewModel.updateState.collectAsState()
     val updateLastCheckedTimestamp by viewModel.updateLastCheckedTimestamp.collectAsState()
@@ -458,6 +466,18 @@ fun MainDjScreen(
                         isPlaying = isPlaying,
                         currentPositionMs = currentPositionMs,
                         durationMs = if (playingTrack!!.durationSeconds > 0) playingTrack!!.durationSeconds * 1000L else 0L,
+                        eqLow = eqLow,
+                        eqMid = eqMid,
+                        eqHigh = eqHigh,
+                        onSetEqLow = { viewModel.audioEngine.setEq(it, eqMid, eqHigh) },
+                        onSetEqMid = { viewModel.audioEngine.setEq(eqLow, it, eqHigh) },
+                        onSetEqHigh = { viewModel.audioEngine.setEq(eqLow, eqMid, it) },
+                        haasEnabled = haasEnabled,
+                        haasAmount = haasAmount,
+                        haasDelayMs = haasDelayMs,
+                        onSetHaasEnabled = { viewModel.audioEngine.setHaasEnabled(it) },
+                        onSetHaasAmount = { viewModel.audioEngine.setHaasAmount(it) },
+                        onSetHaasDelayMs = { viewModel.audioEngine.setHaasDelayMs(it) },
                         onDismiss = { viewModel.closeNowPlaying() },
                         onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
                         onPreviousTrack = { viewModel.previousTrack() },

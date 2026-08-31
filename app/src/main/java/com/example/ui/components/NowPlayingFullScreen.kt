@@ -93,6 +93,21 @@ fun NowPlayingFullScreen(
     isPlaying: Boolean,
     currentPositionMs: Long,
     durationMs: Long,
+    // EQ parameters
+    eqLow: Float = 1f,
+    eqMid: Float = 1f,
+    eqHigh: Float = 1f,
+    onSetEqLow: (Float) -> Unit = {},
+    onSetEqMid: (Float) -> Unit = {},
+    onSetEqHigh: (Float) -> Unit = {},
+    // Haas parameters
+    haasEnabled: Boolean = false,
+    haasAmount: Float = 0.5f,
+    haasDelayMs: Float = 5f,
+    onSetHaasEnabled: (Boolean) -> Unit = {},
+    onSetHaasAmount: (Float) -> Unit = {},
+    onSetHaasDelayMs: (Float) -> Unit = {},
+    // Callbacks
     onDismiss: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onPreviousTrack: () -> Unit,
@@ -538,6 +553,24 @@ fun NowPlayingFullScreen(
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 6. AUDIO EFFECTS PANEL (EQ + Haas Surround)
+                AudioEffectsPanel(
+                    eqLow = eqLow,
+                    eqMid = eqMid,
+                    eqHigh = eqHigh,
+                    onSetEqLow = onSetEqLow,
+                    onSetEqMid = onSetEqMid,
+                    onSetEqHigh = onSetEqHigh,
+                    haasEnabled = haasEnabled,
+                    haasAmount = haasAmount,
+                    haasDelayMs = haasDelayMs,
+                    onSetHaasEnabled = onSetHaasEnabled,
+                    onSetHaasAmount = onSetHaasAmount,
+                    onSetHaasDelayMs = onSetHaasDelayMs
+                )
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
