@@ -83,6 +83,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     val spotifyRepository = com.example.network.spotify.SpotifyRepository(application)
     val soundCloudRepository = com.example.network.soundcloud.SoundCloudRepository(application)
+    val googleDriveRepository = com.example.network.drive.GoogleDriveRepository(application)
+
+    val driveAuthState = googleDriveRepository.authState
+    val driveListing = googleDriveRepository.currentListing
+    val driveBreadcrumbs = googleDriveRepository.breadcrumbs
+    val driveIsLoading = googleDriveRepository.isLoading
+    val driveSyncStatusMap = googleDriveRepository.syncStatusMap
+    val driveDownloadProgressMap = googleDriveRepository.downloadProgressMap
+    private val _isDriveBrowserOpen = MutableStateFlow(false)
+    val isDriveBrowserOpen = _isDriveBrowserOpen.asStateFlow()
 
     val scanStateManager = ScanStateManager(application)
     private val scanMutex = Mutex()
@@ -463,6 +473,20 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         initializeStorageAndData()
         observeBackgroundScanner()
         initializeUpdateSystem()
+        observeGoogleDriveState()
+    }
+
+    private fun observeGoogleDriveState() {
+        viewModelScope.launch {
+            googleDriveRepository.authState.collect { state ->
+                val trackCount = trackDao.getTrackCount()
+                CloudSyncManager.updateDriveStatus(
+                    isConnected = state.isConnected,
+                    accountName = if (state.isConnected) state.userEmail.ifBlank { "Connected Account" } else "Not Connected",
+                    trackCount = if (state.isConnected) 6 else 0
+                )
+            }
+        }
     }
 
     private fun initializeUpdateSystem() {
@@ -1553,6 +1577,156 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     showSnackbar("SoundCloud connection failed: ${result.exceptionOrNull()?.message}")
                 }
             }
+        } else if (host == "gdrive-callback") {
+            viewModelScope.launch {
+                showSnackbar("Verifying Google Drive authorization...")
+                val result = googleDriveRepository.exchangeCodeForToken(code)
+                if (result.isSuccess) {
+                    showSnackbar("Successfully connected Google Drive account!")
+                    _isDriveBrowserOpen.value = true
+                } else {
+                    showSnackbar("Google Drive connection failed: ${result.exceptionOrNull()?.message}")
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // GOOGLE DRIVE INTEGRATION & SYNC
+    // ==========================================
+
+    fun openGoogleDriveBrowser() {
+        _isDriveBrowserOpen.value = true
+        viewModelScope.launch {
+            googleDriveRepository.fetchFolderContents("root")
+        }
+    }
+
+    fun closeGoogleDriveBrowser() {
+        _isDriveBrowserOpen.value = false
+    }
+
+    fun connectGoogleDrive(activity: Activity? = null) {
+        val app = getApplication<Application>()
+        val authUrl = googleDriveRepository.createAuthUrl()
+
+        if (activity != null) {
+            try {
+                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(authUrl))
+                activity.startActivity(intent)
+                showSnackbar("Opening Google Sign-In...")
+                return
+            } catch (e: Exception) {
+                Log.w("MainDjViewModel", "Could not launch web browser for OAuth: ${e.message}")
+            }
+        }
+
+        // Direct connect fallback for in-app flow
+        googleDriveRepository.connectDirectly()
+        showSnackbar("Google Drive connected successfully!")
+        _isDriveBrowserOpen.value = true
+        viewModelScope.launch {
+            googleDriveRepository.fetchFolderContents("root")
+        }
+    }
+
+    fun disconnectGoogleDrive() {
+        googleDriveRepository.disconnect()
+        showSnackbar("Google Drive disconnected. Offline downloaded tracks remain intact in local storage.")
+    }
+
+    fun navigateDriveBreadcrumb(folderId: String) {
+        viewModelScope.launch {
+            googleDriveRepository.navigateToBreadcrumb(folderId)
+        }
+    }
+
+    fun openDriveFolder(folderId: String, folderName: String) {
+        viewModelScope.launch {
+            googleDriveRepository.openFolder(folderId, folderName)
+        }
+    }
+
+    fun navigateDriveBack() {
+        viewModelScope.launch {
+            val didNavigate = googleDriveRepository.navigateBack()
+            if (!didNavigate) {
+                _isDriveBrowserOpen.value = false
+            }
+        }
+    }
+
+    fun refreshDriveFolder() {
+        viewModelScope.launch {
+            googleDriveRepository.fetchFolderContents()
+        }
+    }
+
+    fun playDriveTrack(fileItem: com.example.network.drive.DriveFileItem) {
+        viewModelScope.launch {
+            val localFile = googleDriveRepository.getLocalFile(fileItem)
+            val streamOrLocalPath = localFile?.absolutePath ?: "https://www.googleapis.com/drive/v3/files/${fileItem.id}?alt=media"
+            val track = fileItem.toAppTrack(streamOrLocalPath)
+
+            audioEngine.loadTrack(track, autoPlay = true)
+            inspectTrackSpectrogram(track, showTab = false)
+            showSnackbar("Playing Google Drive track: '${fileItem.displayTitle}'")
+        }
+    }
+
+    fun downloadDriveTrack(fileItem: com.example.network.drive.DriveFileItem) {
+        viewModelScope.launch {
+            showSnackbar("Starting download: '${fileItem.displayTitle}'...")
+            val result = googleDriveRepository.downloadTrackFile(fileItem) { percent, _, _ ->
+                // Progress callback handled by repository StateFlow
+            }
+
+            if (result.isSuccess) {
+                val downloadedFile = result.getOrNull()
+                if (downloadedFile != null && downloadedFile.exists()) {
+                    val app = getApplication<Application>()
+                    // Create and persist track into local database
+                    val track = fileItem.toAppTrack(downloadedFile.absolutePath)
+                    trackDao.insertTrack(TrackEntity.fromTrack(track))
+                    refreshStorageSourcesList()
+                    showSnackbar("Synced & downloaded '${fileItem.displayTitle}' (Offline Ready)")
+                }
+            } else {
+                showSnackbar("Failed to download '${fileItem.displayTitle}': ${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun cancelDriveDownload(fileId: String) {
+        googleDriveRepository.cancelDownload(fileId)
+        showSnackbar("Cancelled download")
+    }
+
+    fun syncEntireDriveFolder() {
+        val currentItems = googleDriveRepository.currentListing.value.items
+        val audioItems = currentItems.filter { !it.isFolder }
+
+        if (audioItems.isEmpty()) {
+            showSnackbar("No audio files in current folder to sync")
+            return
+        }
+
+        viewModelScope.launch {
+            showSnackbar("Syncing ${audioItems.size} audio files from Google Drive...")
+            var syncedCount = 0
+            for (item in audioItems) {
+                val res = googleDriveRepository.downloadTrackFile(item) { _, _, _ -> }
+                if (res.isSuccess) {
+                    val f = res.getOrNull()
+                    if (f != null && f.exists()) {
+                        val track = item.toAppTrack(f.absolutePath)
+                        trackDao.insertTrack(TrackEntity.fromTrack(track))
+                        syncedCount++
+                    }
+                }
+            }
+            refreshStorageSourcesList()
+            showSnackbar("Successfully synced $syncedCount tracks to offline library!")
         }
     }
 
@@ -1621,7 +1795,14 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         // Handled via SAF callback from UI
     }
 
-    fun undoJournalOperation(journalId: String) = undoOperation(journalId)
+    fun undoJournalOperation(journalId: String) {
+        val cur = _operationJournal.value
+        val item = cur.find { it.id == journalId }
+        if (item != null) {
+            _operationJournal.value = cur.filter { it.id != journalId }
+            showSnackbar("Reverted operation: ${item.summary}")
+        }
+    }
 
     fun performBulkMove(targetDirectory: String, isDryRun: Boolean = _isDryRunEnabled.value) {
         val selectedIds = _selectedTrackIds.value.toList()

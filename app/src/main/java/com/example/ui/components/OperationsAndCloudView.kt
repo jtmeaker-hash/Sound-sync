@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,7 +26,9 @@ import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
@@ -34,6 +37,7 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -120,6 +124,9 @@ fun OperationsAndCloudView(
     onPauseScan: () -> Unit = {},
     onResumeScan: () -> Unit = {},
     onCancelScan: () -> Unit = {},
+    onOpenGoogleDrive: () -> Unit = {},
+    onConnectGoogleDrive: () -> Unit = {},
+    onDisconnectGoogleDrive: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val platformStatuses by CloudSyncManager.platformStatuses.collectAsState()
@@ -382,7 +389,20 @@ fun OperationsAndCloudView(
         items(platformStatuses) { status ->
             PlatformStatusCard(
                 status = status,
-                onToggle = { CloudSyncManager.togglePlatformConnection(status.platform) }
+                onToggle = {
+                    if (status.platform == MusicPlatform.GOOGLE_DRIVE) {
+                        if (status.isConnected) {
+                            onOpenGoogleDrive()
+                        } else {
+                            onConnectGoogleDrive()
+                        }
+                    } else {
+                        CloudSyncManager.togglePlatformConnection(status.platform)
+                    }
+                },
+                onOpenDrive = onOpenGoogleDrive,
+                onConnectDrive = onConnectGoogleDrive,
+                onDisconnectDrive = onDisconnectGoogleDrive
             )
         }
     }
@@ -769,41 +789,161 @@ private fun BackgroundScannerStatusCard(
 @Composable
 private fun PlatformStatusCard(
     status: com.example.sync.PlatformConnectionStatus,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    onOpenDrive: () -> Unit = {},
+    onConnectDrive: () -> Unit = {},
+    onDisconnectDrive: () -> Unit = {}
 ) {
+    val isDrive = status.platform == MusicPlatform.GOOGLE_DRIVE
+
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("platform_card_${status.platform.name.lowercase()}"),
         colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
         shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isDrive && status.isConnected) Color(0xFF4285F4).copy(alpha = 0.5f) else DjSurfaceBorder
+        )
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(status.platform.displayName, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                Text(status.accountName, color = TextSecondary, fontSize = 10.sp)
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(
+                                when (status.platform) {
+                                    MusicPlatform.GOOGLE_DRIVE -> Color(0xFF4285F4).copy(alpha = 0.2f)
+                                    MusicPlatform.SPOTIFY -> Color(0xFF1DB954).copy(alpha = 0.2f)
+                                    MusicPlatform.SOUNDCLOUD -> Color(0xFFFF5500).copy(alpha = 0.2f)
+                                    MusicPlatform.LOCAL -> DeckACyan.copy(alpha = 0.2f)
+                                },
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = when (status.platform) {
+                                MusicPlatform.GOOGLE_DRIVE -> Icons.Default.Cloud
+                                MusicPlatform.SPOTIFY -> Icons.Default.LibraryMusic
+                                MusicPlatform.SOUNDCLOUD -> Icons.Default.CloudQueue
+                                MusicPlatform.LOCAL -> Icons.Default.Folder
+                            },
+                            contentDescription = null,
+                            tint = when (status.platform) {
+                                MusicPlatform.GOOGLE_DRIVE -> Color(0xFF4285F4)
+                                MusicPlatform.SPOTIFY -> Color(0xFF1DB954)
+                                MusicPlatform.SOUNDCLOUD -> Color(0xFFFF5500)
+                                MusicPlatform.LOCAL -> DeckACyan
+                            },
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+
+                    Column {
+                        Text(
+                            text = if (isDrive) {
+                                if (status.isConnected) "Google Drive — Connected" else "Google Drive — Not Connected"
+                            } else {
+                                status.platform.displayName
+                            },
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = status.accountName,
+                            color = if (status.isConnected) NeonGreen else TextSecondary,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+
+                if (!isDrive) {
+                    Surface(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(onClick = onToggle),
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (status.isConnected) NeonGreen.copy(alpha = 0.2f) else DjSurfaceElevated,
+                        border = if (status.isConnected) androidx.compose.foundation.BorderStroke(1.dp, NeonGreen) else null
+                    ) {
+                        Text(
+                            text = if (status.isConnected) "Connected (${status.syncedTracksCount})" else "Connect",
+                            color = if (status.isConnected) NeonGreen else TextSecondary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                } else {
+                    if (status.isConnected) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = NeonGreen.copy(alpha = 0.15f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, NeonGreen.copy(alpha = 0.6f))
+                        ) {
+                            Text(
+                                text = "${status.syncedTracksCount} synced",
+                                color = NeonGreen,
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = onConnectDrive,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4285F4), contentColor = Color.White),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(28.dp).testTag("connect_drive_button")
+                        ) {
+                            Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Connect", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
 
-            Surface(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(onClick = onToggle),
-                shape = RoundedCornerShape(6.dp),
-                color = if (status.isConnected) NeonGreen.copy(alpha = 0.2f) else DjSurfaceElevated,
-                border = if (status.isConnected) androidx.compose.foundation.BorderStroke(1.dp, NeonGreen) else null
-            ) {
-                Text(
-                    text = if (status.isConnected) "Connected (${status.syncedTracksCount})" else "Connect",
-                    color = if (status.isConnected) NeonGreen else TextSecondary,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
+            // If Google Drive is connected, show Browse and Disconnect buttons
+            if (isDrive && status.isConnected) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = onOpenDrive,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4285F4), contentColor = Color.White),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.weight(1f).height(30.dp).testTag("browse_google_drive_button")
+                    ) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Browse Google Drive", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = onDisconnectDrive,
+                        shape = RoundedCornerShape(6.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonRed),
+                        border = androidx.compose.foundation.BorderStroke(0.8.dp, NeonRed.copy(alpha = 0.5f)),
+                        modifier = Modifier.height(30.dp).testTag("disconnect_google_drive_button")
+                    ) {
+                        Text("Disconnect", fontSize = 10.sp)
+                    }
+                }
             }
         }
     }

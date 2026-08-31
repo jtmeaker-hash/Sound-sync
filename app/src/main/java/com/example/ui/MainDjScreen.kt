@@ -70,6 +70,7 @@ import com.example.model.Track
 import com.example.model.UpdateState
 import com.example.ui.components.ApiConfigDialog
 import com.example.ui.components.DjMiniPlayer
+import com.example.ui.components.GoogleDriveBrowserView
 import com.example.ui.components.LocalMusicView
 import com.example.ui.components.NowPlayingFullScreen
 import com.example.ui.components.NowPlayingModalSheet
@@ -139,6 +140,15 @@ fun MainDjScreen(
     val soundCloudPlaylists by viewModel.soundCloudPlaylists.collectAsState()
     val soundCloudSearchResults by viewModel.soundCloudSearchResults.collectAsState()
     val soundCloudIsLoading by viewModel.soundCloudIsLoading.collectAsState()
+
+    // Google Drive States
+    val isDriveBrowserOpen by viewModel.isDriveBrowserOpen.collectAsState()
+    val driveAuthState by viewModel.driveAuthState.collectAsState()
+    val driveListing by viewModel.driveListing.collectAsState()
+    val driveBreadcrumbs by viewModel.driveBreadcrumbs.collectAsState()
+    val driveIsLoading by viewModel.driveIsLoading.collectAsState()
+    val driveSyncStatusMap by viewModel.driveSyncStatusMap.collectAsState()
+    val driveDownloadProgressMap by viewModel.driveDownloadProgressMap.collectAsState()
 
     // Audio Engine Playback States
     val playingTrack by viewModel.audioEngine.currentTrack.collectAsState()
@@ -355,28 +365,54 @@ fun MainDjScreen(
                     )
                 }
                 DjTab.OPERATIONS -> {
-                    OperationsAndCloudView(
-                        storageSources = storageSources,
-                        operationJournal = operationJournal,
-                        scanServiceState = scanServiceState,
-                        updateState = updateState,
-                        lastCheckedTimestamp = updateLastCheckedTimestamp,
-                        isAutoCheckEnabled = isAutoUpdateCheckEnabled,
-                        onCheckForUpdates = { viewModel.checkForUpdates(isManual = true) },
-                        onToggleAutoCheck = { viewModel.setAutoUpdateCheckEnabled(it) },
-                        onTriggerSync = { viewModel.triggerCloudSync() },
-                        onExportRekordbox = { viewModel.exportRekordboxXml() },
-                        onUndoOperation = { viewModel.undoJournalOperation(it) },
-                        onMountSaf = onPickSafFolder,
-                        onPickAudioFiles = onPickAudioFiles,
-                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
-                        onCleanMissingFiles = { viewModel.cleanMissingFiles() },
-                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
-                        onClearLibrary = { viewModel.clearLibrary() },
-                        onPauseScan = { viewModel.pauseScanService() },
-                        onResumeScan = { viewModel.resumeScanService() },
-                        onCancelScan = { viewModel.cancelScanService() }
-                    )
+                    if (isDriveBrowserOpen) {
+                        GoogleDriveBrowserView(
+                            authState = driveAuthState,
+                            listing = driveListing,
+                            breadcrumbs = driveBreadcrumbs,
+                            syncStatusMap = driveSyncStatusMap,
+                            downloadProgressMap = driveDownloadProgressMap,
+                            isLoading = driveIsLoading,
+                            currentPlayingTrack = playingTrack,
+                            isPlaying = isPlaying,
+                            onBack = { viewModel.closeGoogleDriveBrowser() },
+                            onNavigateBreadcrumb = { viewModel.navigateDriveBreadcrumb(it) },
+                            onOpenFolder = { id, name -> viewModel.openDriveFolder(id, name) },
+                            onPlayTrack = { viewModel.playDriveTrack(it) },
+                            onDownloadTrack = { viewModel.downloadDriveTrack(it) },
+                            onCancelDownload = { viewModel.cancelDriveDownload(it) },
+                            onSyncEntireFolder = { viewModel.syncEntireDriveFolder() },
+                            onConnectAccount = { viewModel.connectGoogleDrive(context as? Activity) },
+                            onDisconnectAccount = { viewModel.disconnectGoogleDrive() },
+                            onRefresh = { viewModel.refreshDriveFolder() }
+                        )
+                    } else {
+                        OperationsAndCloudView(
+                            storageSources = storageSources,
+                            operationJournal = operationJournal,
+                            scanServiceState = scanServiceState,
+                            updateState = updateState,
+                            lastCheckedTimestamp = updateLastCheckedTimestamp,
+                            isAutoCheckEnabled = isAutoUpdateCheckEnabled,
+                            onCheckForUpdates = { viewModel.checkForUpdates(isManual = true) },
+                            onToggleAutoCheck = { viewModel.setAutoUpdateCheckEnabled(it) },
+                            onTriggerSync = { viewModel.triggerCloudSync() },
+                            onExportRekordbox = { viewModel.exportRekordboxXml() },
+                            onUndoOperation = { viewModel.undoJournalOperation(it) },
+                            onMountSaf = onPickSafFolder,
+                            onPickAudioFiles = onPickAudioFiles,
+                            onScanMediaStore = { viewModel.scanDeviceMediaStore() },
+                            onCleanMissingFiles = { viewModel.cleanMissingFiles() },
+                            onLoadDemoTracks = { viewModel.loadDemoTracks() },
+                            onClearLibrary = { viewModel.clearLibrary() },
+                            onPauseScan = { viewModel.pauseScanService() },
+                            onResumeScan = { viewModel.resumeScanService() },
+                            onCancelScan = { viewModel.cancelScanService() },
+                            onOpenGoogleDrive = { viewModel.openGoogleDriveBrowser() },
+                            onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
+                            onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() }
+                        )
+                    }
                 }
             }
 

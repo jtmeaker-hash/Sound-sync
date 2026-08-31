@@ -2,15 +2,9 @@ package com.example.model
 
 enum class MusicPlatform(val displayName: String, val iconName: String, val colorHex: Long) {
     LOCAL("Local Storage", "folder", 0xFF05FFA1),
-    USB_OTG("USB-C SSD", "usb", 0xFF00F0FF),
-    SD_CARD("SD Card", "sd_card", 0xFFFFB703),
-    BEATPORT("Beatport Pro", "graphic_eq", 0xFF00F0FF),
-    SPOTIFY("Spotify Sync", "library_music", 0xFF1DB954),
-    SOUNDCLOUD("SoundCloud DJ", "cloud", 0xFFFF5500),
-    BANDCAMP("Bandcamp", "album", 0xFF629AA9),
-    TIDAL("TIDAL Masters", "waves", 0xFF000000),
-    GOOGLE_DRIVE("Google Drive", "cloud_upload", 0xFF4285F4),
-    DROPBOX("Dropbox DJ Vault", "cloud_sync", 0xFF0061FF)
+    SPOTIFY("Spotify", "library_music", 0xFF1DB954),
+    SOUNDCLOUD("SoundCloud", "cloud", 0xFFFF5500),
+    GOOGLE_DRIVE("Google Drive", "cloud_upload", 0xFF4285F4)
 }
 
 enum class StorageSourceType(val displayName: String, val defaultPath: String, val isRemovable: Boolean) {

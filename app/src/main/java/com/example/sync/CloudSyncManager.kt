@@ -29,13 +29,9 @@ object CloudSyncManager {
     private val _platformStatuses = MutableStateFlow(
         listOf(
             PlatformConnectionStatus(MusicPlatform.LOCAL, true, "Internal Storage + SD Card", 48),
-            PlatformConnectionStatus(MusicPlatform.BEATPORT, true, "dj_resident@pro.beatport", 34),
             PlatformConnectionStatus(MusicPlatform.SPOTIFY, true, "alex_music_crate", 82),
             PlatformConnectionStatus(MusicPlatform.SOUNDCLOUD, true, "DJ_Nova_Official", 19),
-            PlatformConnectionStatus(MusicPlatform.GOOGLE_DRIVE, true, "drive.google.com/dj-masters", 65),
-            PlatformConnectionStatus(MusicPlatform.DROPBOX, true, "Dropbox/RekordboxCrates", 52),
-            PlatformConnectionStatus(MusicPlatform.BANDCAMP, false, "Not Connected", 0),
-            PlatformConnectionStatus(MusicPlatform.TIDAL, false, "Not Connected", 0)
+            PlatformConnectionStatus(MusicPlatform.GOOGLE_DRIVE, false, "Not Connected", 0)
         )
     )
     val platformStatuses = _platformStatuses.asStateFlow()
@@ -45,6 +41,19 @@ object CloudSyncManager {
 
     private val _isGlobalSyncRunning = MutableStateFlow(false)
     val isGlobalSyncRunning = _isGlobalSyncRunning.asStateFlow()
+
+    fun updateDriveStatus(isConnected: Boolean, accountName: String, trackCount: Int) {
+        val current = _platformStatuses.value.toMutableList()
+        val index = current.indexOfFirst { it.platform == MusicPlatform.GOOGLE_DRIVE }
+        if (index != -1) {
+            current[index] = current[index].copy(
+                isConnected = isConnected,
+                accountName = if (isConnected) accountName else "Not Connected",
+                syncedTracksCount = trackCount
+            )
+            _platformStatuses.value = current
+        }
+    }
 
     fun togglePlatformConnection(platform: MusicPlatform) {
         val current = _platformStatuses.value.toMutableList()
@@ -83,7 +92,7 @@ object CloudSyncManager {
                 directoryPath = "/storage/emulated/0/Music/Techno",
                 isOfflineReady = true,
                 syncState = SyncState.SYNCED,
-                platforms = listOf(MusicPlatform.LOCAL, MusicPlatform.BEATPORT, MusicPlatform.GOOGLE_DRIVE),
+                platforms = listOf(MusicPlatform.LOCAL, MusicPlatform.GOOGLE_DRIVE),
                 energyRating = 8,
                 hotCues = listOf(0, 45, 120, 240),
                 isAiTagged = true,
@@ -133,7 +142,7 @@ object CloudSyncManager {
                 directoryPath = "/mnt/media_rw/USB_DJ_VAULT/Tracks/Techno",
                 isOfflineReady = true,
                 syncState = SyncState.SYNCED,
-                platforms = listOf(MusicPlatform.USB_OTG, MusicPlatform.DROPBOX, MusicPlatform.BANDCAMP),
+                platforms = listOf(MusicPlatform.LOCAL, MusicPlatform.GOOGLE_DRIVE),
                 energyRating = 9,
                 hotCues = listOf(0, 30, 90, 210),
                 isAiTagged = true,
@@ -208,7 +217,7 @@ object CloudSyncManager {
                 directoryPath = "/mnt/media_rw/USB_DJ_VAULT/Tracks/DnB",
                 isOfflineReady = true,
                 syncState = SyncState.SYNCED,
-                platforms = listOf(MusicPlatform.SOUNDCLOUD, MusicPlatform.USB_OTG),
+                platforms = listOf(MusicPlatform.SOUNDCLOUD, MusicPlatform.LOCAL),
                 energyRating = 9,
                 hotCues = listOf(0, 22, 66, 154),
                 isAiTagged = true,
@@ -233,7 +242,7 @@ object CloudSyncManager {
                 directoryPath = "/storage/0000-0000/DJ_Sets/Synthwave",
                 isOfflineReady = true,
                 syncState = SyncState.SYNCED,
-                platforms = listOf(MusicPlatform.SD_CARD, MusicPlatform.SPOTIFY),
+                platforms = listOf(MusicPlatform.LOCAL, MusicPlatform.SPOTIFY),
                 energyRating = 7,
                 hotCues = listOf(0, 30, 75, 140),
                 isAiTagged = true,
@@ -258,7 +267,7 @@ object CloudSyncManager {
                 directoryPath = "/storage/emulated/0/Music/Disco",
                 isOfflineReady = true,
                 syncState = SyncState.SYNCED,
-                platforms = listOf(MusicPlatform.BEATPORT, MusicPlatform.LOCAL),
+                platforms = listOf(MusicPlatform.GOOGLE_DRIVE, MusicPlatform.LOCAL),
                 energyRating = 8,
                 hotCues = listOf(0, 31, 62, 186),
                 isAiTagged = true,

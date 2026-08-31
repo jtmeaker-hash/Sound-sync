@@ -40,11 +40,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -92,11 +92,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
