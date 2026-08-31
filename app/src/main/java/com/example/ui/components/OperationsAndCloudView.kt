@@ -33,7 +33,6 @@ import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
@@ -113,7 +112,6 @@ fun OperationsAndCloudView(
     onCheckForUpdates: () -> Unit = {},
     onToggleAutoCheck: (Boolean) -> Unit = {},
     onTriggerSync: () -> Unit,
-    onExportRekordbox: () -> Unit,
     onUndoOperation: (String) -> Unit,
     onMountSaf: () -> Unit,
     onPickAudioFiles: () -> Unit,
@@ -321,41 +319,6 @@ fun OperationsAndCloudView(
                     item = item,
                     onUndo = { onUndoOperation(item.id) }
                 )
-            }
-        }
-
-        // DJ Hardware Export & Serato / Rekordbox
-        item {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "DJ CRATE & HARDWARE EXPORTS",
-                color = DeckACyan,
-                fontWeight = FontWeight.Black,
-                fontSize = 11.sp,
-                letterSpacing = 1.sp
-            )
-        }
-
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
-                shape = RoundedCornerShape(10.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
-            ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Export Verified Keys & Hot Cues", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    Text("Export full Camelot keys, BPM grids, and cue metadata formatted for Pioneer Rekordbox XML, Engine DJ, or Serato Crate files.", color = TextSecondary, fontSize = 10.sp)
-                    Button(
-                        onClick = onExportRekordbox,
-                        colors = ButtonDefaults.buttonColors(containerColor = DeckACyan, contentColor = DjObsidian),
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Export Rekordbox XML & Serato Crate", fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                    }
-                }
             }
         }
 

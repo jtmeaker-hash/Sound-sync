@@ -29,11 +29,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -106,7 +109,60 @@ fun RekordboxWaveformView(
     val textMeasurer = rememberTextMeasurer()
 
     val safeDurationMs = if (durationMs > 0) durationMs else (track.durationSeconds.coerceAtLeast(10) * 1000L)
-    val effectivePositionMs = if (isUserDragging) dragPositionMs.toLong() else currentPositionMs
+
+    // ── Frame-synchronized interpolation between player position updates ──
+    // The player position updates every ~30ms, but the canvas renders at 60fps.
+    // We interpolate forward between updates using wall-clock time, and reconcile
+    // when the player emits a new authoritative position.
+    var interpolatedPositionMs by remember { mutableLongStateOf(currentPositionMs) }
+    var lastPlayerPositionMs by remember { mutableLongStateOf(currentPositionMs) }
+    var lastFrameTimeMs by remember { mutableLongStateOf(0L) }
+
+    // Track the latest player position on each recomposition so the LaunchedEffect
+    // loop (which only relaunches on isPlaying change) always reads the current value.
+    var latestPlayerPos by remember { mutableLongStateOf(currentPositionMs) }
+    latestPlayerPos = currentPositionMs
+
+    LaunchedEffect(isPlaying) {
+        if (isPlaying) {
+            // Running interpolation loop synchronized to Compose frames
+            while (true) {
+                withFrameMillis { frameTimeMs ->
+                    if (!isUserDragging) {
+                        val playerPos = latestPlayerPos
+                        if (lastFrameTimeMs == 0L) {
+                            // First frame: initialize timestamps
+                            lastFrameTimeMs = frameTimeMs
+                            lastPlayerPositionMs = playerPos
+                            interpolatedPositionMs = playerPos
+                        } else {
+                            val elapsedMs = frameTimeMs - lastFrameTimeMs
+                            lastFrameTimeMs = frameTimeMs
+
+                            // Check if the player emitted a new position since last frame
+                            if (playerPos != lastPlayerPositionMs) {
+                                // Reconcile: snap to authoritative position
+                                lastPlayerPositionMs = playerPos
+                                interpolatedPositionMs = playerPos
+                            } else {
+                                // No new update: interpolate forward
+                                interpolatedPositionMs = (interpolatedPositionMs + elapsedMs)
+                                    .coerceIn(0L, safeDurationMs)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Paused: snap immediately to player position
+            val playerPos = latestPlayerPos
+            lastPlayerPositionMs = playerPos
+            interpolatedPositionMs = playerPos
+            lastFrameTimeMs = 0L
+        }
+    }
+
+    val effectivePositionMs = if (isUserDragging) dragPositionMs.toLong() else interpolatedPositionMs
 
     Column(
         modifier = modifier

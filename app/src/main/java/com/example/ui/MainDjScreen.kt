@@ -405,7 +405,6 @@ fun MainDjScreen(
                             onCheckForUpdates = { viewModel.checkForUpdates(isManual = true) },
                             onToggleAutoCheck = { viewModel.setAutoUpdateCheckEnabled(it) },
                             onTriggerSync = { viewModel.triggerCloudSync() },
-                            onExportRekordbox = { viewModel.exportRekordboxXml() },
                             onUndoOperation = { viewModel.undoJournalOperation(it) },
                             onMountSaf = onPickSafFolder,
                             onPickAudioFiles = onPickAudioFiles,
