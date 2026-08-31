@@ -15,8 +15,12 @@ android {
     applicationId = "com.aistudio.soundsync.fxmk"
     minSdk = 24
     targetSdk = 36
-    versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
-    versionName = System.getenv("VERSION_NAME") ?: "1.0.0"
+    versionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull()
+      ?: System.getenv("VERSION_CODE")?.toIntOrNull()
+      ?: 1
+    versionName = project.findProperty("versionName")?.toString()
+      ?: System.getenv("VERSION_NAME")
+      ?: "1.0.0"
 
     buildConfigField("String", "GITHUB_REPO_OWNER", "\"jtmeaker-hash\"")
     buildConfigField("String", "GITHUB_REPO_NAME", "\"Sound-sync\"")
@@ -26,16 +30,32 @@ android {
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH")
+      val keystorePath = project.findProperty("KEYSTORE_PATH")?.toString()
+        ?: System.getenv("KEYSTORE_PATH")
         ?: System.getenv("RELEASE_KEYSTORE_PATH")
         ?: "${rootDir}/release.keystore"
       val keystoreFile = file(keystorePath)
       if (keystoreFile.exists()) {
         storeFile = keystoreFile
+      } else {
+        val fallbackDebug = file("${rootDir}/debug.keystore")
+        if (fallbackDebug.exists()) {
+          storeFile = fallbackDebug
+        }
       }
-      storePassword = System.getenv("STORE_PASSWORD") ?: System.getenv("RELEASE_STORE_PASSWORD") ?: ""
-      keyAlias = System.getenv("KEY_ALIAS") ?: System.getenv("RELEASE_KEY_ALIAS") ?: "soundsync"
-      keyPassword = System.getenv("KEY_PASSWORD") ?: System.getenv("RELEASE_KEY_PASSWORD") ?: ""
+      storePassword = project.findProperty("STORE_PASSWORD")?.toString()
+        ?: System.getenv("STORE_PASSWORD")
+        ?: System.getenv("RELEASE_STORE_PASSWORD")
+        ?: System.getenv("RELEASE_KEYSTORE_PASSWORD")
+        ?: "android"
+      keyAlias = project.findProperty("KEY_ALIAS")?.toString()
+        ?: System.getenv("KEY_ALIAS")
+        ?: System.getenv("RELEASE_KEY_ALIAS")
+        ?: "androiddebugkey"
+      keyPassword = project.findProperty("KEY_PASSWORD")?.toString()
+        ?: System.getenv("KEY_PASSWORD")
+        ?: System.getenv("RELEASE_KEY_PASSWORD")
+        ?: "android"
     }
     val customDebugKeystore = file("${rootDir}/debug.keystore")
     if (customDebugKeystore.exists()) {
