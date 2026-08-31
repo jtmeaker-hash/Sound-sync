@@ -35,7 +35,7 @@ object AudioDecoder {
 
     private const val TAG = "SoundSyncDecoder"
     private const val TIMEOUT_US = 5000L
-    private const val MAX_SAMPLES_SPECTROGRAM = 400_000
+    private const val MAX_SAMPLES_SPECTROGRAM = 3_000_000
 
     data class DecodedAudioData(
         val samples: FloatArray,
@@ -441,7 +441,7 @@ object AudioDecoder {
             val bufferInfo = MediaCodec.BufferInfo()
             var isInputEOS = false
             var isOutputEOS = false
-            val maxIterations = 3000
+            val maxIterations = 20000
             var iteration = 0
 
             while (!isOutputEOS && decodedSampleCount < maxSamplesToDecode && iteration++ < maxIterations) {

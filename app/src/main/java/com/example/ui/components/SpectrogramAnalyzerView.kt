@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -44,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,12 +54,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.AudioQualityRating
@@ -85,6 +92,7 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import java.util.Locale
+import kotlin.math.pow
 
 @Composable
 fun SpectrogramAnalyzerView(
@@ -106,6 +114,8 @@ fun SpectrogramAnalyzerView(
 ) {
     var inspectXRatio by remember { mutableFloatStateOf(0.45f) }
     var inspectYRatio by remember { mutableFloatStateOf(0.35f) }
+    var zoomLevel by remember { mutableIntStateOf(1) } // 1x, 2x, 4x, 8x
+    var panRatio by remember { mutableFloatStateOf(0.0f) } // 0f..1f for horizontal inspection when zoomed
 
     Column(
         modifier = modifier
@@ -118,7 +128,7 @@ fun SpectrogramAnalyzerView(
         // Track Selection Carousel Ribbon
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "SELECT AUDIO FILE TO AUDIT (SPEC / SPEK DSP)",
+                text = "SELECT AUDIO FILE TO AUDIT (HD SPEK / STUDIO STFT)",
                 color = TextMuted,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Black
@@ -129,7 +139,10 @@ fun SpectrogramAnalyzerView(
                     Surface(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .clickable { onSelectTrack(track) },
+                            .clickable {
+                                onSelectTrack(track)
+                                panRatio = 0.0f
+                            },
                         shape = RoundedCornerShape(8.dp),
                         color = if (isSelected) DeckACyan.copy(alpha = 0.2f) else DjSurfaceCard,
                         border = androidx.compose.foundation.BorderStroke(
@@ -182,7 +195,7 @@ fun SpectrogramAnalyzerView(
                 }
             }
         } else if (errorMessage != null && analyzedTrack != null) {
-            // Inline Error Recovery Card (Player remains fully functional)
+            // Inline Error Recovery Card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -245,7 +258,7 @@ fun SpectrogramAnalyzerView(
                     CircularProgressIndicator(color = DeckACyan, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = if (analysisProgressPercent > 0) "Analyzing spectrum... $analysisProgressPercent%" else "Calculating STFT Acoustic Fourier Transform...",
+                        text = if (analysisProgressPercent > 0) "Computing HD Spectrogram... $analysisProgressPercent%" else "Calculating High-Definition STFT (1024 slices × 256 bins)...",
                         color = DeckACyan,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
@@ -259,18 +272,25 @@ fun SpectrogramAnalyzerView(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Decoding PCM mono samples and scanning high-frequency acoustic ceiling in background",
+                        text = "Extracting high-resolution frequency bins & checking ultrasonic cutoff ceiling",
                         color = TextSecondary,
                         fontSize = 11.sp
                     )
                 }
             }
         } else if (analyzedTrack != null && spectrogramData != null) {
-            // Main Spectrogram Heatmap Canvas Card (Spec / Spek style)
+            // Main High-Definition Spectrogram Heatmap Canvas Card
             SpectrogramCanvasCard(
                 track = analyzedTrack,
                 analysis = spectrogramData,
                 playbackProgress = playbackProgress,
+                zoomLevel = zoomLevel,
+                panRatio = panRatio,
+                onZoomChange = { newZoom ->
+                    zoomLevel = newZoom
+                    panRatio = panRatio.coerceIn(0.0f, 1.0f)
+                },
+                onPanChange = { newPan -> panRatio = newPan.coerceIn(0.0f, 1.0f) },
                 inspectX = inspectXRatio,
                 inspectY = inspectYRatio,
                 onInspectChange = { x, y ->
@@ -280,11 +300,22 @@ fun SpectrogramAnalyzerView(
                 onSeek = { ratio -> onSeekToRatio(ratio) }
             )
 
-            // Dynamic Inspection Crosshair readout
-            val inspectedKhz = (1.0f - inspectYRatio) * 24.0f
+            // Dynamic Inspection Crosshair & Acoustic Metric Readout
+            val inspectedKhz = calculateFrequencyForYRatio(inspectYRatio)
             val safeDuration = analyzedTrack.durationSeconds.coerceAtLeast(0)
-            val inspectedSec = (inspectXRatio * safeDuration).toInt()
-            val inspectedDb = -54.0f + (1.0f - inspectYRatio) * 54.0f
+            val actualGlobalX = if (zoomLevel > 1) {
+                val windowSize = 1.0f / zoomLevel
+                (panRatio * (1.0f - windowSize) + inspectXRatio * windowSize).coerceIn(0f, 1f)
+            } else {
+                inspectXRatio
+            }
+            val inspectedSec = (actualGlobalX * safeDuration).toInt()
+            val sliceIdx = (actualGlobalX * (spectrogramData.spectralSlices.size - 1)).toInt().coerceIn(0, spectrogramData.spectralSlices.size - 1)
+            val binIdx = ((1.0f - inspectYRatio) * (if (spectrogramData.spectralSlices.isNotEmpty()) spectrogramData.spectralSlices[0].size - 1 else 1)).toInt()
+            val sliceEnergy = if (spectrogramData.spectralSlices.isNotEmpty() && binIdx in 0 until spectrogramData.spectralSlices[sliceIdx].size) {
+                spectrogramData.spectralSlices[sliceIdx][binIdx]
+            } else 0.5f
+            val inspectedDb = -72.0f + (sliceEnergy * 72.0f)
 
             Surface(
                 shape = RoundedCornerShape(10.dp),
@@ -299,13 +330,18 @@ fun SpectrogramAnalyzerView(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "SPECTRAL PROBE: ${String.format(Locale.US, "%.1f kHz", inspectedKhz)} • ${String.format(Locale.US, "%02d:%02d", inspectedSec / 60, inspectedSec % 60)} • ${String.format(Locale.US, "%.1f dB", inspectedDb)}",
+                        text = "PROBE: ${String.format(Locale.US, "%.1f kHz", inspectedKhz)} • ${String.format(Locale.US, "%02d:%02d", inspectedSec / 60, inspectedSec % 60)} • ${String.format(Locale.US, "%.1f dB", inspectedDb)}",
                         color = DeckACyan,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    Text("TAP/DRAG TO SEEK & PROBE", color = TextMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = if (zoomLevel > 1) "${zoomLevel}X ZOOM ACTIVE" else "TAP / DRAG TO PROBE",
+                        color = if (zoomLevel > 1) NeonAmber else TextMuted,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
@@ -340,12 +376,16 @@ private fun SpectrogramCanvasCard(
     track: Track,
     analysis: SpectrogramAnalysis,
     playbackProgress: Float,
+    zoomLevel: Int,
+    panRatio: Float,
+    onZoomChange: (Int) -> Unit,
+    onPanChange: (Float) -> Unit,
     inspectX: Float,
     inspectY: Float,
     onInspectChange: (Float, Float) -> Unit,
     onSeek: (Float) -> Unit
 ) {
-    // Generate and cache lightweight GPU ImageBitmap texture (120x64 = ~30 KB)
+    // Generate high-definition ImageBitmap (1024 slices × 256 frequency bins = ~1 MB)
     val cachedBitmap = remember(analysis) {
         val slices = analysis.spectralSlices
         if (slices.isNotEmpty()) {
@@ -353,20 +393,21 @@ private fun SpectrogramCanvasCard(
             val numBins = slices[0].size
             if (numSlices > 0 && numBins > 0) {
                 try {
-                    val bmp = android.graphics.Bitmap.createBitmap(numSlices, numBins, android.graphics.Bitmap.Config.ARGB_8888)
+                    val bmp = Bitmap.createBitmap(numSlices, numBins, Bitmap.Config.ARGB_8888)
                     val pixels = IntArray(numSlices * numBins)
                     for (f in 0 until numBins) {
                         // Invert Y so low frequencies are at the bottom of the image
                         val y = numBins - 1 - f
+                        val rowOffset = y * numSlices
                         for (t in 0 until numSlices) {
                             val energy = slices[t][f]
-                            pixels[y * numSlices + t] = getHeatmapColorArgb(energy)
+                            pixels[rowOffset + t] = getHeatmapColorArgb(energy)
                         }
                     }
                     bmp.setPixels(pixels, 0, numSlices, 0, 0, numSlices, numBins)
                     bmp.asImageBitmap()
                 } catch (e: Throwable) {
-                    android.util.Log.e("SoundSyncSpectrum", "Failed creating spectrogram bitmap: ${e.message}", e)
+                    android.util.Log.e("SoundSyncSpectrum", "Failed creating HD spectrogram bitmap: ${e.message}", e)
                     null
                 }
             } else null
@@ -376,14 +417,13 @@ private fun SpectrogramCanvasCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(290.dp)
             .testTag("spectrogram_canvas_card"),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
         border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
     ) {
-        Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
-            // Header with Frequency Range
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            // Header with Frequency Range, Cutoff tag & Zoom Controls
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -392,35 +432,70 @@ private fun SpectrogramCanvasCard(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Icon(Icons.Default.GraphicEq, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(16.dp))
                     Text(
-                        text = "ACOUSTIC SPECTROGRAM (20 Hz – 24.0 kHz)",
+                        text = "HD SPECTROGRAM (20 Hz – 24.0 kHz)",
                         color = TextPrimary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
-                // Cutoff Alert Tag
-                val isSuspicious = analysis.qualityRating == AudioQualityRating.SUSPICIOUS_UPSCALED
-                Text(
-                    text = "Ceiling: ${String.format(Locale.US, "%.1f kHz", analysis.cutoffKhz)}",
-                    color = if (isSuspicious) NeonRed else NeonGreen,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Black
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // Zoom selector chips
+                    listOf(1, 2, 4, 8).forEach { z ->
+                        val isSelected = (zoomLevel == z)
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (isSelected) DeckACyan else DjSurfaceDark,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isSelected) DeckACyan else DjSurfaceBorder
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { onZoomChange(z) }
+                        ) {
+                            Text(
+                                text = "${z}X",
+                                color = if (isSelected) DjObsidian else TextSecondary,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    // Cutoff Alert Tag
+                    val isSuspicious = analysis.qualityRating == AudioQualityRating.SUSPICIOUS_UPSCALED
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = (if (isSuspicious) NeonRed else NeonGreen).copy(alpha = 0.15f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSuspicious) NeonRed else NeonGreen)
+                    ) {
+                        Text(
+                            text = "Ceiling: ${String.format(Locale.US, "%.1f kHz", analysis.cutoffKhz)}",
+                            color = if (isSuspicious) NeonRed else NeonGreen,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Spectrogram Display with Y-axis frequency ruler on the left
-            Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                // Frequency Ruler labels (20k, 10k, 5k, 1k, 100Hz, 20Hz)
+            Row(modifier = Modifier.fillMaxWidth().height(240.dp)) {
+                // Frequency Ruler labels (22k, 20k, 16k, 10k, 5k, 1k, 100Hz, 20Hz)
                 Column(
-                    modifier = Modifier.padding(end = 4.dp).height(210.dp),
+                    modifier = Modifier.padding(end = 4.dp).height(240.dp),
                     verticalArrangement = Arrangement.SpaceBetween,
                     horizontalAlignment = Alignment.End
                 ) {
+                    Text("22k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
                     Text("20k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    Text("16k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
                     Text("10k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
                     Text("5k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
                     Text("1k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
@@ -433,22 +508,35 @@ private fun SpectrogramCanvasCard(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF07080F))
-                        .pointerInput(Unit) {
+                        .background(Color(0xFF05060C))
+                        .pointerInput(zoomLevel, panRatio) {
                             detectTapGestures { offset ->
                                 val rx = (offset.x / size.width).coerceIn(0f, 1f)
                                 val ry = (offset.y / size.height).coerceIn(0f, 1f)
                                 onInspectChange(rx, ry)
-                                onSeek(rx)
+                                val actualSeekRatio = if (zoomLevel > 1) {
+                                    val window = 1.0f / zoomLevel
+                                    (panRatio * (1.0f - window) + rx * window).coerceIn(0f, 1f)
+                                } else {
+                                    rx
+                                }
+                                onSeek(actualSeekRatio)
                             }
                         }
-                        .pointerInput(Unit) {
-                            detectDragGestures { change, _ ->
+                        .pointerInput(zoomLevel, panRatio) {
+                            detectDragGestures { change, dragAmount ->
                                 change.consume()
                                 val rx = (change.position.x / size.width).coerceIn(0f, 1f)
                                 val ry = (change.position.y / size.height).coerceIn(0f, 1f)
                                 onInspectChange(rx, ry)
-                                onSeek(rx)
+
+                                if (zoomLevel > 1 && dragAmount.x != 0f) {
+                                    // Pan horizontally when dragging
+                                    val panDelta = -dragAmount.x / (size.width * (zoomLevel - 1).coerceAtLeast(1))
+                                    onPanChange((panRatio + panDelta).coerceIn(0f, 1f))
+                                } else {
+                                    onSeek(rx)
+                                }
                             }
                         }
                 ) {
@@ -457,73 +545,105 @@ private fun SpectrogramCanvasCard(
                         val h = size.height
                         if (w <= 0f || h <= 0f) return@Canvas
 
-                        // Draw pre-rendered spectrogram texture
+                        // Draw high-resolution spectrogram bitmap texture
                         if (cachedBitmap != null) {
-                            drawImage(
-                                image = cachedBitmap,
-                                dstSize = androidx.compose.ui.unit.IntSize(w.toInt().coerceAtLeast(1), h.toInt().coerceAtLeast(1)),
-                                filterQuality = androidx.compose.ui.graphics.FilterQuality.Low
-                            )
+                            val totalSlices = cachedBitmap.width
+                            val totalBins = cachedBitmap.height
+
+                            if (zoomLevel <= 1) {
+                                // Full view: draw full 1024 slices across component width with Medium filter
+                                drawImage(
+                                    image = cachedBitmap,
+                                    dstOffset = IntOffset.Zero,
+                                    dstSize = IntSize(w.toInt().coerceAtLeast(1), h.toInt().coerceAtLeast(1)),
+                                    filterQuality = FilterQuality.Medium
+                                )
+                            } else {
+                                // Zoomed view: crop source rectangle with full resolution detail
+                                val visibleSliceCount = (totalSlices / zoomLevel).coerceIn(16, totalSlices)
+                                val startSlice = (panRatio * (totalSlices - visibleSliceCount)).toInt().coerceIn(0, totalSlices - visibleSliceCount)
+
+                                drawImage(
+                                    image = cachedBitmap,
+                                    srcOffset = IntOffset(startSlice, 0),
+                                    srcSize = IntSize(visibleSliceCount, totalBins),
+                                    dstOffset = IntOffset.Zero,
+                                    dstSize = IntSize(w.toInt().coerceAtLeast(1), h.toInt().coerceAtLeast(1)),
+                                    filterQuality = FilterQuality.Low
+                                )
+                            }
                         }
 
-                        // Standard Frequency Reference Lines (22.05k, 20.0k, 16.0k, 10.0k)
+                        // Standard Frequency Reference Lines (22.05k, 20.0k, 16.0k, 10.0k, 1.0k)
                         val freqMarkers = listOf(
                             22.05f to "22.05k (FLAC)",
                             20.0f to "20.0k (320k)",
-                            16.0f to "16.0k (128k Cutoff)",
+                            16.0f to "16.0k (128k)",
                             10.0f to "10.0k",
                             1.0f to "1.0k"
                         )
 
                         freqMarkers.forEach { (khz, _) ->
-                            val yRatio = (1.0f - (khz / 24.0f)).coerceIn(0f, 1f)
+                            val yRatio = getYRatioForFrequency(khz)
                             val yPos = h * yRatio
                             drawLine(
                                 color = Color(0x33FFFFFF),
                                 start = Offset(0f, yPos),
                                 end = Offset(w, yPos),
                                 strokeWidth = 1.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f)
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
                             )
                         }
 
                         // Draw Detected High Frequency Cutoff line
-                        val cutoffY = (h * (1.0f - (analysis.cutoffKhz / 24.0f))).coerceIn(0f, h)
+                        val cutoffY = h * getYRatioForFrequency(analysis.cutoffKhz)
                         val cutoffColor = if (analysis.qualityRating == AudioQualityRating.SUSPICIOUS_UPSCALED) NeonRed else NeonGreen
                         drawLine(
-                            color = cutoffColor,
+                            color = cutoffColor.copy(alpha = 0.9f),
                             start = Offset(0f, cutoffY),
                             end = Offset(w, cutoffY),
-                            strokeWidth = 2.dp.toPx()
+                            strokeWidth = 2.dp.toPx(),
+                            pathEffect = if (analysis.qualityRating == AudioQualityRating.SUSPICIOUS_UPSCALED) {
+                                PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+                            } else null
                         )
 
                         // Draw Active Playback Cursor Line
                         if (playbackProgress in 0f..1f) {
-                            val playheadX = (w * playbackProgress).coerceIn(0f, w)
-                            drawLine(
-                                color = Color.White,
-                                start = Offset(playheadX, 0f),
-                                end = Offset(playheadX, h),
-                                strokeWidth = 2.dp.toPx()
-                            )
-                            drawCircle(
-                                color = DeckACyan,
-                                radius = 3.5.dp.toPx(),
-                                center = Offset(playheadX, 4.dp.toPx())
-                            )
+                            val cursorX = if (zoomLevel > 1) {
+                                val window = 1.0f / zoomLevel
+                                val start = panRatio * (1.0f - window)
+                                ((playbackProgress - start) / window).coerceIn(-0.1f, 1.1f) * w
+                            } else {
+                                playbackProgress * w
+                            }
+
+                            if (cursorX in 0f..w) {
+                                drawLine(
+                                    color = Color.White,
+                                    start = Offset(cursorX, 0f),
+                                    end = Offset(cursorX, h),
+                                    strokeWidth = 2.dp.toPx()
+                                )
+                                drawCircle(
+                                    color = DeckACyan,
+                                    radius = 3.5.dp.toPx(),
+                                    center = Offset(cursorX, 4.dp.toPx())
+                                )
+                            }
                         }
 
                         // Draw Inspection Crosshair
                         val inspectPxX = (w * inspectX).coerceIn(0f, w)
                         val inspectPxY = (h * inspectY).coerceIn(0f, h)
                         drawLine(
-                            color = DeckACyan.copy(alpha = 0.6f),
+                            color = DeckACyan.copy(alpha = 0.7f),
                             start = Offset(inspectPxX, 0f),
                             end = Offset(inspectPxX, h),
                             strokeWidth = 1.dp.toPx()
                         )
                         drawLine(
-                            color = DeckACyan.copy(alpha = 0.6f),
+                            color = DeckACyan.copy(alpha = 0.7f),
                             start = Offset(0f, inspectPxY),
                             end = Offset(w, inspectPxY),
                             strokeWidth = 1.dp.toPx()
@@ -532,20 +652,74 @@ private fun SpectrogramCanvasCard(
                 }
             }
 
-            // Time axis labels
+            // Time axis labels & zoom viewport minimap
+            if (zoomLevel > 1) {
+                Spacer(modifier = Modifier.height(4.dp))
+                // Mini timeline track navigator showing current zoomed window position
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 28.dp)
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DjSurfaceDark)
+                ) {
+                    val windowFraction = 1.0f / zoomLevel
+                    val leftOffsetFraction = panRatio * (1.0f - windowFraction)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction = windowFraction)
+                            .padding(start = (leftOffsetFraction * 200).dp) // approximate visual offset
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DeckACyan.copy(alpha = 0.6f))
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 28.dp, top = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 val dur = track.durationSeconds.coerceAtLeast(0)
-                Text("0:00", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                Text(String.format(Locale.US, "%d:%02d", (dur / 4) / 60, (dur / 4) % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                Text(String.format(Locale.US, "%d:%02d", (dur / 2) / 60, (dur / 2) % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                Text(String.format(Locale.US, "%d:%02d", (dur * 3 / 4) / 60, (dur * 3 / 4) % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                Text(String.format(Locale.US, "%d:%02d", dur / 60, dur % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                if (zoomLevel > 1) {
+                    val windowSec = dur / zoomLevel
+                    val startSec = (panRatio * (dur - windowSec)).toInt()
+                    Text(String.format(Locale.US, "%d:%02d", startSec / 60, startSec % 60), color = DeckACyan, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    Text(String.format(Locale.US, "Zoom %dx Window (%ds)", zoomLevel, windowSec), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    Text(String.format(Locale.US, "%d:%02d", (startSec + windowSec) / 60, (startSec + windowSec) % 60), color = DeckACyan, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                } else {
+                    Text("0:00", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    Text(String.format(Locale.US, "%d:%02d", (dur / 4) / 60, (dur / 4) % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    Text(String.format(Locale.US, "%d:%02d", (dur / 2) / 60, (dur / 2) % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    Text(String.format(Locale.US, "%d:%02d", (dur * 3 / 4) / 60, (dur * 3 / 4) % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    Text(String.format(Locale.US, "%d:%02d", dur / 60, dur % 60), color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                }
             }
         }
     }
+}
+
+/**
+ * Maps frequency in kHz to the Y ratio (0f = top = 24 kHz, 1f = bottom = 20 Hz).
+ */
+private fun getYRatioForFrequency(freqKhz: Float): Float {
+    val minF = 20.0f
+    val maxF = 24000.0f
+    val fHz = (freqKhz * 1000.0f).coerceIn(minF, maxF)
+    val ratio = kotlin.math.log10(fHz / minF) / kotlin.math.log10(maxF / minF)
+    return (1.0f - ratio.toFloat()).coerceIn(0f, 1f)
+}
+
+/**
+ * Maps Y ratio (0f = top, 1f = bottom) to frequency in kHz.
+ */
+private fun calculateFrequencyForYRatio(yRatio: Float): Float {
+    val minF = 20.0f
+    val maxF = 24000.0f
+    val ratio = (1.0f - yRatio.coerceIn(0f, 1f)).toDouble()
+    val fHz = minF * (maxF / minF).toDouble().pow(ratio)
+    return (fHz / 1000.0f).toFloat().coerceIn(0.02f, 24.0f)
 }
 
 @Composable
@@ -818,7 +992,8 @@ private fun SpectrogramGuideCard() {
             Text(
                 "• FLAC / Lossless: Audio harmonics extend smoothly to 22.05 kHz (or 24 kHz for Hi-Res) with no artificial hard ceiling.\n" +
                 "• True 320 kbps: High frequencies taper off smoothly at ~20.5 kHz.\n" +
-                "• Fake / Upscaled 320 kbps: Sharp brickwall cutoff at ~16.0 kHz indicating a low 128 kbps transcode re-encoded inside a high bitrate wrapper.",
+                "• Fake / Upscaled 320 kbps: Sharp brickwall cutoff at ~16.0 kHz indicating a low 128 kbps transcode re-encoded inside a high bitrate wrapper.\n" +
+                "• Transients: Vertical bright lines represent kick drums, snares, and fast percussive drops.",
                 color = TextSecondary,
                 fontSize = 11.sp,
                 lineHeight = 16.sp
