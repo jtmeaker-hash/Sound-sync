@@ -687,7 +687,7 @@ class DjAudioEngine(private val context: Context) {
                                         // Do not change Now Playing state until the prepared decoder
                                         // has actually produced PCM for the overlap.
                                         crossfadePcm = crossfadeNextDecoder?.readFrames(filled)
-                                        if (!crossfadePcm.isNullOrEmpty()) {
+                                        if (crossfadePcm?.isNotEmpty() == true) {
                                             crossfadeStarted = true
                                             val nextTrack = crossfadeNextTrack
                                             if (nextTrack != null) {
