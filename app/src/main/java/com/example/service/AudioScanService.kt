@@ -119,6 +119,8 @@ class AudioScanService : Service() {
             val startTime = System.currentTimeMillis()
             var totalDiscovered = 0
             var totalIndexed = 0
+            var totalSkipped = 0
+            var totalFailed = 0
             var directoriesCount = 0
             var totalSizeBytes = 0L
 
@@ -126,6 +128,9 @@ class AudioScanService : Service() {
             val BATCH_SIZE = 25
 
             try {
+                val seenFingerprints = database.trackDao().getAllFingerprints().toMutableSet()
+                val seenPaths = database.trackDao().getAllFilePaths().toMutableSet()
+
                 val rootDoc = DocumentFile.fromTreeUri(applicationContext, treeUri)
                 if (rootDoc == null || !rootDoc.exists() || !rootDoc.canRead()) {
                     Log.e(TAG, "Root document is not readable: $treeUri")
@@ -189,38 +194,65 @@ class AudioScanService : Service() {
                         val fileSize = audioFile.length()
                         totalSizeBytes += fileSize
 
-                        val track = extractTrackMetadata(audioFile, currentPath, sourceId)
-                        if (track != null) {
-                            val entity = TrackEntity.fromTrack(track)
-                            trackBatch.add(entity)
-                            totalIndexed++
+                        try {
+                            val track = extractTrackMetadata(audioFile, currentPath, sourceId)
+                            if (track != null) {
+                                val fingerprint = track.contentFingerprint
+                                val path = track.filePath
 
-                            val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
-                            val speed = (totalIndexed.toDouble() / (elapsed / 1000.0))
+                                // Duplicate protection check
+                                if (seenFingerprints.contains(fingerprint) || seenPaths.contains(path)) {
+                                    totalSkipped++
+                                    _scanState.value = _scanState.value.copy(
+                                        filesSkipped = totalSkipped,
+                                        currentFile = "Skipped duplicate: $fileName"
+                                    )
+                                    continue
+                                }
 
-                            _scanState.value = _scanState.value.copy(
-                                currentFile = fileName,
-                                filesIndexed = totalIndexed,
-                                currentFormat = track.format,
-                                currentBitrate = track.bitrateKbps,
-                                scanSpeedFilesPerSec = String.format(Locale.US, "%.1f", speed).toDoubleOrNull() ?: speed,
-                                elapsedTimeMs = elapsed
-                            )
+                                seenFingerprints.add(fingerprint)
+                                seenPaths.add(path)
 
-                            // Flush batch if full
-                            if (trackBatch.size >= BATCH_SIZE) {
-                                database.trackDao().insertTracks(trackBatch.toList())
-                                trackBatch.clear()
+                                val entity = TrackEntity.fromTrack(track)
+                                trackBatch.add(entity)
+                                totalIndexed++
 
-                                // Update notification periodically
-                                updateNotification(
-                                    title = "Indexing $label",
-                                    content = "Indexed $totalIndexed audio tracks • ${currentPath.takeLast(35)}",
-                                    current = totalIndexed,
-                                    max = totalDiscovered.coerceAtLeast(totalIndexed),
-                                    isPaused = false
+                                val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                                val speed = (totalIndexed.toDouble() / (elapsed / 1000.0))
+
+                                _scanState.value = _scanState.value.copy(
+                                    currentFile = fileName,
+                                    filesIndexed = totalIndexed,
+                                    filesSkipped = totalSkipped,
+                                    filesFailed = totalFailed,
+                                    currentFormat = track.format,
+                                    currentBitrate = track.bitrateKbps,
+                                    scanSpeedFilesPerSec = String.format(Locale.US, "%.1f", speed).toDoubleOrNull() ?: speed,
+                                    elapsedTimeMs = elapsed
                                 )
+
+                                // Flush batch if full
+                                if (trackBatch.size >= BATCH_SIZE) {
+                                    database.trackDao().insertTracks(trackBatch.toList())
+                                    trackBatch.clear()
+
+                                    // Update notification periodically
+                                    updateNotification(
+                                        title = "Indexing $label",
+                                        content = "Imported $totalIndexed • Skipped $totalSkipped • ${currentPath.takeLast(30)}",
+                                        current = totalIndexed + totalSkipped + totalFailed,
+                                        max = totalDiscovered.coerceAtLeast(totalIndexed + totalSkipped),
+                                        isPaused = false
+                                    )
+                                }
+                            } else {
+                                totalFailed++
+                                _scanState.value = _scanState.value.copy(filesFailed = totalFailed)
                             }
+                        } catch (e: Exception) {
+                            totalFailed++
+                            _scanState.value = _scanState.value.copy(filesFailed = totalFailed)
+                            Log.w(TAG, "Failed reading audio file $fileName: ${e.message}")
                         }
                     }
 
@@ -266,16 +298,38 @@ class AudioScanService : Service() {
                     database.sourceFolderDao().insertSourceFolder(sourceFolder)
 
                     val totalElapsed = System.currentTimeMillis() - startTime
+                    val summaryMessage = if (totalIndexed == 0 && totalSkipped > 0) {
+                        if (totalFailed > 0) {
+                            "All $totalSkipped tracks are already in your library and were skipped ($totalFailed unreadable)."
+                        } else {
+                            "All $totalSkipped tracks are already in your library and were skipped."
+                        }
+                    } else {
+                        val parts = mutableListOf<String>()
+                        parts.add("$totalIndexed ${if (totalIndexed == 1) "track" else "tracks"} imported")
+                        if (totalSkipped > 0) {
+                            parts.add("$totalSkipped ${if (totalSkipped == 1) "track" else "tracks"} already in library and skipped")
+                        }
+                        if (totalFailed > 0) {
+                            parts.add("$totalFailed ${if (totalFailed == 1) "file" else "files"} could not be read")
+                        }
+                        parts.joinToString(", ")
+                    }
+
                     _scanState.value = _scanState.value.copy(
                         isScanning = false,
                         isPaused = false,
                         isCompleted = true,
                         totalIndexedInLastRun = totalIndexed,
+                        filesIndexed = totalIndexed,
+                        filesSkipped = totalSkipped,
+                        filesFailed = totalFailed,
                         elapsedTimeMs = totalElapsed,
-                        currentFile = "Scan completed. $totalIndexed tracks indexed."
+                        summaryMessage = summaryMessage,
+                        currentFile = "Scan completed. $summaryMessage"
                     )
 
-                    showCompletionNotification(label, totalIndexed)
+                    showCompletionNotification(label, summaryMessage)
                 }
 
             } catch (e: Exception) {
@@ -377,6 +431,7 @@ class AudioScanService : Service() {
         }
 
         val trackId = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
+        val fingerprint = com.example.storage.AudioFingerprintUtil.generateDocumentFileFingerprint(this, file, durationSec)
 
         return Track(
             id = trackId,
@@ -402,7 +457,8 @@ class AudioScanService : Service() {
             qualityRating = qualityRating,
             dateAdded = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),
             crateId = "crate_all",
-            sourceId = sourceId
+            sourceId = sourceId,
+            contentFingerprint = fingerprint
         )
     }
 
@@ -572,7 +628,7 @@ class AudioScanService : Service() {
         }
     }
 
-    private fun showCompletionNotification(label: String, totalIndexed: Int) {
+    private fun showCompletionNotification(label: String, summaryMessage: String) {
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -584,8 +640,9 @@ class AudioScanService : Service() {
         )
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Audio Library Indexed")
-            .setContentText("Finished scanning $label: $totalIndexed tracks ready for DJ playback & crates.")
+            .setContentTitle("Audio Library Scan Finished")
+            .setContentText(summaryMessage)
+            .setStyle(NotificationCompat.BigTextStyle().bigText("Finished scanning $label:\n$summaryMessage"))
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentIntent(contentPendingIntent)
             .setAutoCancel(true)

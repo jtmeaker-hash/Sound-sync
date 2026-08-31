@@ -12,6 +12,8 @@ data class AudioScanState(
     val currentFile: String = "",
     val filesDiscovered: Int = 0,
     val filesIndexed: Int = 0,
+    val filesSkipped: Int = 0,
+    val filesFailed: Int = 0,
     val directoriesScanned: Int = 0,
     val currentFormat: String = "",
     val currentBitrate: Int = 0,
@@ -19,11 +21,12 @@ data class AudioScanState(
     val elapsedTimeMs: Long = 0L,
     val errorMessage: String? = null,
     val isCompleted: Boolean = false,
-    val totalIndexedInLastRun: Int = 0
+    val totalIndexedInLastRun: Int = 0,
+    val summaryMessage: String = ""
 ) {
     val progressFraction: Float
         get() = if (filesDiscovered > 0) {
-            (filesIndexed.toFloat() / filesDiscovered.toFloat()).coerceIn(0f, 1f)
+            ((filesIndexed + filesSkipped + filesFailed).toFloat() / filesDiscovered.toFloat()).coerceIn(0f, 1f)
         } else {
             0f
         }

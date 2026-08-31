@@ -1,13 +1,20 @@
 package com.example.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.example.model.AudioQualityRating
 import com.example.model.MusicPlatform
 import com.example.model.SyncState
 import com.example.model.Track
 
-@Entity(tableName = "tracks")
+@Entity(
+    tableName = "tracks",
+    indices = [
+        Index(value = ["contentFingerprint"]),
+        Index(value = ["filePath"])
+    ]
+)
 data class TrackEntity(
     @PrimaryKey
     val id: String,
@@ -34,7 +41,8 @@ data class TrackEntity(
     val crateId: String,
     val trackNumber: Int = 0,
     val discNumber: Int = 1,
-    val storageRelativePath: String = ""
+    val storageRelativePath: String = "",
+    val contentFingerprint: String = ""
 ) {
     fun toTrack(): Track {
         val syncEnum = try { SyncState.valueOf(syncState) } catch (e: Exception) { SyncState.LOCAL_ONLY }
@@ -88,7 +96,8 @@ data class TrackEntity(
             sourceId = "internal",
             trackNumber = trackNumber,
             discNumber = discNumber,
-            storageRelativePath = resolvedStoragePath
+            storageRelativePath = resolvedStoragePath,
+            contentFingerprint = contentFingerprint
         )
     }
 
@@ -119,7 +128,8 @@ data class TrackEntity(
                 crateId = track.crateId,
                 trackNumber = track.trackNumber,
                 discNumber = track.discNumber,
-                storageRelativePath = track.storageRelativePath
+                storageRelativePath = track.storageRelativePath,
+                contentFingerprint = track.contentFingerprint
             )
         }
     }

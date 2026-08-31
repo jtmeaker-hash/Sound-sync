@@ -49,6 +49,24 @@ interface TrackDao {
     @Delete
     suspend fun deleteCrate(crate: CrateEntity)
 
+    @Query("SELECT contentFingerprint FROM tracks WHERE contentFingerprint != ''")
+    suspend fun getAllFingerprints(): List<String>
+
+    @Query("SELECT filePath FROM tracks WHERE filePath != ''")
+    suspend fun getAllFilePaths(): List<String>
+
+    @Query("SELECT * FROM tracks WHERE contentFingerprint = :fingerprint LIMIT 1")
+    suspend fun getTrackByFingerprint(fingerprint: String): TrackEntity?
+
+    @Query("SELECT * FROM tracks WHERE filePath = :filePath LIMIT 1")
+    suspend fun getTrackByFilePath(filePath: String): TrackEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertTrackIfNotExist(track: TrackEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertTracksIfNotExist(tracks: List<TrackEntity>): List<Long>
+
     @Query("SELECT COUNT(*) FROM tracks")
     suspend fun getTrackCount(): Int
 }

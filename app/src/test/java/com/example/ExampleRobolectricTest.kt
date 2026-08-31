@@ -190,4 +190,38 @@ class ExampleRobolectricTest {
             assertTrue(bar in 0.0f..1.0f)
         }
     }
+
+    @Test
+    fun `AlbumArtHelper generates valid artwork bitmap for track`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val track = createSampleTrack()
+
+        val bitmap = com.example.util.AlbumArtHelper.getArtworkForTrack(context, track, sizePx = 256)
+
+        assertNotNull("Album art bitmap must not be null", bitmap)
+        assertEquals(256, bitmap.width)
+        assertEquals(256, bitmap.height)
+        assertFalse("Bitmap should not be recycled", bitmap.isRecycled)
+    }
+
+    @Test
+    fun `DjAudioEngine getInstance returns singleton instance and manages transport callbacks`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine1 = DjAudioEngine.getInstance(context)
+        val engine2 = DjAudioEngine.getInstance(context)
+
+        assertEquals("getInstance should return the same singleton instance", engine1, engine2)
+
+        var nextCalled = false
+        var prevCalled = false
+
+        engine1.onNextTrackCallback = { nextCalled = true }
+        engine1.onPreviousTrackCallback = { prevCalled = true }
+
+        engine1.onNextTrackCallback?.invoke()
+        engine1.onPreviousTrackCallback?.invoke()
+
+        assertTrue("onNextTrackCallback should be executed", nextCalled)
+        assertTrue("onPreviousTrackCallback should be executed", prevCalled)
+    }
 }

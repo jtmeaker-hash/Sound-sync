@@ -98,7 +98,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val scanMutex = Mutex()
     private var currentScanJob: Job? = null
 
-    val audioEngine = DjAudioEngine(application)
+    val audioEngine = DjAudioEngine.getInstance(application)
 
     private val _selectedTab = MutableStateFlow(DjTab.LOCAL)
     val selectedTab = _selectedTab.asStateFlow()
@@ -470,10 +470,32 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val isAutoUpdateCheckEnabled: StateFlow<Boolean> = UpdateManager.isAutoCheckEnabled
 
     init {
+        setupMediaEngineCallbacks()
         initializeStorageAndData()
         observeBackgroundScanner()
         initializeUpdateSystem()
         observeGoogleDriveState()
+    }
+
+    private fun setupMediaEngineCallbacks() {
+        audioEngine.onNextTrackCallback = {
+            viewModelScope.launch(Dispatchers.Main) {
+                if (playbackQueue.value.isNotEmpty() && queueIndex.value + 1 in playbackQueue.value.indices) {
+                    playNextInQueue()
+                } else {
+                    nextTrack()
+                }
+            }
+        }
+        audioEngine.onPreviousTrackCallback = {
+            viewModelScope.launch(Dispatchers.Main) {
+                if (playbackQueue.value.isNotEmpty() && queueIndex.value - 1 in playbackQueue.value.indices) {
+                    playPreviousInQueue()
+                } else {
+                    previousTrack()
+                }
+            }
+        }
     }
 
     private fun observeGoogleDriveState() {
@@ -649,13 +671,17 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         scanStateManager.status = ScanStatus.SCANNING
         _scanProgressMessage.value = "Scanning MediaStore audio repository..."
 
-        var totalScanned = 0
         var isFirstBatch = true
 
         try {
-            totalScanned = MediaScannerHelper.scanDeviceAudioStreaming(
+            val existingFingerprints = trackDao.getAllFingerprints().toSet()
+            val existingFilePaths = trackDao.getAllFilePaths().toSet()
+
+            val scanResult = MediaScannerHelper.scanDeviceAudioStreaming(
                 context = app,
                 batchSize = 50,
+                existingFingerprints = existingFingerprints,
+                existingFilePaths = existingFilePaths,
                 onBatch = { batch ->
                     val entities = batch.map { TrackEntity.fromTrack(it) }
                     trackDao.insertTracks(entities)
@@ -677,14 +703,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
             scanStateManager.status = ScanStatus.COMPLETED
             scanStateManager.lastScanTime = System.currentTimeMillis()
-            scanStateManager.lastScannedCount = totalScanned
+            scanStateManager.lastScannedCount = scanResult.imported
 
             withContext(Dispatchers.Main) {
-                if (totalScanned > 0) {
-                    showSnackbar("Successfully indexed $totalScanned audio tracks from phone storage!")
-                } else {
-                    showSnackbar("No audio files detected in MediaStore. You can select a folder or pick audio files.")
-                }
+                showSnackbar(scanResult.userMessage)
             }
         } catch (e: SecurityException) {
             Log.e("MainDjViewModel", "SecurityException during MediaStore scan", e)
@@ -751,12 +773,32 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             _isScanning.value = true
             _scanProgressMessage.value = "Importing ${uris.size} audio files..."
 
+            val existingFingerprints = trackDao.getAllFingerprints().toMutableSet()
+            val existingFilePaths = trackDao.getAllFilePaths().toMutableSet()
+
             val imported = mutableListOf<Track>()
+            var skippedCount = 0
+            var failedCount = 0
+
             for ((index, uri) in uris.withIndex()) {
-                _scanProgressMessage.value = "Importing file (${index + 1}/${uris.size})..."
+                _scanProgressMessage.value = "Processing file (${index + 1}/${uris.size})..."
+                val uriStr = uri.toString()
+                if (existingFilePaths.contains(uriStr)) {
+                    skippedCount++
+                    continue
+                }
+
                 val track = MediaScannerHelper.extractTrackFromUri(app, uri)
                 if (track != null) {
-                    imported.add(track)
+                    if (track.contentFingerprint.isNotBlank() && existingFingerprints.contains(track.contentFingerprint)) {
+                        skippedCount++
+                    } else {
+                        imported.add(track)
+                        if (track.contentFingerprint.isNotBlank()) existingFingerprints.add(track.contentFingerprint)
+                        existingFilePaths.add(track.filePath)
+                    }
+                } else {
+                    failedCount++
                 }
             }
 
@@ -769,20 +811,32 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     timestamp = System.currentTimeMillis(),
                     operationType = FileOperationType.COPY,
                     affectedTracksCount = imported.size,
-                    summary = "Imported ${imported.size} audio files from storage"
+                    summary = "Imported ${imported.size} audio files ($skippedCount duplicates skipped, $failedCount unreadable)"
                 )
                 _operationJournal.value = listOf(log) + _operationJournal.value
 
-                val first = imported.first()
-                withContext(Dispatchers.Main) {
-                    audioEngine.loadTrack(first, autoPlay = false)
-                    inspectTrackSpectrogram(first)
-                    showSnackbar("Successfully imported ${imported.size} audio files!")
+                if (audioEngine.currentTrack.value == null) {
+                    val first = imported.first()
+                    withContext(Dispatchers.Main) {
+                        audioEngine.loadTrack(first, autoPlay = false)
+                        inspectTrackSpectrogram(first)
+                    }
                 }
-            } else {
-                withContext(Dispatchers.Main) {
-                    showSnackbar("Could not read audio data from selected files.")
+            }
+
+            val summaryMsg = buildString {
+                append("${imported.size} track${if (imported.size != 1) "s" else ""} imported")
+                if (skippedCount > 0) {
+                    append(", $skippedCount already in library and skipped")
                 }
+                if (failedCount > 0) {
+                    append(", $failedCount could not be read")
+                }
+                append(".")
+            }
+
+            withContext(Dispatchers.Main) {
+                showSnackbar(summaryMsg)
             }
 
             _isScanning.value = false

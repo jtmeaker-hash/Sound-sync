@@ -82,7 +82,8 @@ data class Track(
     val sourceId: String = "internal",
     val trackNumber: Int = 0,
     val discNumber: Int = 1,
-    val storageRelativePath: String = ""
+    val storageRelativePath: String = "",
+    val contentFingerprint: String = ""
 ) {
     val hasValidBpm: Boolean
         get() = bpm > 30.0 && bpm < 300.0
@@ -198,4 +199,38 @@ enum class ExplorerSortOption(val displayName: String) {
     DATE_DESC("Date Added"),
     SIZE_DESC("File Size")
 }
+
+data class ScanSummaryResult(
+    val discovered: Int,
+    val imported: Int,
+    val skipped: Int,
+    val failed: Int
+) {
+    val totalProcessed: Int
+        get() = imported + skipped + failed
+
+    val userMessage: String
+        get() {
+            if (discovered == 0 && imported == 0 && skipped == 0) {
+                return "No audio files found on storage."
+            }
+            if (imported == 0 && skipped > 0) {
+                return if (failed > 0) {
+                    "All $skipped tracks are already in your library and were skipped ($failed unreadable)."
+                } else {
+                    "All $skipped tracks are already in your library and were skipped."
+                }
+            }
+            val parts = mutableListOf<String>()
+            parts.add("$imported ${if (imported == 1) "track" else "tracks"} imported")
+            if (skipped > 0) {
+                parts.add("$skipped ${if (skipped == 1) "track" else "tracks"} already in library and skipped")
+            }
+            if (failed > 0) {
+                parts.add("$failed ${if (failed == 1) "file" else "files"} could not be read")
+            }
+            return parts.joinToString("\n")
+        }
+}
+
 

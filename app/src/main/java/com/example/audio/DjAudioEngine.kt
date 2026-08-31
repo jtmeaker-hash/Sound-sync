@@ -30,7 +30,20 @@ class DjAudioEngine(private val context: Context) {
 
     companion object {
         private const val TAG = "DjAudioEngine"
+
+        @Volatile
+        private var instance: DjAudioEngine? = null
+
+        fun getInstance(context: Context): DjAudioEngine {
+            return instance ?: synchronized(this) {
+                instance ?: DjAudioEngine(context.applicationContext).also { instance = it }
+            }
+        }
     }
+
+    var onNextTrackCallback: (() -> Unit)? = null
+    var onPreviousTrackCallback: (() -> Unit)? = null
+    var onStopCallback: (() -> Unit)? = null
 
     private val scope = CoroutineScope(Dispatchers.Default)
     private var playbackJob: Job? = null
@@ -261,8 +274,13 @@ class DjAudioEngine(private val context: Context) {
                         }
                     }
                 } else {
-                    seekToSecond(0)
-                    pause()
+                    if (onNextTrackCallback != null) {
+                        Log.d(TAG, "Auto-advancing to next track in queue...")
+                        onNextTrackCallback?.invoke()
+                    } else {
+                        seekToSecond(0)
+                        pause()
+                    }
                 }
             }
 
@@ -322,6 +340,12 @@ class DjAudioEngine(private val context: Context) {
         Log.d(TAG, "Explicit playback started by user for track: '${track.title}' (isUsingMediaPlayer=$isUsingMediaPlayer)")
         com.example.util.DjLogger.log("PLAYER_PLAY", "'${track.title}' by '${track.artist}'")
         _isPlaying.value = true
+
+        try {
+            com.example.service.MediaPlaybackService.startService(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not start MediaPlaybackService: ${e.message}")
+        }
 
         if (isUsingMediaPlayer) {
             val mp = synchronized(mediaPlayerLock) { mediaPlayer }

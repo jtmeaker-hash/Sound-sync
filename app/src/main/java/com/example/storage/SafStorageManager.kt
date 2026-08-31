@@ -144,6 +144,8 @@ object SafStorageManager {
         val id = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
 
         val relPath = RockboxPathResolver.computeStorageRelativePath(uri.toString(), folderPath)
+        val durationSeconds = 210
+        val fingerprint = AudioFingerprintUtil.generateDocumentFileFingerprint(context, file, durationSeconds)
 
         return Track(
             id = id,
@@ -154,7 +156,7 @@ object SafStorageManager {
             subGenre = "Club",
             bpm = 126.0,
             musicalKey = "8A",
-            durationSeconds = 210,
+            durationSeconds = durationSeconds,
             bitrateKbps = if (format == "FLAC" || format == "WAV") 1411 else 320,
             format = format,
             fileSizeMb = String.format(Locale.US, "%.2f", sizeMb).toDoubleOrNull() ?: sizeMb,
@@ -172,7 +174,8 @@ object SafStorageManager {
             sourceId = sourceId,
             trackNumber = 0,
             discNumber = 1,
-            storageRelativePath = relPath
+            storageRelativePath = relPath,
+            contentFingerprint = fingerprint
         )
     }
 

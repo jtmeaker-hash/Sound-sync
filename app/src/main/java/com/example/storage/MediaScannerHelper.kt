@@ -10,6 +10,7 @@ import android.util.Log
 import com.example.analysis.TunebatMetadataService
 import com.example.model.AudioQualityRating
 import com.example.model.MusicPlatform
+import com.example.model.ScanSummaryResult
 import com.example.model.SyncState
 import com.example.model.Track
 import kotlinx.coroutines.Dispatchers
@@ -26,13 +27,17 @@ object MediaScannerHelper {
      * Streams tracks row-by-row in memory-safe batches directly to [onBatch],
      * running strictly on Dispatchers.IO with zero main-thread blocking, zero bitmap allocations,
      * and safe fallback on individual corrupted rows.
+     *
+     * Skips tracks that already exist in [existingFingerprints] or [existingFilePaths].
      */
     suspend fun scanDeviceAudioStreaming(
         context: Context,
+        existingFingerprints: Set<String> = emptySet(),
+        existingFilePaths: Set<String> = emptySet(),
         batchSize: Int = 50,
         onBatch: suspend (List<Track>) -> Unit,
         onProgress: (current: Int, total: Int, currentTitle: String) -> Unit = { _, _, _ -> }
-    ): Int = withContext(Dispatchers.IO) {
+    ): ScanSummaryResult = withContext(Dispatchers.IO) {
         val contentResolver = context.contentResolver
 
         val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -69,8 +74,14 @@ object MediaScannerHelper {
         com.example.util.DjLogger.startTiming("MEDIA_SCAN_START", "Scanning MediaStore audio repository")
         Log.d(TAG, "Library scan started via MediaStore")
 
-        var totalIndexed = 0
+        var totalDiscovered = 0
+        var totalImported = 0
+        var totalSkipped = 0
+        var totalFailed = 0
         val currentBatch = mutableListOf<Track>()
+
+        val seenFingerprints = existingFingerprints.toMutableSet()
+        val seenPaths = existingFilePaths.toMutableSet()
 
         try {
             contentResolver.query(collectionUri, projection, selection, null, sortOrder)?.use { cursor ->
@@ -84,11 +95,9 @@ object MediaScannerHelper {
                 val sizeCol = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
                 val dateAddedCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_ADDED)
                 val trackCol = cursor.getColumnIndex(MediaStore.Audio.Media.TRACK)
-                val albumIdCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM_ID)
-                } else -1
 
                 val total = cursor.count
+                totalDiscovered = total
                 Log.d(TAG, "MediaStore query completed: $total audio tracks found on storage")
                 var current = 0
 
@@ -107,6 +116,23 @@ object MediaScannerHelper {
                         val rawTrackNum = if (trackCol != -1) cursor.getInt(trackCol) else 0
 
                         val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+                        val targetPath = dataPath.ifBlank { contentUri.toString() }
+
+                        val durationSec = (durationMs / 1000).toInt().coerceAtLeast(1)
+
+                        // Generate stable content fingerprint
+                        val fingerprint = AudioFingerprintUtil.generateFingerprint(
+                            context = context,
+                            uriOrPath = targetPath,
+                            fileSizeBytes = sizeBytes,
+                            durationSeconds = durationSec
+                        )
+
+                        // Check duplicate protection
+                        if (seenFingerprints.contains(fingerprint) || seenPaths.contains(targetPath)) {
+                            totalSkipped++
+                            continue
+                        }
 
                         val title = rawTitle?.takeIf { it.isNotBlank() && it != "<unknown>" }
                             ?: File(dataPath).nameWithoutExtension.takeIf { it.isNotBlank() }
@@ -114,7 +140,6 @@ object MediaScannerHelper {
 
                         onProgress(current, total, title)
 
-                        val durationSec = (durationMs / 1000).toInt().coerceAtLeast(1)
                         val sizeMb = sizeBytes.toDouble() / (1024.0 * 1024.0)
                         val format = resolveFormat(dataPath, mimeType)
                         val dirPath = resolveDirectory(dataPath)
@@ -126,7 +151,7 @@ object MediaScannerHelper {
                         // Compute Rockbox-compatible relative path
                         val storageRelPath = RockboxPathResolver.computeStorageRelativePath(dataPath, dirPath)
 
-                        // Compute fast bitrate from size/duration or format (no MediaMetadataRetriever blocking)
+                        // Compute fast bitrate from size/duration or format
                         val computedBitrateKbps = if (sizeBytes > 0 && durationSec > 0 && format != "FLAC" && format != "WAV") {
                             ((sizeBytes * 8L) / (durationSec * 1000L)).toInt().coerceIn(64, 320)
                         } else if (format == "FLAC" || format == "WAV" || format == "AIFF") {
@@ -138,7 +163,6 @@ object MediaScannerHelper {
                         val qualityRating = resolveQualityRating(format, computedBitrateKbps)
 
                         // Priority 1: Extract embedded metadata (ID3 / MP4 tags) if present
-                        val targetPath = dataPath.ifBlank { contentUri.toString() }
                         val embeddedTags = TunebatMetadataService.extractEmbeddedTags(context, targetPath)
                         val detectedBpm = if (embeddedTags != null && embeddedTags.hasBpm) embeddedTags.bpm else 0.0
                         val detectedKey = if (embeddedTags != null && embeddedTags.hasKey) embeddedTags.musicalKey else ""
@@ -170,11 +194,14 @@ object MediaScannerHelper {
                             sourceId = resolveSourceId(dataPath),
                             trackNumber = trackNum,
                             discNumber = discNum,
-                            storageRelativePath = storageRelPath
+                            storageRelativePath = storageRelPath,
+                            contentFingerprint = fingerprint
                         )
 
+                        seenFingerprints.add(fingerprint)
+                        seenPaths.add(targetPath)
                         currentBatch.add(track)
-                        totalIndexed++
+                        totalImported++
 
                         // Emit batch to database incrementally
                         if (currentBatch.size >= batchSize) {
@@ -185,7 +212,7 @@ object MediaScannerHelper {
                             currentBatch.clear()
                         }
                     } catch (e: Exception) {
-                        // Skip corrupted or unreadable individual row without breaking overall scan
+                        totalFailed++
                         Log.w(TAG, "Skipping problematic MediaStore entry at row $current: ${e.message}")
                     }
                 }
@@ -199,8 +226,8 @@ object MediaScannerHelper {
                 Log.d(TAG, "Metadata processing final batch saved in ${System.currentTimeMillis() - batchStartTime}ms")
                 currentBatch.clear()
             }
-            com.example.util.DjLogger.endTiming("MEDIA_SCAN_END", "Total indexed tracks: $totalIndexed")
-            Log.d(TAG, "Library scan finished. Total indexed tracks: $totalIndexed in ${System.currentTimeMillis() - scanStartTime}ms")
+            com.example.util.DjLogger.endTiming("MEDIA_SCAN_END", "Total indexed tracks: $totalImported, skipped: $totalSkipped, failed: $totalFailed")
+            Log.d(TAG, "Library scan finished. Imported: $totalImported, Skipped: $totalSkipped in ${System.currentTimeMillis() - scanStartTime}ms")
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException querying MediaStore: ${e.message}", e)
             throw e
@@ -209,7 +236,12 @@ object MediaScannerHelper {
             throw e
         }
 
-        totalIndexed
+        ScanSummaryResult(
+            discovered = totalDiscovered,
+            imported = totalImported,
+            skipped = totalSkipped,
+            failed = totalFailed
+        )
     }
 
     /**
@@ -253,6 +285,7 @@ object MediaScannerHelper {
             // File display name and size from content resolver
             var displayName = "Imported Track"
             var fileSizeMb = 0.0
+            var sizeBytes = 0L
             try {
                 context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                     val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
@@ -260,7 +293,7 @@ object MediaScannerHelper {
                     if (cursor.moveToFirst()) {
                         if (nameIndex != -1) displayName = cursor.getString(nameIndex) ?: displayName
                         if (sizeIndex != -1) {
-                            val sizeBytes = cursor.getLong(sizeIndex)
+                            sizeBytes = cursor.getLong(sizeIndex)
                             fileSizeMb = sizeBytes.toDouble() / (1024.0 * 1024.0)
                         }
                     }
@@ -279,6 +312,13 @@ object MediaScannerHelper {
             val embeddedTags = TunebatMetadataService.extractEmbeddedTags(context, uri.toString())
             val detectedBpm = if (embeddedTags != null && embeddedTags.hasBpm) embeddedTags.bpm else 0.0
             val detectedKey = if (embeddedTags != null && embeddedTags.hasKey) embeddedTags.musicalKey else ""
+
+            val fingerprint = AudioFingerprintUtil.generateFingerprint(
+                context = context,
+                uriOrPath = uri.toString(),
+                fileSizeBytes = sizeBytes,
+                durationSeconds = durationSec
+            )
 
             Track(
                 id = id,
@@ -304,7 +344,8 @@ object MediaScannerHelper {
                 qualityRating = qualityRating,
                 dateAdded = System.currentTimeMillis(),
                 crateId = "crate_all",
-                sourceId = customSourceId
+                sourceId = customSourceId,
+                contentFingerprint = fingerprint
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error extracting track from URI: $uri", e)
