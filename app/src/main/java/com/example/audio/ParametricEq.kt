@@ -50,6 +50,10 @@ class ParametricEq(private val sampleRate: Int) {
     private var appliedMid = Float.NaN
     private var appliedHigh = Float.NaN
 
+    // Conservative automatic headroom for combined band boosts. The gain is
+    // interpolated per sample so changing several bands cannot create a step.
+    private var outputGain = 1f
+
     /**
      * Process an interleaved stereo 16-bit PCM buffer in place.
      * @param buffer     Interleaved [L,R,L,R,...] shorts
@@ -57,8 +61,21 @@ class ParametricEq(private val sampleRate: Int) {
      * @param frameCount Number of stereo frames to process
      */
     fun processStereo(buffer: ShortArray, offset: Int, frameCount: Int) {
-        // Fast path: unity on all bands = bypass
-        if (lowGain == 1f && midGain == 1f && highGain == 1f) return
+        // Unity is a true neutral setting. Recover any automatic headroom
+        // smoothly before returning so returning sliders to 1.0x restores level.
+        if (lowGain == 1f && midGain == 1f && highGain == 1f) {
+            if (outputGain >= 0.9995f) return
+            for (i in 0 until frameCount) {
+                val idx = offset + i * 2
+                if (idx + 1 >= buffer.size) break
+                outputGain += (1f - outputGain) * 0.0025f
+                buffer[idx] = (buffer[idx] * outputGain).toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                buffer[idx + 1] = (buffer[idx + 1] * outputGain).toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            }
+            return
+        }
         ensureCoefficients()
 
         for (i in 0 until frameCount) {
@@ -68,8 +85,13 @@ class ParametricEq(private val sampleRate: Int) {
             val leftIn = buffer[idx].toDouble()
             val rightIn = buffer[idx + 1].toDouble()
 
-            var left = highL.process(midL.process(lowL.process(leftIn)))
-            var right = highR.process(midR.process(lowR.process(rightIn)))
+            val targetOutputGain = 1f / sqrt(
+                maxOf(1f, lowGain * midGain * highGain)
+            )
+            outputGain += (targetOutputGain - outputGain) * 0.0025f
+
+            var left = highL.process(midL.process(lowL.process(leftIn))) * outputGain
+            var right = highR.process(midR.process(lowR.process(rightIn))) * outputGain
 
             left = left.coerceIn(Short.MIN_VALUE.toDouble(), Short.MAX_VALUE.toDouble())
             right = right.coerceIn(Short.MIN_VALUE.toDouble(), Short.MAX_VALUE.toDouble())
@@ -113,8 +135,6 @@ class ParametricEq(private val sampleRate: Int) {
         val coefs = doubleArrayOf(b0, b1, b2, a1, a2)
         l.setCoefficients(coefs, a0)
         r.setCoefficients(coefs, a0)
-        l.reset()
-        r.reset()
     }
 
     private fun configureHighShelf(l: Biquad, r: Biquad, gain: Float) {
@@ -135,8 +155,6 @@ class ParametricEq(private val sampleRate: Int) {
         val coefs = doubleArrayOf(b0, b1, b2, a1, a2)
         l.setCoefficients(coefs, a0)
         r.setCoefficients(coefs, a0)
-        l.reset()
-        r.reset()
     }
 
     private fun configurePeaking(l: Biquad, r: Biquad, gain: Float) {
@@ -156,8 +174,6 @@ class ParametricEq(private val sampleRate: Int) {
         val coefs = doubleArrayOf(b0, b1, b2, a1, a2)
         l.setCoefficients(coefs, a0)
         r.setCoefficients(coefs, a0)
-        l.reset()
-        r.reset()
     }
 
     private fun linearToDb(linear: Float): Double {

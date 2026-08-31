@@ -94,9 +94,11 @@ fun NowPlayingFullScreen(
     currentPositionMs: Long,
     durationMs: Long,
     // EQ parameters
+    eqEnabled: Boolean = true,
     eqLow: Float = 1f,
     eqMid: Float = 1f,
     eqHigh: Float = 1f,
+    onSetEqEnabled: (Boolean) -> Unit = {},
     onSetEqLow: (Float) -> Unit = {},
     onSetEqMid: (Float) -> Unit = {},
     onSetEqHigh: (Float) -> Unit = {},
@@ -115,6 +117,7 @@ fun NowPlayingFullScreen(
     onSeekToMs: (Long) -> Unit,
     onToggleDisplayMode: () -> Unit,
     onSetDisplayMode: (NowPlayingDisplayMode) -> Unit,
+    onOpenSettings: () -> Unit = {},
     onOpenProperties: (Track) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -185,14 +188,14 @@ fun NowPlayingFullScreen(
                     )
 
                     IconButton(
-                        onClick = { onOpenProperties(track) },
+                        onClick = onOpenSettings,
                         modifier = Modifier
                             .size(40.dp)
-                            .testTag("now_playing_track_info")
+                            .testTag("now_playing_settings_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Track Info",
+                            contentDescription = "Now Playing Settings",
                             tint = TextSecondary,
                             modifier = Modifier.size(22.dp)
                         )
@@ -558,9 +561,11 @@ fun NowPlayingFullScreen(
 
                 // 6. AUDIO EFFECTS PANEL (EQ + Haas Surround)
                 AudioEffectsPanel(
+                    eqEnabled = eqEnabled,
                     eqLow = eqLow,
                     eqMid = eqMid,
                     eqHigh = eqHigh,
+                    onSetEqEnabled = onSetEqEnabled,
                     onSetEqLow = onSetEqLow,
                     onSetEqMid = onSetEqMid,
                     onSetEqHigh = onSetEqHigh,

@@ -97,6 +97,8 @@ import com.example.BuildConfig
 import com.example.model.UpdateState
 import com.example.model.UpdateInfo
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.ThemeMode
+import com.example.ui.theme.BloodRedPrimary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -125,6 +127,8 @@ fun OperationsAndCloudView(
     onOpenGoogleDrive: () -> Unit = {},
     onConnectGoogleDrive: () -> Unit = {},
     onDisconnectGoogleDrive: () -> Unit = {},
+    themeMode: ThemeMode = ThemeMode.CURRENT,
+    onSetThemeMode: (ThemeMode) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val platformStatuses by CloudSyncManager.platformStatuses.collectAsState()
@@ -137,6 +141,15 @@ fun OperationsAndCloudView(
             .testTag("operations_and_cloud_view"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Appearance selector keeps the existing signal colours unchanged while
+        // allowing the app shell to switch between the original and crimson themes.
+        item {
+            AppearanceSectionCard(
+                themeMode = themeMode,
+                onSetThemeMode = onSetThemeMode
+            )
+        }
+
         // App Updates & Version Management Card (GitHub Releases)
         item {
             UpdateSectionCard(
@@ -908,6 +921,91 @@ private fun PlatformStatusCard(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AppearanceSectionCard(
+    themeMode: ThemeMode,
+    onSetThemeMode: (ThemeMode) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("appearance_section_card"),
+        colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("Appearance", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text(
+                "Choose the app shell palette. Waveforms, spectrograms, EQ and Haas colours stay functional and unchanged.",
+                color = TextSecondary,
+                fontSize = 10.sp,
+                lineHeight = 14.sp
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AppearanceOption(
+                    title = "Current Theme",
+                    selected = themeMode == ThemeMode.CURRENT,
+                    accent = DeckACyan,
+                    onClick = { onSetThemeMode(ThemeMode.CURRENT) },
+                    modifier = Modifier.weight(1f)
+                )
+                AppearanceOption(
+                    title = "Dark Theme",
+                    selected = themeMode == ThemeMode.DARK,
+                    accent = BloodRedPrimary,
+                    onClick = { onSetThemeMode(ThemeMode.DARK) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppearanceOption(
+    title: String,
+    selected: Boolean,
+    accent: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .testTag("appearance_option_${title.lowercase().replace(" ", "_")}"),
+        color = if (selected) accent.copy(alpha = 0.16f) else DjSurfaceElevated,
+        shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) accent else DjSurfaceBorder)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .background(if (selected) accent else Color.Transparent, CircleShape)
+                    .border(1.dp, accent, CircleShape)
+            )
+            Text(
+                title,
+                color = if (selected) TextPrimary else TextSecondary,
+                fontSize = 11.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+            )
         }
     }
 }

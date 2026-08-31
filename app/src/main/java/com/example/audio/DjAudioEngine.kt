@@ -48,6 +48,11 @@ class DjAudioEngine(private val context: Context) {
     var onNextTrackCallback: (() -> Unit)? = null
     var onPreviousTrackCallback: (() -> Unit)? = null
     var onStopCallback: (() -> Unit)? = null
+    var onNextTrackProvider: (() -> Track?)? = null
+    var onTrackStartedCallback: ((Track) -> Unit)? = null
+
+    @Volatile
+    private var completionInFlight = false
 
     private val scope = CoroutineScope(Dispatchers.Default)
     private var streamingJob: Job? = null
@@ -67,9 +72,6 @@ class DjAudioEngine(private val context: Context) {
 
     @Volatile
     private var isEngineReleased = false
-
-    // EQ applied to real audio in the DSP decode path
-    private val parametricEq = ParametricEq(44100)
 
     // Authoritative Playback State: initialized strictly in a paused/stopped state
     private val _isPlaying = MutableStateFlow(false)
@@ -100,13 +102,18 @@ class DjAudioEngine(private val context: Context) {
     private val _effectiveBpm = MutableStateFlow(126.0)
     val effectiveBpm = _effectiveBpm.asStateFlow()
 
-    private val _eqLow = MutableStateFlow(1.0f) // 0.0 to 2.0
+    private val eqPrefs = context.getSharedPreferences("soundsync_eq_prefs", Context.MODE_PRIVATE)
+
+    private val _eqEnabled = MutableStateFlow(eqPrefs.getBoolean("eq_enabled", true))
+    val eqEnabled = _eqEnabled.asStateFlow()
+
+    private val _eqLow = MutableStateFlow(eqPrefs.getFloat("eq_low", 1.0f).coerceIn(0f, 2f)) // 0.0 to 2.0
     val eqLow = _eqLow.asStateFlow()
 
-    private val _eqMid = MutableStateFlow(1.0f)
+    private val _eqMid = MutableStateFlow(eqPrefs.getFloat("eq_mid", 1.0f).coerceIn(0f, 2f))
     val eqMid = _eqMid.asStateFlow()
 
-    private val _eqHigh = MutableStateFlow(1.0f)
+    private val _eqHigh = MutableStateFlow(eqPrefs.getFloat("eq_high", 1.0f).coerceIn(0f, 2f))
     val eqHigh = _eqHigh.asStateFlow()
 
     private val _filterKnob = MutableStateFlow(0.5f) // 0.0 = Low Pass, 0.5 = Bypass, 1.0 = High Pass
@@ -131,6 +138,9 @@ class DjAudioEngine(private val context: Context) {
     private val _haasDelayMs = MutableStateFlow(HaasSurroundEffect.DEFAULT_DELAY_MS)
     val haasDelayMs = _haasDelayMs.asStateFlow()
 
+    private val _crossfadeSeconds = MutableStateFlow(0)
+    val crossfadeSeconds = _crossfadeSeconds.asStateFlow()
+
     init {
         Log.d(TAG, "DjAudioEngine initialized in PAUSED/IDLE state. Auto-play is strictly disabled.")
         // Restore persisted Haas settings
@@ -141,6 +151,10 @@ class DjAudioEngine(private val context: Context) {
         haasEffect.setEnabled(savedHaas.isEnabled)
         haasEffect.setAmount(savedHaas.amount)
         haasEffect.setDelayMs(savedHaas.delayMs)
+    }
+
+    fun setCrossfadeSeconds(seconds: Int) {
+        _crossfadeSeconds.value = seconds.coerceIn(0, 12)
     }
 
     /**
@@ -292,7 +306,9 @@ class DjAudioEngine(private val context: Context) {
 
         Log.d(TAG, "Explicit playback started by user for track: '${track.title}'")
         com.example.util.DjLogger.log("PLAYER_PLAY", "'${track.title}' by '${track.artist}'")
+        completionInFlight = false
         _isPlaying.value = true
+        onTrackStartedCallback?.invoke(track)
 
         try {
             com.example.service.MediaPlaybackService.startService(context)
@@ -312,6 +328,7 @@ class DjAudioEngine(private val context: Context) {
         Log.d(TAG, "Playback paused.")
         com.example.util.DjLogger.log("PLAYER_STOP", "Playback paused")
         _isPlaying.value = false
+        completionInFlight = false
         streamingJob?.cancel()
         streamingJob = null
         synthesisJob?.cancel()
@@ -350,10 +367,20 @@ class DjAudioEngine(private val context: Context) {
         // via AudioTrack.playbackRate, so pitch changes are picked up immediately.
     }
 
+    fun setEqEnabled(enabled: Boolean) {
+        _eqEnabled.value = enabled
+        eqPrefs.edit().putBoolean("eq_enabled", enabled).apply()
+    }
+
     fun setEq(low: Float, mid: Float, high: Float) {
         _eqLow.value = low.coerceIn(0f, 2f)
         _eqMid.value = mid.coerceIn(0f, 2f)
         _eqHigh.value = high.coerceIn(0f, 2f)
+        eqPrefs.edit()
+            .putFloat("eq_low", _eqLow.value)
+            .putFloat("eq_mid", _eqMid.value)
+            .putFloat("eq_high", _eqHigh.value)
+            .apply()
     }
 
     fun setFilter(value: Float) {
@@ -459,6 +486,8 @@ class DjAudioEngine(private val context: Context) {
             var extractor: MediaExtractor? = null
             var codec: MediaCodec? = null
             var audioTrack: AudioTrack? = null
+            var crossfadeNextTrack: Track? = null
+            var crossfadeNextDecoder: StereoPcmDecoder? = null
             try {
                 val ex = MediaExtractor()
                 extractor = ex
@@ -538,6 +567,29 @@ class DjAudioEngine(private val context: Context) {
                 _currentPositionMs.value = startMs
                 _currentPositionSec.value = (startMs / 1000).toInt()
                 _playbackProgress.value = if (durationMs > 0) (startMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+
+                // Prepare the next local decoder early enough for a genuine PCM crossfade.
+                // The same AudioTrack remains the only output device; the second decoder is
+                // used only as an in-memory source for the overlap window.
+                val crossfadeDurationMs = _crossfadeSeconds.value.coerceIn(0, 12) * 1000L
+                var crossfadeStarted = false
+                var nextOnlyPositionFrames = 0L
+                if (crossfadeDurationMs > 0L && _activeLoopBars.value == 0) {
+                    val candidate = onNextTrackProvider?.invoke()
+                    if (candidate != null && candidate.id != track.id && isUriAccessible(candidate.filePath)) {
+                        runCatching {
+                            val decoder = StereoPcmDecoder(context, candidate.filePath)
+                            if (decoder.sampleRate == sampleRate) {
+                                crossfadeNextTrack = candidate
+                                crossfadeNextDecoder = decoder
+                            } else {
+                                decoder.close()
+                            }
+                        }.onFailure { error ->
+                            Log.d(TAG, "Crossfade preparation skipped for '${candidate.title}': ${error.message}")
+                        }
+                    }
+                }
 
                 // DSP engine configured for the decoded sample rate
                 val eq = ParametricEq(sampleRate)
@@ -624,27 +676,92 @@ class DjAudioEngine(private val context: Context) {
                                 }
 
                                 if (filled > 0) {
-                                    // Apply parametric EQ
-                                    eq.lowGain = _eqLow.value
-                                    eq.midGain = _eqMid.value
-                                    eq.highGain = _eqHigh.value
-                                    eq.processStereo(pcmStereo, 0, filled)
+                                    val pts = bufferInfo.presentationTimeUs
+                                    val currentPtsMs = if (pts >= 0) (pts / 1000L).coerceIn(0L, durationMs) else _currentPositionMs.value
+                                    val transitionStartMs = (durationMs - crossfadeDurationMs).coerceAtLeast(0L)
 
-                                    // Apply Haas Surround effect
+                                    var crossfadePcm: ShortArray? = null
+                                    if (!crossfadeStarted && crossfadeNextDecoder != null &&
+                                        currentPtsMs >= transitionStartMs
+                                    ) {
+                                        // Do not change Now Playing state until the prepared decoder
+                                        // has actually produced PCM for the overlap.
+                                        crossfadePcm = crossfadeNextDecoder?.readFrames(filled)
+                                        if (!crossfadePcm.isNullOrEmpty()) {
+                                            crossfadeStarted = true
+                                            val nextTrack = crossfadeNextTrack
+                                            if (nextTrack != null) {
+                                                // Publish the next track at the audible transition point
+                                                // so artwork, waveform and metadata follow the mix.
+                                                _currentTrack.value = nextTrack
+                                                _currentPositionMs.value = 0L
+                                                _currentPositionSec.value = 0
+                                                _playbackProgress.value = 0f
+                                                onTrackStartedCallback?.invoke(nextTrack)
+                                            }
+                                        }
+                                    }
+
+                                    if (crossfadeStarted && crossfadeNextDecoder != null) {
+                                        val nextPcm = crossfadePcm ?: crossfadeNextDecoder?.readFrames(filled)
+                                        val nextFrames = (nextPcm?.size ?: 0) / 2
+                                        // A prepared decoder may still briefly have no output. Keep the
+                                        // current signal intact rather than fading into silence; the
+                                        // normal completion path will advance if the overlap is lost.
+                                        if (nextFrames > 0 && nextPcm != null) {
+                                            val progress = if (crossfadeDurationMs > 0L) {
+                                                ((currentPtsMs - transitionStartMs).toFloat() / crossfadeDurationMs.toFloat()).coerceIn(0f, 1f)
+                                            } else {
+                                                1f
+                                            }
+                                            val currentGain = (1f - progress)
+                                            val nextGain = progress
+                                            for (i in 0 until filled) {
+                                                // If the next decoder returns fewer frames than the
+                                                // current block, leave the remaining current samples
+                                                // untouched instead of mixing them with zero.
+                                                if (i >= nextFrames) continue
+                                                val nextIndex = i * 2
+                                                val nextLeft = nextPcm[nextIndex].toInt()
+                                                val nextRight = nextPcm[nextIndex + 1].toInt()
+                                                pcmStereo[nextIndex] = (
+                                                    pcmStereo[nextIndex].toInt() * currentGain + nextLeft * nextGain
+                                                ).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                                                pcmStereo[nextIndex + 1] = (
+                                                    pcmStereo[nextIndex + 1].toInt() * currentGain + nextRight * nextGain
+                                                ).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                                            }
+                                            nextOnlyPositionFrames += nextFrames
+                                            val nextTrack = crossfadeNextTrack
+                                            if (nextTrack != null) {
+                                                val nextDurationMs = nextTrack.durationSeconds.coerceAtLeast(1) * 1000L
+                                                val nextPositionMs = (nextOnlyPositionFrames * 1000L / sampleRate).coerceAtMost(nextDurationMs)
+                                                _currentPositionMs.value = nextPositionMs
+                                                _currentPositionSec.value = (nextPositionMs / 1000L).toInt()
+                                                _playbackProgress.value = (nextPositionMs.toFloat() / nextDurationMs.toFloat()).coerceIn(0f, 1f)
+                                            }
+                                        }
+                                    }
+
+                                    // Apply the shared DSP chain after mixing both sources so
+                                    // EQ/Haas affect the complete audible signal.
+                                    if (_eqEnabled.value) {
+                                        eq.lowGain = _eqLow.value
+                                        eq.midGain = _eqMid.value
+                                        eq.highGain = _eqHigh.value
+                                        eq.processStereo(pcmStereo, 0, filled)
+                                    }
                                     if (haasEffect.isActive) {
-                                        haasEffect.process(pcmStereo, 0, filled)
+                                        haasEffect.process(pcmStereo, 0, filled, sampleRate)
                                     }
 
                                     // Write decoded+processed PCM (blocks -> backpressure)
                                     audioTrack.write(pcmStereo, 0, filled * 2)
 
-                                    // Track position from the media PTS (source of truth)
-                                    val pts = bufferInfo.presentationTimeUs
-                                    if (pts >= 0) {
-                                        val posMs = (pts / 1000L).coerceIn(0L, durationMs)
-                                        _currentPositionMs.value = posMs
-                                        _currentPositionSec.value = (posMs / 1000).toInt()
-                                        _playbackProgress.value = if (durationMs > 0) (posMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                                    if (!crossfadeStarted) {
+                                        _currentPositionMs.value = currentPtsMs
+                                        _currentPositionSec.value = (currentPtsMs / 1000L).toInt()
+                                        _playbackProgress.value = if (durationMs > 0) (currentPtsMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
                                     }
 
                                     // Refresh pitch (applied via playback rate)
@@ -676,15 +793,40 @@ class DjAudioEngine(private val context: Context) {
                         }
                     }
 
-                    if (inputEos && outputEos) {
-                        if (onNextTrackCallback != null) {
-                            Log.d(TAG, "Streaming playback completed, auto-advancing.")
-                            pause()
-                            onNextTrackCallback?.invoke()
-                        } else {
-                            pause()
-                            seekToSecond(0)
+                    if (inputEos && outputEos && crossfadeStarted && crossfadeNextDecoder != null) {
+                        val nextPcm = crossfadeNextDecoder?.readFrames(pcmStereo.size / 2)
+                        val nextFrames = (nextPcm?.size ?: 0) / 2
+                        if (nextFrames > 0) {
+                            java.lang.System.arraycopy(nextPcm!!, 0, pcmStereo, 0, nextFrames * 2)
+                            if (_eqEnabled.value) {
+                                eq.lowGain = _eqLow.value
+                                eq.midGain = _eqMid.value
+                                eq.highGain = _eqHigh.value
+                                eq.processStereo(pcmStereo, 0, nextFrames)
+                            }
+                            if (haasEffect.isActive) haasEffect.process(pcmStereo, 0, nextFrames, sampleRate)
+                            audioTrack.write(pcmStereo, 0, nextFrames * 2)
+                            nextOnlyPositionFrames += nextFrames
+                            val nextTrack = crossfadeNextTrack
+                            if (nextTrack != null) {
+                                val nextDurationMs = nextTrack.durationSeconds.coerceAtLeast(1) * 1000L
+                                val nextPositionMs = (nextOnlyPositionFrames * 1000L / sampleRate).coerceAtMost(nextDurationMs)
+                                _currentPositionMs.value = nextPositionMs
+                                _currentPositionSec.value = (nextPositionMs / 1000L).toInt()
+                                _playbackProgress.value = (nextPositionMs.toFloat() / nextDurationMs.toFloat()).coerceIn(0f, 1f)
+                            }
+                            continue
                         }
+                        crossfadeNextDecoder?.close()
+                        crossfadeNextDecoder = null
+                    }
+
+                    if (inputEos && outputEos && !completionInFlight) {
+                        completionInFlight = true
+                        Log.d(TAG, "Streaming playback completed, auto-advancing.")
+                        _isPlaying.value = false
+                        streamingTrack?.let { output -> runCatching { output.pause() } }
+                        onNextTrackCallback?.invoke()
                         break
                     }
                 }
@@ -692,10 +834,16 @@ class DjAudioEngine(private val context: Context) {
                 throw c
             } catch (e: Exception) {
                 Log.e(TAG, "Streaming playback error for '${_currentTrack.value?.title}': ${e.message}", e)
+                if (_isPlaying.value && !completionInFlight) {
+                    completionInFlight = true
+                    _isPlaying.value = false
+                    onNextTrackCallback?.invoke()
+                }
             } finally {
                 try { codec?.stop() } catch (ignored: Exception) {}
                 try { codec?.release() } catch (ignored: Exception) {}
                 try { extractor?.release() } catch (ignored: Exception) {}
+                try { crossfadeNextDecoder?.close() } catch (ignored: Exception) {}
                 if (streamingTrack === audioTrack) {
                     streamingTrack = null
                 }
@@ -705,6 +853,122 @@ class DjAudioEngine(private val context: Context) {
                     audioTrack?.release()
                 } catch (ignored: Exception) {}
             }
+        }
+    }
+
+    /**
+     * Small pull decoder used only for the overlap source of a crossfade. It never
+     * creates an output device; decoded PCM is mixed into the current AudioTrack.
+     */
+    private class StereoPcmDecoder(
+        private val context: Context,
+        private val uriOrPath: String
+    ) {
+        private val extractor = MediaExtractor()
+        private val codec: MediaCodec
+        val sampleRate: Int
+        private val channelCount: Int
+        private var inputEos = false
+        private var outputEos = false
+        private var pending = ShortArray(0)
+        private var pendingOffset = 0
+
+        init {
+            if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
+                extractor.setDataSource(context, Uri.parse(uriOrPath), null)
+            } else {
+                extractor.setDataSource(uriOrPath)
+            }
+            var audioIndex = -1
+            var format: MediaFormat? = null
+            for (i in 0 until extractor.trackCount) {
+                val candidate = extractor.getTrackFormat(i)
+                if ((candidate.getString(MediaFormat.KEY_MIME) ?: "").startsWith("audio/")) {
+                    audioIndex = i
+                    format = candidate
+                    break
+                }
+            }
+            require(audioIndex >= 0 && format != null) { "No audio track found" }
+            extractor.selectTrack(audioIndex)
+            sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+            channelCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+            codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME) ?: "audio/mp4")
+            codec.configure(format, null, null, 0)
+            codec.start()
+        }
+
+        fun readFrames(maxFrames: Int): ShortArray? {
+            if (pendingOffset < pending.size) {
+                val frames = min(maxFrames, (pending.size - pendingOffset) / 2)
+                val result = pending.copyOfRange(pendingOffset, pendingOffset + frames * 2)
+                pendingOffset += frames * 2
+                return result
+            }
+            pending = ShortArray(0)
+            pendingOffset = 0
+
+            repeat(8) {
+                if (!inputEos) {
+                    val inputIndex = codec.dequeueInputBuffer(TIMEOUT_US)
+                    if (inputIndex >= 0) {
+                        val inputBuffer = codec.getInputBuffer(inputIndex)
+                        if (inputBuffer != null) {
+                            val size = extractor.readSampleData(inputBuffer, 0)
+                            if (size < 0) {
+                                codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputEos = true
+                            } else {
+                                codec.queueInputBuffer(inputIndex, 0, size, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                }
+
+                val info = MediaCodec.BufferInfo()
+                val outputIndex = codec.dequeueOutputBuffer(info, TIMEOUT_US)
+                if (outputIndex >= 0) {
+                    val outputBuffer = codec.getOutputBuffer(outputIndex)
+                    var result: ShortArray? = null
+                    if (outputBuffer != null && info.size > 0 && (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                        outputBuffer.position(info.offset)
+                        outputBuffer.limit(info.offset + info.size)
+                        outputBuffer.order(ByteOrder.LITTLE_ENDIAN)
+                        val shorts = outputBuffer.asShortBuffer()
+                        val frames = shorts.remaining() / channelCount.coerceAtLeast(1)
+                        val stereo = ShortArray(frames * 2)
+                        for (frame in 0 until frames) {
+                            val left = shorts.get()
+                            val right = if (channelCount > 1 && shorts.hasRemaining()) shorts.get() else left
+                            repeat((channelCount - 2).coerceAtLeast(0)) {
+                                if (shorts.hasRemaining()) shorts.get()
+                            }
+                            stereo[frame * 2] = left
+                            stereo[frame * 2 + 1] = right
+                        }
+                        result = if (stereo.size > maxFrames * 2) {
+                            pending = stereo
+                            val taken = pending.copyOfRange(0, maxFrames * 2)
+                            pendingOffset = maxFrames * 2
+                            taken
+                        } else {
+                            stereo
+                        }
+                    }
+                    codec.releaseOutputBuffer(outputIndex, false)
+                    if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputEos = true
+                    if (result != null && result.isNotEmpty()) return result
+                }
+                if (outputEos) return null
+            }
+            return null
+        }
+
+        fun close() {
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+            runCatching { extractor.release() }
         }
     }
 
@@ -766,6 +1030,8 @@ class DjAudioEngine(private val context: Context) {
                 val stereoBuffer = ShortArray(bufferSize)
                 var phase = 0.0
                 var step = 0
+                var syntheticPositionMs = _currentPositionMs.value
+                val eq = ParametricEq(sampleRate)
 
                 while (isActive && _isPlaying.value && !isEngineReleased) {
                     val track = _currentTrack.value ?: break
@@ -783,11 +1049,11 @@ class DjAudioEngine(private val context: Context) {
                         var sample = 0.0
                         if (isKickTime) {
                             val kickPitch = 120.0 * (1.0 - (beatPos.toDouble() / (sampleRate * 0.15)))
-                            sample += sin(2.0 * PI * kickPitch * (beatPos.toDouble() / sampleRate)) * _eqLow.value * 0.8
+                            sample += sin(2.0 * PI * kickPitch * (beatPos.toDouble() / sampleRate)) * 0.8
                         }
                         if (isHatTime) {
                             val noise = (kotlin.random.Random.nextFloat() - 0.5) * 2.0
-                            sample += noise * _eqHigh.value * 0.3
+                            sample += noise * 0.3
                         }
 
                         // Melodic bassline
@@ -799,7 +1065,7 @@ class DjAudioEngine(private val context: Context) {
                         }
                         phase += 2.0 * PI * rootFreq / sampleRate
                         if (phase > 2.0 * PI) phase -= 2.0 * PI
-                        sample += sin(phase) * 0.25 * _eqMid.value
+                        sample += sin(phase) * 0.25
 
                         // Filter effect
                         val filter = _filterKnob.value
@@ -820,9 +1086,17 @@ class DjAudioEngine(private val context: Context) {
                         stereoBuffer[i * 2 + 1] = monoBuffer[i]
                     }
 
-                    // Apply Haas Surround Effect on stereo buffer (cross-channel delay)
+                    // Apply the same real PCM DSP chain used by decoded files.
+                    // EQ bypass leaves the generated signal untouched; parameter changes
+                    // are picked up on the next audio buffer without restarting playback.
+                    if (_eqEnabled.value) {
+                        eq.lowGain = _eqLow.value
+                        eq.midGain = _eqMid.value
+                        eq.highGain = _eqHigh.value
+                        eq.processStereo(stereoBuffer, 0, monoBuffer.size)
+                    }
                     if (haasEffect.isActive) {
-                        haasEffect.process(stereoBuffer, 0, monoBuffer.size)
+                        haasEffect.process(stereoBuffer, 0, monoBuffer.size, sampleRate)
                     }
 
                     synchronized(audioTrackLock) {
@@ -831,27 +1105,31 @@ class DjAudioEngine(private val context: Context) {
                         }
                     }
 
-                    // Advance track position safely
+                    // Advance using the number of samples written, not an unrelated timer.
                     val duration = track.durationSeconds.coerceAtLeast(1)
-                    val newSec = _currentPositionSec.value + 1
+                    syntheticPositionMs += monoBuffer.size * 1000L / sampleRate
+                    val newSec = (syntheticPositionMs / 1000L).toInt()
+                    _currentPositionMs.value = syntheticPositionMs.coerceAtMost(duration * 1000L)
+                    _currentPositionSec.value = newSec
+                    _playbackProgress.value = (_currentPositionMs.value.toFloat() / (duration * 1000L)).coerceIn(0f, 1f)
                     if (_activeLoopBars.value > 0) {
                         val loopLengthSec = (_activeLoopBars.value * 4 * 60 / currentBpm).toInt().coerceAtLeast(2)
                         val startLoopSec = activeCueSeconds
                         if (newSec >= startLoopSec + loopLengthSec) {
+                            syntheticPositionMs = startLoopSec * 1000L
                             seekToSecond(startLoopSec)
-                        } else {
-                            seekToSecond(newSec)
                         }
-                    } else {
-                        if (newSec >= duration) {
-                            seekToSecond(0)
-                            pause()
-                        } else {
-                            seekToSecond(newSec)
+                    } else if (syntheticPositionMs >= duration * 1000L) {
+                        if (!completionInFlight) {
+                            completionInFlight = true
+                            _isPlaying.value = false
+                            runCatching { localTrack?.pause() }
+                            onNextTrackCallback?.invoke()
                         }
+                        break
                     }
 
-                    delay(300)
+                    delay(20)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Audio synthesis error: ${e.message}", e)

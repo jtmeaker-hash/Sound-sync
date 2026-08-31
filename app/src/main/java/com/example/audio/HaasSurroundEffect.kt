@@ -36,10 +36,11 @@ class HaasSurroundEffect {
         const val MAX_AMOUNT = 1f
         const val DEFAULT_AMOUNT = 0.5f
 
-        // Max sample rate assumed for buffer sizing
-        private const val MAX_SAMPLE_RATE = 48000
-        // Max delay in samples = 12ms at 48kHz = 576 samples
-        private const val MAX_DELAY_SAMPLES = (MAX_DELAY_MS / 1000f * MAX_SAMPLE_RATE).toInt() + 1
+        // Size for the highest common Android PCM rate; process() still uses the
+        // decoder's actual rate so the requested delay remains accurate.
+        private const val MAX_SAMPLE_RATE = 96000
+        // 12 ms at 96 kHz, plus one sample for the ring-buffer boundary.
+        private const val MAX_DELAY_SAMPLES = 1153
 
         private const val PREFS_NAME = "soundsync_haas_prefs"
         private const val KEY_ENABLED = "haas_enabled"
@@ -82,6 +83,7 @@ class HaasSurroundEffect {
     private var writePos = 0
 
     // Smoothed parameters (for click-free transitions)
+    @Volatile private var configuredAmount = DEFAULT_AMOUNT
     @Volatile private var targetAmount = 0f
     @Volatile private var targetDelayMs = 0f
     @Volatile private var currentAmount = 0f
@@ -97,14 +99,19 @@ class HaasSurroundEffect {
 
     fun setEnabled(enabled: Boolean) {
         isEnabled = enabled
+        // Restore the user's configured amount when re-enabling. Previously a
+        // disable set the target to zero permanently, making Haas appear dead
+        // after an A/B toggle.
+        targetAmount = if (enabled) configuredAmount else 0f
         if (!enabled) {
-            // Smoothly fade amount to 0 to avoid clicks
-            targetAmount = 0f
+            // Bypass is a true DSP bypass: no residual wet signal is emitted.
+            currentAmount = 0f
         }
     }
 
     fun setAmount(amount: Float) {
-        targetAmount = amount.coerceIn(MIN_AMOUNT, MAX_AMOUNT)
+        configuredAmount = amount.coerceIn(MIN_AMOUNT, MAX_AMOUNT)
+        targetAmount = configuredAmount
     }
 
     fun setDelayMs(delayMs: Float) {
@@ -119,57 +126,42 @@ class HaasSurroundEffect {
      * @param offset Start offset in the buffer
      * @param frameCount Number of stereo frames to process
      */
-    fun process(buffer: ShortArray, offset: Int, frameCount: Int) {
-        if (!isEnabled && currentAmount < 0.001f) return
+    fun process(buffer: ShortArray, offset: Int, frameCount: Int, sampleRate: Int = 48000) {
+        if (!isEnabled) return
 
-        val sampleRate = MAX_SAMPLE_RATE.toFloat()
-        val halfAmount = currentAmount * 0.5f  // Prevent gain buildup: max wet contribution is half
+        val safeSampleRate = sampleRate.coerceIn(8000, MAX_SAMPLE_RATE).toFloat()
 
         for (i in 0 until frameCount) {
             val idx = offset + i * 2
             if (idx + 1 >= buffer.size) break
 
-            // Smooth parameter transitions
+            // Smooth the live parameters before deciding whether this frame is wet.
+            // This is important when enabling the effect: returning while currentAmount
+            // is still zero would prevent it from ever ramping up.
             currentAmount += (targetAmount - currentAmount) * amountSmoothingRate
             currentDelayMs += (targetDelayMs - currentDelayMs) * delaySmoothingRate
 
-            val currentHalfAmount = currentAmount * 0.5f
-            val delaySamples = (currentDelayMs / 1000f * sampleRate).toInt().coerceIn(0, MAX_DELAY_SAMPLES)
-
             val leftIn = buffer[idx].toInt()
             val rightIn = buffer[idx + 1].toInt()
-
-            if (delaySamples == 0 || currentHalfAmount < 0.001f) {
-                // No delay or negligible effect — pass through
-                // Re-apply smoothing to target for next iteration
-                continue
-            }
-
-            // Read delayed samples from ring buffer
+            val delaySamples = (currentDelayMs / 1000f * safeSampleRate)
+                .toInt()
+                .coerceIn(0, MAX_DELAY_SAMPLES)
             val readPos = (writePos - delaySamples + leftDelayBuffer.size) % leftDelayBuffer.size
             val leftDelayed = leftDelayBuffer[readPos].toInt()
             val rightDelayed = rightDelayBuffer[readPos].toInt()
+            val wet = (currentAmount * 0.5f).coerceIn(0f, 0.5f)
 
-            // Haas effect: mix delayed version into the OPPOSITE channel for width
-            // Left output = Left dry + (Right delayed * wet)
-            // Right output = Right dry + (Left delayed * wet)
-            // This creates stereo width by adding delayed cross-channel signal
-            val leftOut = (leftIn * (1f - currentHalfAmount) + rightDelayed * currentHalfAmount).toInt()
-            val rightOut = (rightIn * (1f - currentHalfAmount) + leftDelayed * currentHalfAmount).toInt()
+            val leftOut = (leftIn * (1f - wet) + rightDelayed * wet).toInt()
+            val rightOut = (rightIn * (1f - wet) + leftDelayed * wet).toInt()
 
-            // Soft-clip to prevent overflow
             buffer[idx] = leftOut.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
             buffer[idx + 1] = rightOut.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
 
-            // Write current samples to delay buffer
-            leftDelayBuffer[writePos] = buffer[idx]
-            rightDelayBuffer[writePos] = buffer[idx + 1]
+            // Keep the delay line fed with dry input. This avoids feedback and keeps
+            // the original stereo image intact at 0% effect.
+            leftDelayBuffer[writePos] = leftIn.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            rightDelayBuffer[writePos] = rightIn.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
             writePos = (writePos + 1) % leftDelayBuffer.size
-        }
-
-        // Check if we've fully faded out (for auto-disable)
-        if (!isEnabled && currentAmount < 0.001f) {
-            currentAmount = 0f
         }
     }
 
@@ -181,6 +173,7 @@ class HaasSurroundEffect {
         rightDelayBuffer.fill(0)
         writePos = 0
         currentAmount = 0f
+        targetAmount = if (isEnabled) configuredAmount else 0f
         currentDelayMs = targetDelayMs
     }
 
@@ -188,5 +181,5 @@ class HaasSurroundEffect {
      * Returns true if the effect is actively processing audio.
      */
     val isActive: Boolean
-        get() = isEnabled || currentAmount > 0.001f
+        get() = isEnabled && (targetAmount > 0.001f || currentAmount > 0.001f)
 }

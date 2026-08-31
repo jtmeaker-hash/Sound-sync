@@ -72,8 +72,10 @@ import com.example.ui.components.ApiConfigDialog
 import com.example.ui.components.DjMiniPlayer
 import com.example.ui.components.GoogleDriveBrowserView
 import com.example.ui.components.LocalMusicView
+import com.example.ui.components.FilePropertiesDialog
 import com.example.ui.components.NowPlayingFullScreen
 import com.example.ui.components.NowPlayingModalSheet
+import com.example.ui.components.NowPlayingSettingsSheet
 import com.example.ui.components.OperationsAndCloudView
 import com.example.ui.components.UpdateDialog
 import android.app.Activity
@@ -98,6 +100,7 @@ import com.example.ui.theme.NeonRed
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.ThemeMode
 
 @Composable
 fun MainDjScreen(
@@ -126,6 +129,7 @@ fun MainDjScreen(
     val analysisProgressPercent by viewModel.analysisProgressPercent.collectAsState()
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
     val showApiConfigDialog by viewModel.showApiConfigDialog.collectAsState()
+    val inspectingTrackForProperties by viewModel.inspectingTrackForProperties.collectAsState()
 
     // Spotify States
     val spotifyAuthState by viewModel.spotifyAuthState.collectAsState()
@@ -158,6 +162,7 @@ fun MainDjScreen(
     val currentPositionMs by viewModel.currentPositionMs.collectAsState()
 
     // EQ & Haas Audio Effect States
+    val eqEnabled by viewModel.audioEngine.eqEnabled.collectAsState()
     val eqLow by viewModel.audioEngine.eqLow.collectAsState()
     val eqMid by viewModel.audioEngine.eqMid.collectAsState()
     val eqHigh by viewModel.audioEngine.eqHigh.collectAsState()
@@ -175,6 +180,9 @@ fun MainDjScreen(
     val isNowPlayingExpanded by viewModel.isNowPlayingExpanded.collectAsState()
     val waveformData by viewModel.waveformData.collectAsState()
     val isWaveformLoading by viewModel.isWaveformLoading.collectAsState()
+    val themeMode by viewModel.themeMode.collectAsState()
+    val crossfadeSeconds by viewModel.crossfadeSeconds.collectAsState()
+    var showNowPlayingSettings by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -242,7 +250,7 @@ fun MainDjScreen(
                     )
                 }
 
-                // Bottom Navigation (Local, SoundCloud, Spotify, Spectrogram, DJ Tools)
+                // Bottom Navigation (Local, SoundCloud, Spotify, Spectrogram, Settings)
                 DjBottomNavigationBar(
                     selectedTab = selectedTab,
                     onTabSelected = { viewModel.selectTab(it) }
@@ -386,7 +394,7 @@ fun MainDjScreen(
                             onBack = { viewModel.closeGoogleDriveBrowser() },
                             onNavigateBreadcrumb = { viewModel.navigateDriveBreadcrumb(it) },
                             onOpenFolder = { id, name -> viewModel.openDriveFolder(id, name) },
-                            onPlayTrack = { viewModel.playDriveTrack(it) },
+                            onPlayTrack = { viewModel.playDriveTrackFromListing(it) },
                             onDownloadTrack = { viewModel.downloadDriveTrack(it) },
                             onCancelDownload = { viewModel.cancelDriveDownload(it) },
                             onSyncEntireFolder = { viewModel.syncEntireDriveFolder() },
@@ -417,7 +425,9 @@ fun MainDjScreen(
                             onCancelScan = { viewModel.cancelScanService() },
                             onOpenGoogleDrive = { viewModel.openGoogleDriveBrowser() },
                             onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
-                            onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() }
+                            onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() },
+                            themeMode = themeMode,
+                            onSetThemeMode = { viewModel.setThemeMode(it) }
                         )
                     }
                 }
@@ -450,6 +460,21 @@ fun MainDjScreen(
                 )
             }
 
+            // Track metadata inspector
+            inspectingTrackForProperties?.let { inspectedTrack ->
+                FilePropertiesDialog(
+                    track = inspectedTrack,
+                    onDismiss = { viewModel.closeTrackProperties() },
+                    onSave = { viewModel.saveTrackProperties(it) },
+                    onAutoTag = { viewModel.autoTagSingleTrack(it) },
+                    onInspectSpectrogram = {
+                        viewModel.closeTrackProperties()
+                        viewModel.inspectTrackSpectrogram(it, showTab = true)
+                    },
+                    onDelete = { viewModel.deleteTrack(it) }
+                )
+            }
+
             // Full-Screen Now Playing Page
             AnimatedVisibility(
                 visible = isNowPlayingExpanded && playingTrack != null,
@@ -465,9 +490,11 @@ fun MainDjScreen(
                         isPlaying = isPlaying,
                         currentPositionMs = currentPositionMs,
                         durationMs = if (playingTrack!!.durationSeconds > 0) playingTrack!!.durationSeconds * 1000L else 0L,
+                        eqEnabled = eqEnabled,
                         eqLow = eqLow,
                         eqMid = eqMid,
                         eqHigh = eqHigh,
+                        onSetEqEnabled = { viewModel.audioEngine.setEqEnabled(it) },
                         onSetEqLow = { viewModel.audioEngine.setEq(it, eqMid, eqHigh) },
                         onSetEqMid = { viewModel.audioEngine.setEq(eqLow, it, eqHigh) },
                         onSetEqHigh = { viewModel.audioEngine.setEq(eqLow, eqMid, it) },
@@ -484,9 +511,18 @@ fun MainDjScreen(
                         onSeekToMs = { ms -> viewModel.seekToMs(ms) },
                         onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
                         onSetDisplayMode = { mode -> viewModel.setNowPlayingDisplayMode(mode) },
+                        onOpenSettings = { showNowPlayingSettings = true },
                         onOpenProperties = { track -> viewModel.openTrackProperties(track) }
                     )
                 }
+            }
+
+            if (showNowPlayingSettings) {
+                NowPlayingSettingsSheet(
+                    crossfadeSeconds = crossfadeSeconds,
+                    onCrossfadeSecondsChange = { viewModel.setCrossfadeSeconds(it) },
+                    onDismiss = { showNowPlayingSettings = false }
+                )
             }
         }
     }
@@ -739,7 +775,7 @@ private fun DjBottomNavigationBar(
             Triple(DjTab.SOUNDCLOUD, "SoundCloud", Icons.Default.Cloud),
             Triple(DjTab.SPOTIFY, "Spotify", Icons.Default.LibraryMusic),
             Triple(DjTab.SPECTROGRAM, "Spectrum", Icons.Default.GraphicEq),
-            Triple(DjTab.OPERATIONS, "DJ Tools", Icons.Default.Storage)
+            Triple(DjTab.OPERATIONS, "Settings", Icons.Default.Settings)
         )
 
         tabs.forEach { (tab, title, icon) ->

@@ -15,10 +15,13 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.MainDjScreen
 import com.example.ui.MainDjViewModel
 import com.example.ui.theme.SoundSyncTheme
+import com.example.ui.theme.ThemeMode
 import com.example.util.DjLogger
 
 class MainActivity : ComponentActivity() {
@@ -55,8 +58,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            SoundSyncTheme {
-                val viewModel: MainDjViewModel = viewModel()
+            val viewModel: MainDjViewModel = viewModel()
+            val themeMode by viewModel.themeMode.collectAsState()
+
+            SoundSyncTheme(themeMode = themeMode) {
                 activeViewModel = viewModel
 
                 // Handle incoming OAuth callback URIs if any

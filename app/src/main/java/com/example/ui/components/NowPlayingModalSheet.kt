@@ -19,9 +19,11 @@ fun NowPlayingModalSheet(
     currentPositionMs: Long,
     durationMs: Long,
     // EQ parameters
+    eqEnabled: Boolean = true,
     eqLow: Float = 1f,
     eqMid: Float = 1f,
     eqHigh: Float = 1f,
+    onSetEqEnabled: (Boolean) -> Unit = {},
     onSetEqLow: (Float) -> Unit = {},
     onSetEqMid: (Float) -> Unit = {},
     onSetEqHigh: (Float) -> Unit = {},
@@ -39,6 +41,7 @@ fun NowPlayingModalSheet(
     onSeekToMs: (Long) -> Unit,
     onToggleDisplayMode: () -> Unit,
     onSetDisplayMode: (NowPlayingDisplayMode) -> Unit,
+    onOpenSettings: () -> Unit = {},
     onOpenProperties: (Track) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -50,9 +53,11 @@ fun NowPlayingModalSheet(
         isPlaying = isPlaying,
         currentPositionMs = currentPositionMs,
         durationMs = durationMs,
+        eqEnabled = eqEnabled,
         eqLow = eqLow,
         eqMid = eqMid,
         eqHigh = eqHigh,
+        onSetEqEnabled = onSetEqEnabled,
         onSetEqLow = onSetEqLow,
         onSetEqMid = onSetEqMid,
         onSetEqHigh = onSetEqHigh,
@@ -69,6 +74,7 @@ fun NowPlayingModalSheet(
         onSeekToMs = onSeekToMs,
         onToggleDisplayMode = onToggleDisplayMode,
         onSetDisplayMode = onSetDisplayMode,
+        onOpenSettings = onOpenSettings,
         onOpenProperties = onOpenProperties,
         modifier = modifier
     )

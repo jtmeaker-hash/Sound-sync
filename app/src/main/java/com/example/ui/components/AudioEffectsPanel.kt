@@ -53,9 +53,11 @@ import com.example.ui.theme.TextSecondary
 @Composable
 fun AudioEffectsPanel(
     // EQ state
+    eqEnabled: Boolean = true,
     eqLow: Float,
     eqMid: Float,
     eqHigh: Float,
+    onSetEqEnabled: (Boolean) -> Unit = {},
     onSetEqLow: (Float) -> Unit,
     onSetEqMid: (Float) -> Unit,
     onSetEqHigh: (Float) -> Unit,
@@ -110,13 +112,30 @@ fun AudioEffectsPanel(
                     .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = "EQ",
-                    color = TextSecondary,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "EQ",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Switch(
+                        checked = eqEnabled,
+                        onCheckedChange = onSetEqEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = NeonGreen,
+                            uncheckedThumbColor = TextMuted,
+                            uncheckedTrackColor = DjSurfaceCard
+                        ),
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
 
                 // LOW band
                 EqSliderRow(

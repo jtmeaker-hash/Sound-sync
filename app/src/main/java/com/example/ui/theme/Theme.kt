@@ -5,36 +5,38 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val DjProColorScheme = darkColorScheme(
-  primary = DeckACyan,
-  onPrimary = DjObsidian,
-  primaryContainer = DjSurfaceElevated,
-  onPrimaryContainer = DeckACyan,
-  secondary = DeckBPink,
-  onSecondary = Color.White,
-  secondaryContainer = DjSurfaceElevated,
-  onSecondaryContainer = DeckBPink,
-  tertiary = NeonGreen,
-  onTertiary = DjObsidian,
-  background = DjObsidian,
-  onBackground = TextPrimary,
-  surface = DjSurfaceDark,
-  onSurface = TextPrimary,
-  surfaceVariant = DjSurfaceCard,
-  onSurfaceVariant = TextSecondary,
-  outline = DjSurfaceBorder,
-  error = NeonRed,
-  onError = Color.White
-)
-
 @Composable
 fun SoundSyncTheme(
+  themeMode: ThemeMode = ThemeMode.CURRENT,
   content: @Composable () -> Unit,
 ) {
+  setActiveAppearancePalette(themeMode)
+
+  val colorScheme = darkColorScheme(
+    primary = if (themeMode == ThemeMode.DARK) BloodRedPrimary else DeckACyan,
+    onPrimary = if (themeMode == ThemeMode.DARK) Color.White else DjObsidian,
+    primaryContainer = DjSurfaceElevated,
+    onPrimaryContainer = if (themeMode == ThemeMode.DARK) BloodRedPrimary else DeckACyan,
+    secondary = DeckBPink,
+    onSecondary = Color.White,
+    secondaryContainer = DjSurfaceElevated,
+    onSecondaryContainer = DeckBPink,
+    tertiary = NeonGreen,
+    onTertiary = DjObsidian,
+    background = DjObsidian,
+    onBackground = TextPrimary,
+    surface = DjSurfaceDark,
+    onSurface = TextPrimary,
+    surfaceVariant = DjSurfaceCard,
+    onSurfaceVariant = TextSecondary,
+    outline = DjSurfaceBorder,
+    error = NeonRed,
+    onError = Color.White
+  )
+
   MaterialTheme(
-    colorScheme = DjProColorScheme,
+    colorScheme = colorScheme,
     typography = Typography,
     content = content
   )
 }
-
