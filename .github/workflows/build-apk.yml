@@ -149,11 +149,16 @@ jobs:
             echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > release.keystore
             echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/release.keystore" >> $GITHUB_ENV
           elif [ -f "debug.keystore.base64" ]; then
-            echo "Warning: Using repository keystore for signing..."
+            echo "Decoding repository keystore for signing..."
             base64 -d debug.keystore.base64 > release.keystore
             echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/release.keystore" >> $GITHUB_ENV
           elif [ -f "debug.keystore" ]; then
-            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/debug.keystore" >> $GITHUB_ENV
+            cp debug.keystore release.keystore
+            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/release.keystore" >> $GITHUB_ENV
+          else
+            echo "Generating fallback keystore..."
+            keytool -genkey -v -keystore release.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/release.keystore" >> $GITHUB_ENV
           fi
 
           if [ ! -f ".env" ]; then

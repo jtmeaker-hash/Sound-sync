@@ -41,6 +41,8 @@ android {
         val fallbackDebug = file("${rootDir}/debug.keystore")
         if (fallbackDebug.exists()) {
           storeFile = fallbackDebug
+        } else {
+          storeFile = file("${rootDir}/release.keystore")
         }
       }
       storePassword = project.findProperty("STORE_PASSWORD")?.toString()
