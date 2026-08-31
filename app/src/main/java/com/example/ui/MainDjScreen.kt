@@ -61,10 +61,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.model.FileOperationType
+import com.example.model.NowPlayingDisplayMode
 import com.example.model.Track
 import com.example.ui.components.ApiConfigDialog
 import com.example.ui.components.DjMiniPlayer
 import com.example.ui.components.LocalMusicView
+import com.example.ui.components.NowPlayingModalSheet
 import com.example.ui.components.OperationsAndCloudView
 import com.example.ui.components.SoundCloudTab
 import com.example.ui.components.SoundCloudOrange
@@ -135,6 +137,13 @@ fun MainDjScreen(
     val isPlaying by viewModel.audioEngine.isPlaying.collectAsState()
     val currentPosSec by viewModel.audioEngine.currentPositionSec.collectAsState()
     val playbackProgress by viewModel.audioEngine.playbackProgress.collectAsState()
+    val currentPositionMs by viewModel.currentPositionMs.collectAsState()
+
+    // Now Playing Display Mode & Waveform States
+    val nowPlayingDisplayMode by viewModel.nowPlayingDisplayMode.collectAsState()
+    val isNowPlayingExpanded by viewModel.isNowPlayingExpanded.collectAsState()
+    val waveformData by viewModel.waveformData.collectAsState()
+    val isWaveformLoading by viewModel.isWaveformLoading.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -188,13 +197,17 @@ fun MainDjScreen(
                 playingTrack?.let { track ->
                     DjMiniPlayer(
                         track = track,
+                        displayMode = nowPlayingDisplayMode,
+                        waveformData = waveformData,
                         isPlaying = isPlaying,
-                        currentPositionSec = currentPosSec,
-                        playbackProgress = playbackProgress,
+                        currentPositionMs = currentPositionMs,
+                        durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L,
                         onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
-                        onOpenSpectrogram = {
-                            viewModel.inspectTrackSpectrogram(track, showTab = true)
-                        }
+                        onPreviousTrack = { viewModel.previousTrack() },
+                        onNextTrack = { viewModel.nextTrack() },
+                        onSeekToMs = { ms -> viewModel.seekToMs(ms) },
+                        onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
+                        onOpenNowPlaying = { viewModel.openNowPlaying() }
                     )
                 }
 
@@ -357,6 +370,27 @@ fun MainDjScreen(
                     onSaveSpotifyClientId = { viewModel.saveSpotifyClientId(it) },
                     onSaveSoundCloudClientId = { viewModel.saveSoundCloudClientId(it) },
                     onDismiss = { viewModel.closeApiConfigDialog() }
+                )
+            }
+
+            // Expanded Full Now Playing Rekordbox Player Sheet
+            if (isNowPlayingExpanded && playingTrack != null) {
+                NowPlayingModalSheet(
+                    track = playingTrack!!,
+                    displayMode = nowPlayingDisplayMode,
+                    waveformData = waveformData,
+                    isWaveformLoading = isWaveformLoading,
+                    isPlaying = isPlaying,
+                    currentPositionMs = currentPositionMs,
+                    durationMs = if (playingTrack!!.durationSeconds > 0) playingTrack!!.durationSeconds * 1000L else 0L,
+                    onDismiss = { viewModel.closeNowPlaying() },
+                    onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
+                    onPreviousTrack = { viewModel.previousTrack() },
+                    onNextTrack = { viewModel.nextTrack() },
+                    onSeekToMs = { ms -> viewModel.seekToMs(ms) },
+                    onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
+                    onSetDisplayMode = { mode -> viewModel.setNowPlayingDisplayMode(mode) },
+                    onOpenProperties = { track -> viewModel.openTrackProperties(track) }
                 )
             }
         }

@@ -62,6 +62,15 @@ class DjAudioEngine(private val context: Context) {
     private val _currentPositionSec = MutableStateFlow(0)
     val currentPositionSec = _currentPositionSec.asStateFlow()
 
+    private val _currentPositionMs = MutableStateFlow(0L)
+    val currentPositionMs = _currentPositionMs.asStateFlow()
+
+    private val _waveformData = MutableStateFlow<WaveformData?>(null)
+    val waveformData = _waveformData.asStateFlow()
+
+    private val _isWaveformLoading = MutableStateFlow(false)
+    val isWaveformLoading = _isWaveformLoading.asStateFlow()
+
     // DJ Deck controls state
     private val _pitchPercent = MutableStateFlow(0.0f) // -16% to +16%
     val pitchPercent = _pitchPercent.asStateFlow()
@@ -129,8 +138,17 @@ class DjAudioEngine(private val context: Context) {
         val duration = track.durationSeconds.coerceAtLeast(0)
         val initialSec = initialPositionSec.coerceIn(0, duration)
         _currentPositionSec.value = initialSec
+        _currentPositionMs.value = initialSec * 1000L
         _playbackProgress.value = if (duration > 0) (initialSec.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
         activeCueSeconds = 0
+
+        // Check if waveform is already in memory cache
+        WaveformCache.get(track.id)?.let { cached ->
+            _waveformData.value = cached
+            _isWaveformLoading.value = false
+        } ?: run {
+            _isWaveformLoading.value = true
+        }
 
         // Asynchronously prepare MediaPlayer and extract real waveform without blocking UI
         prepareJob = scope.launch(Dispatchers.IO) {
@@ -138,11 +156,23 @@ class DjAudioEngine(private val context: Context) {
             com.example.util.DjLogger.startTiming("PLAYER_PREPARE", "'${track.title}'")
             Log.d(TAG, "Playback preparation started for '${track.title}'")
 
-            // 1. Asynchronously extract waveform
+            // 1. Asynchronously extract full Rekordbox peak waveform
+            launch {
+                try {
+                    val fullWaveform = WaveformAnalyzer.analyze(context, track)
+                    _waveformData.value = fullWaveform
+                } catch (e: Exception) {
+                    Log.w(TAG, "Waveform analysis failed: ${e.message}")
+                } finally {
+                    _isWaveformLoading.value = false
+                }
+            }
+
+            // 2. Spectrogram overview bars
             val waveform = SpectrogramEngine.extractWaveform(context, track)
             _waveformHeights.value = waveform
 
-            // 2. Prepare MediaPlayer on background IO thread
+            // 3. Prepare MediaPlayer on background IO thread
             prepareMediaPlayerForTrack(track, initialSec)
             val prepTime = System.currentTimeMillis() - prepStartTime
             com.example.util.DjLogger.endTiming("PLAYER_PREPARE", "Prepared in ${prepTime}ms for '${track.title}'")
@@ -394,9 +424,9 @@ class DjAudioEngine(private val context: Context) {
 
     fun seekToFraction(fraction: Float) {
         val track = _currentTrack.value ?: return
-        val totalSec = track.durationSeconds
-        val targetSec = (totalSec * fraction).toInt()
-        seekToSecond(targetSec)
+        val totalMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L
+        val targetMs = (totalMs * fraction.coerceIn(0f, 1f)).toLong()
+        seekToMs(targetMs)
     }
 
     fun seekToRatio(ratio: Float) {
@@ -408,16 +438,23 @@ class DjAudioEngine(private val context: Context) {
     }
 
     fun seekToSecond(sec: Int) {
+        seekToMs(sec * 1000L)
+    }
+
+    fun seekToMs(ms: Long) {
         val track = _currentTrack.value ?: return
-        val duration = track.durationSeconds.coerceAtLeast(0)
-        val clamped = sec.coerceIn(0, duration)
-        _currentPositionSec.value = clamped
-        _playbackProgress.value = if (duration > 0) clamped.toFloat() / duration.toFloat() else 0f
+        val durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L
+        val clampedMs = ms.coerceIn(0L, durationMs.coerceAtLeast(0L))
+        val clampedSec = (clampedMs / 1000).toInt()
+        
+        _currentPositionMs.value = clampedMs
+        _currentPositionSec.value = clampedSec
+        _playbackProgress.value = if (durationMs > 0) clampedMs.toFloat() / durationMs.toFloat() else 0f
 
         synchronized(mediaPlayerLock) {
             if (isUsingMediaPlayer && mediaPlayer != null) {
                 try {
-                    mediaPlayer?.seekTo(clamped * 1000)
+                    mediaPlayer?.seekTo(clampedMs.toInt())
                 } catch (e: Exception) {
                     Log.w(TAG, "Seek error in MediaPlayer: ${e.message}")
                 }
@@ -449,10 +486,11 @@ class DjAudioEngine(private val context: Context) {
                 val track = _currentTrack.value
                 if (mp != null && track != null) {
                     try {
-                        val currentMs = mp.currentPosition
-                        val currentSec = currentMs / 1000
+                        val currentMs = mp.currentPosition.toLong()
+                        val currentSec = (currentMs / 1000).toInt()
+                        _currentPositionMs.value = currentMs
                         _currentPositionSec.value = currentSec
-                        val durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000 else mp.duration
+                        val durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else mp.duration.toLong()
                         if (durationMs > 0) {
                             _playbackProgress.value = (currentMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
                         }
@@ -470,7 +508,7 @@ class DjAudioEngine(private val context: Context) {
                         Log.w(TAG, "Exception in tracking loop: ${e.message}")
                     }
                 }
-                delay(100)
+                delay(30)
             }
         }
     }

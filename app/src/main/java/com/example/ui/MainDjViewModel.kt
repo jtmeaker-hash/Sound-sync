@@ -13,6 +13,7 @@ import com.example.analysis.AiAutoTagger
 import com.example.analysis.DuplicateDetector
 import com.example.audio.DjAudioEngine
 import com.example.audio.SpectrogramEngine
+import com.example.audio.WaveformData
 import com.example.data.AppDatabase
 import com.example.data.SourceFolderEntity
 import com.example.data.TrackEntity
@@ -23,6 +24,7 @@ import com.example.model.ExplorerSortOption
 import com.example.model.FileOperationType
 import com.example.model.FolderItem
 import com.example.model.MusicPlatform
+import com.example.model.NowPlayingDisplayMode
 import com.example.model.OperationJournalItem
 import com.example.model.SpectrogramAnalysis
 import com.example.model.StorageSource
@@ -203,6 +205,27 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage = _snackbarMessage.asStateFlow()
+
+    // Now Playing Display Mode (Waveform vs Artwork) with persistent SharedPreferences
+    private val prefs = getApplication<Application>().getSharedPreferences("soundsync_player_prefs", Context.MODE_PRIVATE)
+    private val _nowPlayingDisplayMode = MutableStateFlow(
+        try {
+            val savedMode = prefs.getString("now_playing_display_mode", NowPlayingDisplayMode.WAVEFORM.name)
+            NowPlayingDisplayMode.valueOf(savedMode ?: NowPlayingDisplayMode.WAVEFORM.name)
+        } catch (e: Exception) {
+            NowPlayingDisplayMode.WAVEFORM
+        }
+    )
+    val nowPlayingDisplayMode: StateFlow<NowPlayingDisplayMode> = _nowPlayingDisplayMode.asStateFlow()
+
+    // Expanded Now Playing Sheet / Panel State
+    private val _isNowPlayingExpanded = MutableStateFlow(false)
+    val isNowPlayingExpanded: StateFlow<Boolean> = _isNowPlayingExpanded.asStateFlow()
+
+    // Real-time Waveform State from Audio Engine
+    val waveformData: StateFlow<WaveformData?> = audioEngine.waveformData
+    val isWaveformLoading: StateFlow<Boolean> = audioEngine.isWaveformLoading
+    val currentPositionMs: StateFlow<Long> = audioEngine.currentPositionMs
 
     private val _crates = MutableStateFlow(CloudSyncManager.getInitialCrates())
     val crates = _crates.asStateFlow()
@@ -1183,6 +1206,68 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
         }
+    }
+
+    fun setNowPlayingDisplayMode(mode: NowPlayingDisplayMode) {
+        _nowPlayingDisplayMode.value = mode
+        viewModelScope.launch(Dispatchers.IO) {
+            prefs.edit().putString("now_playing_display_mode", mode.name).apply()
+        }
+    }
+
+    fun toggleNowPlayingDisplayMode() {
+        val next = if (_nowPlayingDisplayMode.value == NowPlayingDisplayMode.WAVEFORM) {
+            NowPlayingDisplayMode.ARTWORK
+        } else {
+            NowPlayingDisplayMode.WAVEFORM
+        }
+        setNowPlayingDisplayMode(next)
+    }
+
+    fun openNowPlaying() {
+        _isNowPlayingExpanded.value = true
+    }
+
+    fun closeNowPlaying() {
+        _isNowPlayingExpanded.value = false
+    }
+
+    fun toggleNowPlayingExpanded() {
+        _isNowPlayingExpanded.value = !_isNowPlayingExpanded.value
+    }
+
+    fun seekToMs(ms: Long) {
+        audioEngine.seekToMs(ms)
+    }
+
+    fun seekToFraction(fraction: Float) {
+        audioEngine.seekToFraction(fraction)
+    }
+
+    fun nextTrack() {
+        val current = audioEngine.currentTrack.value ?: return
+        val list = if (filteredTracks.value.isNotEmpty()) filteredTracks.value else allTracks.value
+        if (list.isEmpty()) return
+        val currentIndex = list.indexOfFirst { it.id == current.id }
+        val nextIndex = if (currentIndex in 0 until list.size - 1) currentIndex + 1 else 0
+        val next = list[nextIndex]
+        audioEngine.loadTrack(next, autoPlay = audioEngine.isPlaying.value)
+        inspectTrackSpectrogram(next, showTab = false)
+    }
+
+    fun previousTrack() {
+        val current = audioEngine.currentTrack.value ?: return
+        if (audioEngine.currentPositionSec.value > 3) {
+            audioEngine.seekToSecond(0)
+            return
+        }
+        val list = if (filteredTracks.value.isNotEmpty()) filteredTracks.value else allTracks.value
+        if (list.isEmpty()) return
+        val currentIndex = list.indexOfFirst { it.id == current.id }
+        val prevIndex = if (currentIndex > 0) currentIndex - 1 else list.size - 1
+        val prev = list[prevIndex]
+        audioEngine.loadTrack(prev, autoPlay = audioEngine.isPlaying.value)
+        inspectTrackSpectrogram(prev, showTab = false)
     }
 
     fun playOrPreviewTrack(track: Track) {
