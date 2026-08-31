@@ -105,6 +105,7 @@ sealed interface UpdateState {
 enum class UpdateErrorType {
     NETWORK_ERROR,
     RATE_LIMITED,
+    NO_RELEASE_PUBLISHED,
     NO_RELEASE_ASSETS,
     DOWNLOAD_FAILED,
     CHECKSUM_MISMATCH,

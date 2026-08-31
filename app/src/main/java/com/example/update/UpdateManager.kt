@@ -157,19 +157,15 @@ object UpdateManager {
                     val errorBody = response.errorBody()?.string() ?: "HTTP error"
                     Log.w(TAG, "GitHub API returned status code $code: $errorBody")
 
-                    val errorType = if (code == 403 || code == 429) {
-                        UpdateErrorType.RATE_LIMITED
-                    } else {
-                        UpdateErrorType.NETWORK_ERROR
+                    val (errorMessage, errorType) = when {
+                        code == 404 -> "No SoundSync release has been published yet." to UpdateErrorType.NO_RELEASE_PUBLISHED
+                        code == 403 || code == 429 -> "GitHub API rate limit reached." to UpdateErrorType.RATE_LIMITED
+                        else -> "Unable to connect to GitHub." to UpdateErrorType.NETWORK_ERROR
                     }
 
                     if (isManual) {
                         _updateState.value = UpdateState.Error(
-                            message = if (code == 403 || code == 429) {
-                                "GitHub API rate limit reached. Please try again later."
-                            } else {
-                                "Failed to connect to GitHub ($code). Check your internet connection."
-                            },
+                            message = errorMessage,
                             isManual = true,
                             errorType = errorType
                         )
@@ -183,9 +179,13 @@ object UpdateManager {
                 if (release == null || release.draft) {
                     Log.i(TAG, "No published release found on GitHub.")
                     if (isManual) {
-                        _updateState.value = UpdateState.UpToDate(now, isManual = true)
+                        _updateState.value = UpdateState.Error(
+                            message = "No SoundSync release has been published yet.",
+                            isManual = true,
+                            errorType = UpdateErrorType.NO_RELEASE_PUBLISHED
+                        )
                     } else {
-                        _updateState.value = UpdateState.UpToDate(now, isManual = false)
+                        _updateState.value = UpdateState.Idle
                     }
                     return@launch
                 }
@@ -198,7 +198,7 @@ object UpdateManager {
                 Log.e(TAG, "Error checking for updates: ${e.message}", e)
                 if (isManual) {
                     _updateState.value = UpdateState.Error(
-                        message = "Unable to check for updates: ${e.localizedMessage ?: "Network error"}",
+                        message = "Unable to connect to GitHub.",
                         isManual = true,
                         errorType = UpdateErrorType.NETWORK_ERROR
                     )
@@ -235,7 +235,7 @@ object UpdateManager {
             Log.w(TAG, "Release $releaseTag does not have an attached .apk asset.")
             if (isManual) {
                 _updateState.value = UpdateState.Error(
-                    message = "Release ${release.tagName} has no APK file available.",
+                    message = "Latest release does not contain an APK.",
                     isManual = true,
                     errorType = UpdateErrorType.NO_RELEASE_ASSETS
                 )

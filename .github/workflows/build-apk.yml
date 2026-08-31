@@ -5,6 +5,7 @@ on:
     branches:
       - main
     tags:
+      - 'v*.*.*'
       - 'v*'
   pull_request:
     branches:
@@ -16,9 +17,9 @@ on:
         required: false
         default: '1.0.1'
       version_code:
-        description: 'Android Version Code (e.g. 2)'
+        description: 'Android Version Code (e.g. 101)'
         required: false
-        default: '2'
+        default: ''
       create_release:
         description: 'Create GitHub Release and attach signed APK'
         type: boolean
@@ -110,18 +111,21 @@ jobs:
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
             VERSION_NAME="${TAG_NAME#v}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            VERSION_NAME="${TAG_NAME}"
           else
-            VERSION_NAME="${{ inputs.version_name }}"
+            VERSION_NAME="${{ inputs.version_name || '1.0.0' }}"
             TAG_NAME="v${VERSION_NAME}"
           fi
           
-          # Compute or use provided version code
+          # Compute sequential monotonic version code
           if [ -n "${{ inputs.version_code }}" ]; then
             VERSION_CODE="${{ inputs.version_code }}"
           else
-            # Derive sequential versionCode from git commit count
-            COMMIT_COUNT=$(git rev-list --count HEAD)
-            VERSION_CODE=$((COMMIT_COUNT + 100))
+            RUN_NUM="${{ github.run_number }}"
+            COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+            VERSION_CODE=$(( COMMIT_COUNT + RUN_NUM + 100 ))
           fi
 
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
@@ -132,14 +136,14 @@ jobs:
       - name: Setup Signing Keystore
         id: keystore
         env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
         run: |
           if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
             echo "Decoding permanent release keystore from GitHub Secret..."
             echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > release.keystore
             echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/release.keystore" >> $GITHUB_ENV
           elif [ -f "debug.keystore.base64" ]; then
-            echo "Warning: Using permanent debug keystore for signing..."
+            echo "Warning: Using repository keystore for signing..."
             base64 -d debug.keystore.base64 > release.keystore
             echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/release.keystore" >> $GITHUB_ENV
           elif [ -f "debug.keystore" ]; then
@@ -158,24 +162,37 @@ jobs:
         env:
           VERSION_NAME: ${{ steps.versioning.outputs.VERSION_NAME }}
           VERSION_CODE: ${{ steps.versioning.outputs.VERSION_CODE }}
+          KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
           RELEASE_KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
-          STORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD || 'android' }}
-          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'androiddebugkey' }}
-          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'android' }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || secrets.RELEASE_STORE_PASSWORD || secrets.RELEASE_KEYSTORE_PASSWORD || 'android' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.RELEASE_KEY_ALIAS || 'androiddebugkey' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.RELEASE_KEY_PASSWORD || 'android' }}
         run: |
           ./gradlew assembleRelease \
             -PversionCode=${{ steps.versioning.outputs.VERSION_CODE }} \
             -PversionName=${{ steps.versioning.outputs.VERSION_NAME }}
 
+      - name: Verify Release APK Exists
+        id: verify_apk
+        run: |
+          APK_SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_SRC" ] || [ ! -f "$APK_SRC" ]; then
+            echo "::error::Release APK not found in app/build/outputs/apk/release! Halting workflow."
+            exit 1
+          fi
+          APK_SIZE=$(stat -c%s "$APK_SRC" 2>/dev/null || stat -f%z "$APK_SRC" 2>/dev/null || echo 0)
+          if [ "$APK_SIZE" -le 0 ]; then
+            echo "::error::Generated release APK is empty (0 bytes)! Halting workflow."
+            exit 1
+          fi
+          echo "Release APK verified: $APK_SRC ($APK_SIZE bytes)"
+          echo "APK_SRC=$APK_SRC" >> $GITHUB_OUTPUT
+
       - name: Package Release Assets & Generate Checksums
         id: package
         run: |
           TAG="${{ steps.versioning.outputs.TAG_NAME }}"
-          APK_SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          if [ ! -f "$APK_SRC" ]; then
-            echo "Error: Release APK not found!"
-            exit 1
-          fi
+          APK_SRC="${{ steps.verify_apk.outputs.APK_SRC }}"
 
           TARGET_APK="SoundSync-${TAG}.apk"
           TARGET_SHA="SoundSync-${TAG}.apk.sha256"
@@ -223,3 +240,4 @@ jobs:
             ${{ steps.package.outputs.TARGET_SHA }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

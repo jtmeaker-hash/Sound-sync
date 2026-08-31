@@ -63,6 +63,15 @@ class SemanticVersionAndUpdaterTest {
         val apk = UpdateManager.findApkAsset(assets)
         assertNotNull(apk)
         assertEquals("SoundSync-v1.0.1-release.apk", apk?.name)
+
+        val releaseAssets = listOf(
+            GitHubReleaseAsset(id = 10, name = "SoundSync-v1.0.2.apk.sha256", size = 64, browserDownloadUrl = "https://github.com/jtmeaker-hash/Sound-sync/releases/download/v1.0.2/SoundSync-v1.0.2.apk.sha256"),
+            GitHubReleaseAsset(id = 11, name = "SoundSync-v1.0.2.apk", size = 28000000, browserDownloadUrl = "https://github.com/jtmeaker-hash/Sound-sync/releases/download/v1.0.2/SoundSync-v1.0.2.apk")
+        )
+        val releaseApk = UpdateManager.findApkAsset(releaseAssets)
+        assertNotNull(releaseApk)
+        assertEquals("SoundSync-v1.0.2.apk", releaseApk?.name)
+        assertEquals("https://github.com/jtmeaker-hash/Sound-sync/releases/download/v1.0.2/SoundSync-v1.0.2.apk", releaseApk?.browserDownloadUrl)
     }
 
     @Test
