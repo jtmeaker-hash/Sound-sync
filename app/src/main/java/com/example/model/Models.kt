@@ -85,7 +85,49 @@ data class Track(
     val qualityRating: AudioQualityRating = AudioQualityRating.TRUE_320,
     val dateAdded: Long = System.currentTimeMillis(),
     val crateId: String = "default",
-    val sourceId: String = "internal"
+    val sourceId: String = "internal",
+    val trackNumber: Int = 0,
+    val discNumber: Int = 1,
+    val storageRelativePath: String = ""
+)
+
+data class Album(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val trackCount: Int,
+    val totalDurationSeconds: Int,
+    val tracks: List<Track>,
+    val year: Int = 0,
+    val artworkUri: String? = null
+)
+
+data class Artist(
+    val id: String,
+    val name: String,
+    val albumCount: Int,
+    val songCount: Int,
+    val totalDurationSeconds: Int,
+    val albums: List<Album>,
+    val songs: List<Track>
+)
+
+data class Playlist(
+    val id: String,
+    val name: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+    val sourceId: String? = null,
+    val backingFileUri: String? = null,
+    val backingRelativePath: String? = null,
+    val isRockboxCompatible: Boolean = true,
+    val isImported: Boolean = false,
+    val trackCount: Int = 0,
+    val totalDurationSeconds: Int = 0,
+    val tracks: List<Track> = emptyList(),
+    val missingTrackCount: Int = 0,
+    val storageLocationLabel: String = "Internal Storage",
+    val hasCrossStorageWarning: Boolean = false
 )
 
 data class FolderItem(

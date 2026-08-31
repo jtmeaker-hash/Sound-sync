@@ -60,11 +60,19 @@ enum class DjTab(val title: String, val iconName: String) {
     OPERATIONS("DJ Tools", "storage")
 }
 
+enum class LocalCategory(val label: String, val iconName: String) {
+    SONGS("Songs", "music_note"),
+    ALBUMS("Albums", "album"),
+    ARTISTS("Artists", "person"),
+    PLAYLISTS("Playlists", "queue_music")
+}
+
 class MainDjViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
     private val trackDao = db.trackDao()
     private val sourceFolderDao = db.sourceFolderDao()
+    val playlistDao = db.playlistDao()
 
     val spotifyRepository = com.example.network.spotify.SpotifyRepository(application)
     val soundCloudRepository = com.example.network.soundcloud.SoundCloudRepository(application)
@@ -77,6 +85,32 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _selectedTab = MutableStateFlow(DjTab.LOCAL)
     val selectedTab = _selectedTab.asStateFlow()
+
+    // Local Library Sub-Navigation State
+    private val _selectedLocalCategory = MutableStateFlow(LocalCategory.SONGS)
+    val selectedLocalCategory = _selectedLocalCategory.asStateFlow()
+
+    private val _selectedAlbum = MutableStateFlow<com.example.model.Album?>(null)
+    val selectedAlbum = _selectedAlbum.asStateFlow()
+
+    private val _selectedArtist = MutableStateFlow<com.example.model.Artist?>(null)
+    val selectedArtist = _selectedArtist.asStateFlow()
+
+    private val _selectedPlaylist = MutableStateFlow<com.example.model.Playlist?>(null)
+    val selectedPlaylist = _selectedPlaylist.asStateFlow()
+
+    private val _isFolderExplorerOpen = MutableStateFlow(false)
+    val isFolderExplorerOpen = _isFolderExplorerOpen.asStateFlow()
+
+    private val _showAddToPlaylistSheet = MutableStateFlow<List<Track>?>(null)
+    val showAddToPlaylistSheet = _showAddToPlaylistSheet.asStateFlow()
+
+    private val _showCreatePlaylistDialog = MutableStateFlow(false)
+    val showCreatePlaylistDialog = _showCreatePlaylistDialog.asStateFlow()
+
+    // Playback Queue
+    val playbackQueue = MutableStateFlow<List<Track>>(emptyList())
+    val queueIndex = MutableStateFlow(0)
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
@@ -183,6 +217,97 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val allTracks: StateFlow<List<Track>> = trackDao.getAllTracks()
         .map { list -> list.map { it.toTrack() } }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    // Dynamically grouped Albums from Real indexed tracks
+    val allAlbums: StateFlow<List<com.example.model.Album>> = allTracks.map { tracks ->
+        tracks.filter { it.album.isNotBlank() }
+            .groupBy { "${it.artist.trim().lowercase()}:::${it.album.trim().lowercase()}" }
+            .map { entry ->
+                val albumTracks = entry.value.sortedWith(
+                    compareBy<Track> { it.discNumber }
+                        .thenBy { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
+                        .thenBy { it.title.lowercase() }
+                )
+                val firstTrack = albumTracks.first()
+                val albumTitle = firstTrack.album.ifBlank { "Single" }
+                val artistName = firstTrack.artist.ifBlank { "Unknown Artist" }
+                val totalSec = albumTracks.sumOf { it.durationSeconds }
+                com.example.model.Album(
+                    id = "album_${artistName.hashCode()}_${albumTitle.hashCode()}",
+                    title = albumTitle,
+                    artist = artistName,
+                    trackCount = albumTracks.size,
+                    totalDurationSeconds = totalSec,
+                    tracks = albumTracks,
+                    artworkUri = null
+                )
+            }
+            .sortedBy { it.title.lowercase() }
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    // Dynamically grouped Artists from Real indexed tracks
+    val allArtists: StateFlow<List<com.example.model.Artist>> = combine(allTracks, allAlbums) { tracks, albums ->
+        tracks.groupBy { it.artist.trim().lowercase() }
+            .map { entry ->
+                val artistSongs = entry.value.sortedBy { it.title.lowercase() }
+                val artistName = artistSongs.firstOrNull()?.artist?.ifBlank { "Unknown Artist" } ?: "Unknown Artist"
+                val artistAlbums = albums.filter { it.artist.equals(artistName, ignoreCase = true) }
+                val totalSec = artistSongs.sumOf { it.durationSeconds }
+                com.example.model.Artist(
+                    id = "artist_${artistName.hashCode()}",
+                    name = artistName,
+                    albumCount = artistAlbums.size,
+                    songCount = artistSongs.size,
+                    totalDurationSeconds = totalSec,
+                    albums = artistAlbums,
+                    songs = artistSongs
+                )
+            }
+            .sortedBy { if (it.name.equals("Unknown Artist", ignoreCase = true)) "zzzz" else it.name.lowercase() }
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    // Reactive Playlists flow combining Room playlist entities and track references
+    val allPlaylists: StateFlow<List<com.example.model.Playlist>> = combine(
+        playlistDao.getAllPlaylists(),
+        playlistDao.getAllPlaylistTracks(),
+        allTracks
+    ) { playlistEntities, ptEntities, tracks ->
+        val trackMap = tracks.associateBy { it.id }
+        val groupedPt = ptEntities.groupBy { it.playlistId }
+
+        playlistEntities.map { entity ->
+            val trackRefs = (groupedPt[entity.id] ?: emptyList()).sortedBy { it.position }
+            val resolvedTracks = mutableListOf<Track>()
+            var missing = 0
+            for (ref in trackRefs) {
+                val t = trackMap[ref.trackId]
+                if (t != null) {
+                    resolvedTracks.add(t)
+                } else {
+                    missing++
+                }
+            }
+            val totalSec = resolvedTracks.sumOf { it.durationSeconds }
+            val hasCrossStorage = com.example.storage.RockboxPathResolver.detectCrossStorageMismatch(resolvedTracks)
+
+            com.example.model.Playlist(
+                id = entity.id,
+                name = entity.name,
+                createdAt = entity.createdAt,
+                updatedAt = entity.updatedAt,
+                sourceId = entity.sourceId,
+                backingFileUri = entity.backingFileUri,
+                backingRelativePath = entity.backingRelativePath,
+                isRockboxCompatible = entity.isRockboxCompatible,
+                isImported = entity.isImported,
+                trackCount = resolvedTracks.size,
+                totalDurationSeconds = totalSec,
+                tracks = resolvedTracks,
+                missingTrackCount = missing,
+                hasCrossStorageWarning = hasCrossStorage
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Tracks in Current Directory for File Explorer
     val currentDirectoryTracks: StateFlow<List<Track>> = combine(
@@ -701,6 +826,363 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setPlatformFilter(platform: MusicPlatform?) {
         _selectedPlatformFilter.value = platform
+    }
+
+    // ==========================================
+    // LOCAL MUSIC LIBRARY & SUB-NAVIGATION
+    // ==========================================
+
+    fun selectLocalCategory(category: LocalCategory) {
+        _selectedLocalCategory.value = category
+        _selectedAlbum.value = null
+        _selectedArtist.value = null
+        _selectedPlaylist.value = null
+    }
+
+    fun openAlbum(album: com.example.model.Album) {
+        _selectedAlbum.value = album
+    }
+
+    fun closeAlbum() {
+        _selectedAlbum.value = null
+    }
+
+    fun openArtist(artist: com.example.model.Artist) {
+        _selectedArtist.value = artist
+    }
+
+    fun closeArtist() {
+        _selectedArtist.value = null
+    }
+
+    fun openPlaylist(playlist: com.example.model.Playlist) {
+        _selectedPlaylist.value = playlist
+    }
+
+    fun closePlaylist() {
+        _selectedPlaylist.value = null
+    }
+
+    fun toggleFolderExplorer(forceOpen: Boolean? = null) {
+        _isFolderExplorerOpen.value = forceOpen ?: !_isFolderExplorerOpen.value
+    }
+
+    fun openAddToPlaylist(track: Track) {
+        _showAddToPlaylistSheet.value = listOf(track)
+    }
+
+    fun openAddToPlaylist(tracks: List<Track>) {
+        _showAddToPlaylistSheet.value = tracks
+    }
+
+    fun closeAddToPlaylist() {
+        _showAddToPlaylistSheet.value = null
+    }
+
+    fun openCreatePlaylistDialog() {
+        _showCreatePlaylistDialog.value = true
+    }
+
+    fun closeCreatePlaylistDialog() {
+        _showCreatePlaylistDialog.value = false
+    }
+
+    // ==========================================
+    // AUDIO ENGINE & PLAYBACK QUEUE
+    // ==========================================
+
+    fun playTrackList(tracks: List<Track>, shuffle: Boolean = false, startIndex: Int = 0) {
+        if (tracks.isEmpty()) return
+        val listToPlay = if (shuffle) tracks.shuffled() else tracks
+        val start = if (shuffle) 0 else startIndex.coerceIn(0, listToPlay.lastIndex)
+        playbackQueue.value = listToPlay
+        queueIndex.value = start
+        val track = listToPlay[start]
+        playOrPreviewTrack(track)
+        showSnackbar("${if (shuffle) "Shuffling" else "Playing"} ${tracks.size} tracks")
+    }
+
+    fun queueTrack(track: Track, playNext: Boolean = false) {
+        val cur = playbackQueue.value.toMutableList()
+        if (cur.isEmpty()) {
+            playbackQueue.value = listOf(track)
+            queueIndex.value = 0
+            playOrPreviewTrack(track)
+            return
+        }
+        val idx = queueIndex.value
+        if (playNext && idx < cur.size) {
+            cur.add(idx + 1, track)
+        } else {
+            cur.add(track)
+        }
+        playbackQueue.value = cur
+        showSnackbar("${if (playNext) "Playing next" else "Added to queue"}: '${track.title}'")
+    }
+
+    fun queueTracks(tracks: List<Track>, playNext: Boolean = false) {
+        if (tracks.isEmpty()) return
+        val cur = playbackQueue.value.toMutableList()
+        if (cur.isEmpty()) {
+            playTrackList(tracks, shuffle = false)
+            return
+        }
+        val idx = queueIndex.value
+        if (playNext && idx < cur.size) {
+            cur.addAll(idx + 1, tracks)
+        } else {
+            cur.addAll(tracks)
+        }
+        playbackQueue.value = cur
+        showSnackbar("${if (playNext) "Playing next" else "Added to queue"}: ${tracks.size} tracks")
+    }
+
+    fun playNextInQueue() {
+        val q = playbackQueue.value
+        val idx = queueIndex.value
+        if (idx + 1 in q.indices) {
+            queueIndex.value = idx + 1
+            playOrPreviewTrack(q[idx + 1])
+        }
+    }
+
+    fun playPreviousInQueue() {
+        val q = playbackQueue.value
+        val idx = queueIndex.value
+        if (idx - 1 in q.indices) {
+            queueIndex.value = idx - 1
+            playOrPreviewTrack(q[idx - 1])
+        }
+    }
+
+    // ==========================================
+    // PLAYLIST CRUD & ROCKBOX SYNC
+    // ==========================================
+
+    fun createPlaylist(
+        name: String,
+        initialTrackIds: List<String> = emptyList(),
+        exportToRockbox: Boolean = true
+    ) {
+        val cleanName = name.trim().ifBlank { "New Playlist" }
+        val playlistId = "playlist_${System.currentTimeMillis()}_${(100..999).random()}"
+        val now = System.currentTimeMillis()
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val entity = com.example.data.PlaylistEntity(
+                id = playlistId,
+                name = cleanName,
+                createdAt = now,
+                updatedAt = now,
+                isRockboxCompatible = true,
+                isImported = false
+            )
+            playlistDao.insertPlaylist(entity)
+            if (initialTrackIds.isNotEmpty()) {
+                playlistDao.replacePlaylistTracks(playlistId, initialTrackIds)
+            }
+
+            if (exportToRockbox) {
+                val app = getApplication<Application>()
+                val allT = trackDao.getAllTracksSync().map { it.toTrack() }
+                val trackMap = allT.associateBy { it.id }
+                val tracks = initialTrackIds.mapNotNull { trackMap[it] }
+                val exportResult = com.example.storage.M3uPlaylistManager.exportPlaylistToStorage(
+                    app,
+                    entity.toPlaylist(),
+                    tracks
+                )
+                if (exportResult.isSuccess) {
+                    val res = exportResult.getOrNull()
+                    if (res != null) {
+                        playlistDao.updatePlaylist(
+                            entity.copy(
+                                backingFileUri = res.uriString,
+                                backingRelativePath = res.relativePath
+                            )
+                        )
+                    }
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                showSnackbar("Created playlist '$cleanName'${if (initialTrackIds.isNotEmpty()) " (${initialTrackIds.size} songs)" else ""}")
+                _showCreatePlaylistDialog.value = false
+                _showAddToPlaylistSheet.value = null
+            }
+        }
+    }
+
+    fun renamePlaylist(playlistId: String, newName: String) {
+        val clean = newName.trim().ifBlank { return }
+        viewModelScope.launch(Dispatchers.IO) {
+            val p = playlistDao.getPlaylistByIdSync(playlistId)
+            if (p != null) {
+                val updated = p.copy(name = clean, updatedAt = System.currentTimeMillis())
+                playlistDao.updatePlaylist(updated)
+                withContext(Dispatchers.Main) {
+                    showSnackbar("Renamed playlist to '$clean'")
+                    if (_selectedPlaylist.value?.id == playlistId) {
+                        _selectedPlaylist.value = _selectedPlaylist.value?.copy(name = clean)
+                    }
+                }
+            }
+        }
+    }
+
+    fun deletePlaylist(playlistId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            playlistDao.deletePlaylist(playlistId)
+            withContext(Dispatchers.Main) {
+                showSnackbar("Playlist deleted.")
+                if (_selectedPlaylist.value?.id == playlistId) {
+                    _selectedPlaylist.value = null
+                }
+            }
+        }
+    }
+
+    fun addTracksToPlaylist(playlistId: String, tracksToAdd: List<Track>) {
+        if (tracksToAdd.isEmpty()) return
+        val trackIds = tracksToAdd.map { it.id }
+        viewModelScope.launch(Dispatchers.IO) {
+            playlistDao.addTracksToPlaylist(playlistId, trackIds)
+            val playlist = playlistDao.getPlaylistByIdSync(playlistId)
+
+            // Auto sync to Rockbox file if linked
+            if (playlist != null && playlist.backingRelativePath != null) {
+                val app = getApplication<Application>()
+                val allPt = playlistDao.getTracksForPlaylistSync(playlistId).sortedBy { it.position }
+                val allT = trackDao.getAllTracksSync().map { it.toTrack() }.associateBy { it.id }
+                val fullTracks = allPt.mapNotNull { allT[it.trackId] }
+                com.example.storage.M3uPlaylistManager.exportPlaylistToStorage(app, playlist.toPlaylist(), fullTracks)
+            }
+
+            withContext(Dispatchers.Main) {
+                showSnackbar("Added ${tracksToAdd.size} track(s) to '${playlist?.name ?: "Playlist"}'")
+                _showAddToPlaylistSheet.value = null
+            }
+        }
+    }
+
+    fun removeTrackFromPlaylist(playlistId: String, position: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            playlistDao.removeTrackAtPosition(playlistId, position)
+            val playlist = playlistDao.getPlaylistByIdSync(playlistId)
+
+            if (playlist != null && playlist.backingRelativePath != null) {
+                val app = getApplication<Application>()
+                val allPt = playlistDao.getTracksForPlaylistSync(playlistId).sortedBy { it.position }
+                val allT = trackDao.getAllTracksSync().map { it.toTrack() }.associateBy { it.id }
+                val fullTracks = allPt.mapNotNull { allT[it.trackId] }
+                com.example.storage.M3uPlaylistManager.exportPlaylistToStorage(app, playlist.toPlaylist(), fullTracks)
+            }
+
+            withContext(Dispatchers.Main) {
+                showSnackbar("Removed track from playlist")
+            }
+        }
+    }
+
+    fun reorderPlaylistTrack(playlistId: String, fromPos: Int, toPos: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            playlistDao.reorderTrack(playlistId, fromPos, toPos)
+            val playlist = playlistDao.getPlaylistByIdSync(playlistId)
+
+            if (playlist != null && playlist.backingRelativePath != null) {
+                val app = getApplication<Application>()
+                val allPt = playlistDao.getTracksForPlaylistSync(playlistId).sortedBy { it.position }
+                val allT = trackDao.getAllTracksSync().map { it.toTrack() }.associateBy { it.id }
+                val fullTracks = allPt.mapNotNull { allT[it.trackId] }
+                com.example.storage.M3uPlaylistManager.exportPlaylistToStorage(app, playlist.toPlaylist(), fullTracks)
+            }
+        }
+    }
+
+    fun exportPlaylistToRockbox(playlistId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val playlist = playlistDao.getPlaylistByIdSync(playlistId) ?: return@launch
+            val allPt = playlistDao.getTracksForPlaylistSync(playlistId).sortedBy { it.position }
+            val allT = trackDao.getAllTracksSync().map { it.toTrack() }.associateBy { it.id }
+            val tracks = allPt.mapNotNull { allT[it.trackId] }
+
+            val result = com.example.storage.M3uPlaylistManager.exportPlaylistToStorage(
+                app,
+                playlist.toPlaylist(),
+                tracks
+            )
+
+            withContext(Dispatchers.Main) {
+                if (result.isSuccess) {
+                    val export = result.getOrNull()!!
+                    playlistDao.updatePlaylist(
+                        playlist.copy(
+                            backingFileUri = export.uriString,
+                            backingRelativePath = export.relativePath,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
+                    if (export.hasCrossStorageWarning) {
+                        showSnackbar("Exported to '${export.relativePath}' (Warning: Tracks span multiple storage devices)")
+                    } else {
+                        showSnackbar("Exported Rockbox playlist to '${export.relativePath}' (${export.trackCount} tracks)")
+                    }
+                } else {
+                    showSnackbar("Failed to export playlist: ${result.exceptionOrNull()?.message}")
+                }
+            }
+        }
+    }
+
+    fun importM3uPlaylist(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val allT = trackDao.getAllTracksSync().map { it.toTrack() }
+            val importResult = com.example.storage.M3uPlaylistManager.importM3uFromUri(app, uri, allT)
+
+            val p = importResult.playlist
+            val entity = com.example.data.PlaylistEntity.fromPlaylist(p)
+            playlistDao.insertPlaylist(entity)
+            if (importResult.matchedTracks.isNotEmpty()) {
+                playlistDao.replacePlaylistTracks(p.id, importResult.matchedTracks.map { it.id })
+            }
+
+            withContext(Dispatchers.Main) {
+                if (importResult.missingCount > 0) {
+                    showSnackbar("Imported '${p.name}': ${importResult.matchedTracks.size} songs found (${importResult.missingCount} missing)")
+                } else {
+                    showSnackbar("Successfully imported '${p.name}' with all ${importResult.matchedTracks.size} tracks!")
+                }
+                _selectedLocalCategory.value = LocalCategory.PLAYLISTS
+                _selectedPlaylist.value = p.copy(tracks = importResult.matchedTracks, trackCount = importResult.matchedTracks.size)
+            }
+        }
+    }
+
+    fun discoverStoragePlaylists() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val discovered = com.example.storage.M3uPlaylistManager.discoverPlaylistsInStorage(app)
+            val allT = trackDao.getAllTracksSync().map { it.toTrack() }
+
+            var importedCount = 0
+            for (disc in discovered) {
+                val res = com.example.storage.M3uPlaylistManager.importM3uFromUri(app, disc.uri, allT)
+                if (res.matchedTracks.isNotEmpty()) {
+                    playlistDao.insertPlaylist(com.example.data.PlaylistEntity.fromPlaylist(res.playlist))
+                    playlistDao.replacePlaylistTracks(res.playlist.id, res.matchedTracks.map { it.id })
+                    importedCount++
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                showSnackbar(
+                    if (importedCount > 0) "Discovered and imported $importedCount playlist(s) from storage /Playlists/"
+                    else "No new playlist files found in /Playlists/"
+                )
+            }
+        }
     }
 
     fun playOrPreviewTrack(track: Track) {

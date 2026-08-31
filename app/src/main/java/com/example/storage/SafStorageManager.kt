@@ -143,6 +143,8 @@ object SafStorageManager {
         val title = name.substringBeforeLast(".")
         val id = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
 
+        val relPath = RockboxPathResolver.computeStorageRelativePath(uri.toString(), folderPath)
+
         return Track(
             id = id,
             title = title,
@@ -167,7 +169,10 @@ object SafStorageManager {
             qualityRating = if (format == "FLAC" || format == "WAV") AudioQualityRating.TRUE_LOSSLESS else AudioQualityRating.TRUE_320,
             dateAdded = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),
             crateId = "crate_all",
-            sourceId = sourceId
+            sourceId = sourceId,
+            trackNumber = 0,
+            discNumber = 1,
+            storageRelativePath = relPath
         )
     }
 

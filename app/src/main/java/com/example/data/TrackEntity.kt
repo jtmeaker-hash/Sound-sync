@@ -31,7 +31,10 @@ data class TrackEntity(
     val isAiTagged: Boolean,
     val qualityRating: String, // from AudioQualityRating enum
     val dateAdded: Long,
-    val crateId: String
+    val crateId: String,
+    val trackNumber: Int = 0,
+    val discNumber: Int = 1,
+    val storageRelativePath: String = ""
 ) {
     fun toTrack(): Track {
         val syncEnum = try { SyncState.valueOf(syncState) } catch (e: Exception) { SyncState.LOCAL_ONLY }
@@ -46,6 +49,17 @@ data class TrackEntity(
             .mapNotNull { it.trim().toIntOrNull() }
 
         val dir = if (filePath.contains("/")) filePath.substringBeforeLast("/") else "/Music"
+        val resolvedStoragePath = if (storageRelativePath.isNotBlank()) {
+            storageRelativePath
+        } else {
+            val p = filePath.removePrefix("file://")
+            when {
+                p.contains("/storage/emulated/0/") -> p.substringAfter("/storage/emulated/0/").trimStart('/')
+                p.contains("/storage/") -> p.substringAfter("/storage/").substringAfter("/").trimStart('/')
+                p.startsWith("/") -> p.trimStart('/')
+                else -> p
+            }
+        }
 
         return Track(
             id = id,
@@ -71,7 +85,10 @@ data class TrackEntity(
             qualityRating = qualityEnum,
             dateAdded = dateAdded,
             crateId = crateId,
-            sourceId = "internal"
+            sourceId = "internal",
+            trackNumber = trackNumber,
+            discNumber = discNumber,
+            storageRelativePath = resolvedStoragePath
         )
     }
 
@@ -99,7 +116,10 @@ data class TrackEntity(
                 isAiTagged = track.isAiTagged,
                 qualityRating = track.qualityRating.name,
                 dateAdded = track.dateAdded,
-                crateId = track.crateId
+                crateId = track.crateId,
+                trackNumber = track.trackNumber,
+                discNumber = track.discNumber,
+                storageRelativePath = track.storageRelativePath
             )
         }
     }

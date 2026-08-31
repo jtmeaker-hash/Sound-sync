@@ -51,7 +51,8 @@ object MediaScannerHelper {
             MediaStore.Audio.Media.MIME_TYPE,
             MediaStore.Audio.Media.SIZE,
             MediaStore.Audio.Media.DATE_ADDED,
-            MediaStore.Audio.Media.DATE_MODIFIED
+            MediaStore.Audio.Media.DATE_MODIFIED,
+            MediaStore.Audio.Media.TRACK
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             projectionList.add(MediaStore.Audio.Media.ALBUM_ID)
@@ -81,6 +82,7 @@ object MediaScannerHelper {
                 val mimeCol = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
                 val sizeCol = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
                 val dateAddedCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_ADDED)
+                val trackCol = cursor.getColumnIndex(MediaStore.Audio.Media.TRACK)
                 val albumIdCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM_ID)
                 } else -1
@@ -101,6 +103,7 @@ object MediaScannerHelper {
                         val mimeType = if (mimeCol != -1) cursor.getString(mimeCol) ?: "audio/mpeg" else "audio/mpeg"
                         val sizeBytes = if (sizeCol != -1) cursor.getLong(sizeCol) else 0L
                         val dateAddedSec = if (dateAddedCol != -1) cursor.getLong(dateAddedCol) else 0L
+                        val rawTrackNum = if (trackCol != -1) cursor.getInt(trackCol) else 0
 
                         val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
 
@@ -114,6 +117,13 @@ object MediaScannerHelper {
                         val sizeMb = sizeBytes.toDouble() / (1024.0 * 1024.0)
                         val format = resolveFormat(dataPath, mimeType)
                         val dirPath = resolveDirectory(dataPath)
+
+                        // Parse track and disc number
+                        val discNum = if (rawTrackNum >= 1000) (rawTrackNum / 1000) else 1
+                        val trackNum = if (rawTrackNum >= 1000) (rawTrackNum % 1000) else rawTrackNum
+
+                        // Compute Rockbox-compatible relative path
+                        val storageRelPath = RockboxPathResolver.computeStorageRelativePath(dataPath, dirPath)
 
                         // Compute fast bitrate from size/duration or format (no MediaMetadataRetriever blocking)
                         val computedBitrateKbps = if (sizeBytes > 0 && durationSec > 0 && format != "FLAC" && format != "WAV") {
@@ -153,7 +163,10 @@ object MediaScannerHelper {
                             qualityRating = qualityRating,
                             dateAdded = if (dateAddedSec > 0) dateAddedSec * 1000L else System.currentTimeMillis(),
                             crateId = "crate_all",
-                            sourceId = resolveSourceId(dataPath)
+                            sourceId = resolveSourceId(dataPath),
+                            trackNumber = trackNum,
+                            discNumber = discNum,
+                            storageRelativePath = storageRelPath
                         )
 
                         currentBatch.add(track)

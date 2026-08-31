@@ -71,6 +71,8 @@ import com.example.ui.components.SoundCloudOrange
 import com.example.ui.components.SpectrogramAnalyzerView
 import com.example.ui.components.SpotifyGreen
 import com.example.ui.components.SpotifyTab
+import com.example.ui.library.LocalLibraryScreen
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
@@ -95,6 +97,7 @@ fun MainDjScreen(
 ) {
     val context = LocalContext.current
     val selectedTab by viewModel.selectedTab.collectAsState()
+    val isFolderExplorerOpen by viewModel.isFolderExplorerOpen.collectAsState()
     val allTracks by viewModel.allTracks.collectAsState()
     val storageSources by viewModel.storageSources.collectAsState()
     val currentSourceId by viewModel.currentStorageSourceId.collectAsState()
@@ -211,20 +214,59 @@ fun MainDjScreen(
         ) {
             when (selectedTab) {
                 DjTab.LOCAL -> {
-                    LocalMusicView(
-                        tracks = allTracks,
-                        currentTrack = playingTrack,
-                        isPlaying = isPlaying,
-                        isScanning = isScanning,
-                        scanProgressText = scanProgressMessage,
-                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
-                        onPickSafFolder = onPickSafFolder,
-                        onPickAudioFiles = onPickAudioFiles,
-                        onLoadTrack = { viewModel.playTrack(it) },
-                        onInspectSpectrogram = { track ->
-                            viewModel.inspectTrackSpectrogram(track, showTab = true)
+                    if (isFolderExplorerOpen) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Surface(
+                                color = DjSurfaceDark,
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, DjSurfaceBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(
+                                        onClick = { viewModel.toggleFolderExplorer(false) },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                            contentDescription = "Back to Library",
+                                            tint = DeckACyan
+                                        )
+                                    }
+                                    Text(
+                                        text = "Folder & Storage Explorer",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                }
+                            }
+
+                            LocalMusicView(
+                                tracks = allTracks,
+                                currentTrack = playingTrack,
+                                isPlaying = isPlaying,
+                                isScanning = isScanning,
+                                scanProgressText = scanProgressMessage,
+                                onScanMediaStore = { viewModel.scanDeviceMediaStore() },
+                                onPickSafFolder = onPickSafFolder,
+                                onPickAudioFiles = onPickAudioFiles,
+                                onLoadTrack = { viewModel.playTrack(it) },
+                                onInspectSpectrogram = { track ->
+                                    viewModel.inspectTrackSpectrogram(track, showTab = true)
+                                }
+                            )
                         }
-                    )
+                    } else {
+                        LocalLibraryScreen(
+                            viewModel = viewModel,
+                            onOpenFolderExplorer = { viewModel.toggleFolderExplorer(true) }
+                        )
+                    }
                 }
                 DjTab.SOUNDCLOUD -> {
                     SoundCloudTab(
