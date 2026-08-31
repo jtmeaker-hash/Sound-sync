@@ -41,7 +41,7 @@ class GoogleDriveRepository(private val context: Context) {
         const val GOOGLE_DRIVE_FILES_ENDPOINT = "https://www.googleapis.com/drive/v3/files"
 
         // Required Google Drive scopes: readonly & file
-        const val DRIVE_SCOPES = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email"
+        const val DRIVE_SCOPES = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file"
     }
 
     private val prefs: SharedPreferences =
@@ -126,6 +126,8 @@ class GoogleDriveRepository(private val context: Context) {
         val challenge = PkceUtil.generateCodeChallenge(verifier)
 
         prefs.edit().putString(KEY_CODE_VERIFIER, verifier).apply()
+
+        Log.i(TAG, "Initiating Google Drive OAuth PKCE authorization. Package: ${context.packageName}, ClientId: $clientId, RedirectUri: $DEFAULT_REDIRECT_URI, Scopes: $DRIVE_SCOPES")
 
         return Uri.parse(GOOGLE_AUTH_ENDPOINT)
             .buildUpon()

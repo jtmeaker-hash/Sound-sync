@@ -122,18 +122,21 @@ fun SpectrogramAnalyzerView(
             .fillMaxSize()
             .background(DjObsidian)
             .verticalScroll(rememberScrollState())
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         // Track Selection Carousel Ribbon
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = "SELECT AUDIO FILE TO AUDIT (HD SPEK / STUDIO STFT)",
                 color = TextMuted,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Black
             )
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 2.dp)
+            ) {
                 items(allTracks) { track ->
                     val isSelected = track.id == analyzedTrack?.id
                     Surface(
@@ -151,7 +154,7 @@ fun SpectrogramAnalyzerView(
                         )
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
@@ -418,12 +421,12 @@ private fun SpectrogramCanvasCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("spectrogram_canvas_card"),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
         border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            // Header with Frequency Range, Cutoff tag & Zoom Controls
+        Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
+            // Header with Frequency Range, Cutoff tag & Zoom Controls directly above graph
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -439,7 +442,7 @@ private fun SpectrogramCanvasCard(
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     // Zoom selector chips
                     listOf(1, 2, 4, 8).forEach { z ->
                         val isSelected = (zoomLevel == z)
@@ -459,7 +462,7 @@ private fun SpectrogramCanvasCard(
                                 color = if (isSelected) DjObsidian else TextSecondary,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Black,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
                     }
@@ -475,21 +478,22 @@ private fun SpectrogramCanvasCard(
                             text = "Ceiling: ${String.format(Locale.US, "%.1f kHz", analysis.cutoffKhz)}",
                             color = if (isSuspicious) NeonRed else NeonGreen,
                             fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
+                            fontSize = 9.sp,
                             fontWeight = FontWeight.Black,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // Spectrogram Display with Y-axis frequency ruler on the left
-            Row(modifier = Modifier.fillMaxWidth().height(240.dp)) {
+            // Spectrogram Display with Y-axis frequency ruler on the left (Expanded vertical height)
+            val graphHeight = 290.dp
+            Row(modifier = Modifier.fillMaxWidth().height(graphHeight)) {
                 // Frequency Ruler labels (22k, 20k, 16k, 10k, 5k, 1k, 100Hz, 20Hz)
                 Column(
-                    modifier = Modifier.padding(end = 4.dp).height(240.dp),
+                    modifier = Modifier.padding(end = 4.dp).height(graphHeight),
                     verticalArrangement = Arrangement.SpaceBetween,
                     horizontalAlignment = Alignment.End
                 ) {
