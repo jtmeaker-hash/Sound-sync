@@ -1,16 +1,41 @@
-name: Build Android APK
+name: SoundSync CI & Release
 
 on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Release Semantic Version (e.g. 1.0.1)'
+        required: false
+        default: '1.0.1'
+      version_code:
+        description: 'Android Version Code (e.g. 2)'
+        required: false
+        default: '2'
+      create_release:
+        description: 'Create GitHub Release and attach signed APK'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+  packages: read
 
 jobs:
-  build:
-    name: Build Debug APK
+  # ---------------------------------------------------------------------------
+  # 1. CI & Test Build
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: Build & Test
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,12 +65,161 @@ jobs:
             fi
           fi
 
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: soundsync-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # 2. Release Build (Signed APK & GitHub Release)
+  # ---------------------------------------------------------------------------
+  release:
+    name: Build & Publish Signed Release
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Extract Version Info
+        id: versioning
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            VERSION_NAME="${TAG_NAME#v}"
+          else
+            VERSION_NAME="${{ inputs.version_name }}"
+            TAG_NAME="v${VERSION_NAME}"
+          fi
+          
+          # Compute or use provided version code
+          if [ -n "${{ inputs.version_code }}" ]; then
+            VERSION_CODE="${{ inputs.version_code }}"
+          else
+            # Derive sequential versionCode from git commit count
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+            VERSION_CODE=$((COMMIT_COUNT + 100))
+          fi
+
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "Building SoundSync Release: Tag=$TAG_NAME, Version=$VERSION_NAME, Code=$VERSION_CODE"
+
+      - name: Setup Signing Keystore
+        id: keystore
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "Decoding permanent release keystore from GitHub Secret..."
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > release.keystore
+            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/release.keystore" >> $GITHUB_ENV
+          elif [ -f "debug.keystore.base64" ]; then
+            echo "Warning: Using permanent debug keystore for signing..."
+            base64 -d debug.keystore.base64 > release.keystore
+            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/release.keystore" >> $GITHUB_ENV
+          elif [ -f "debug.keystore" ]; then
+            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/debug.keystore" >> $GITHUB_ENV
+          fi
+
+          if [ ! -f ".env" ]; then
+            if [ -f ".env.example" ]; then
+              cp .env.example .env
+            else
+              touch .env
+            fi
+          fi
+
+      - name: Build Signed Release APK
+        env:
+          VERSION_NAME: ${{ steps.versioning.outputs.VERSION_NAME }}
+          VERSION_CODE: ${{ steps.versioning.outputs.VERSION_CODE }}
+          RELEASE_KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
+          STORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD || 'android' }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'androiddebugkey' }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'android' }}
+        run: |
+          ./gradlew assembleRelease \
+            -PversionCode=${{ steps.versioning.outputs.VERSION_CODE }} \
+            -PversionName=${{ steps.versioning.outputs.VERSION_NAME }}
+
+      - name: Package Release Assets & Generate Checksums
+        id: package
+        run: |
+          TAG="${{ steps.versioning.outputs.TAG_NAME }}"
+          APK_SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ ! -f "$APK_SRC" ]; then
+            echo "Error: Release APK not found!"
+            exit 1
+          fi
+
+          TARGET_APK="SoundSync-${TAG}.apk"
+          TARGET_SHA="SoundSync-${TAG}.apk.sha256"
+
+          cp "$APK_SRC" "$TARGET_APK"
+          sha256sum "$TARGET_APK" | awk '{print $1}' > "$TARGET_SHA"
+
+          echo "Generated APK: $TARGET_APK"
+          echo "SHA256: $(cat $TARGET_SHA)"
+          echo "TARGET_APK=$TARGET_APK" >> $GITHUB_OUTPUT
+          echo "TARGET_SHA=$TARGET_SHA" >> $GITHUB_OUTPUT
+
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "### SoundSync Release ${{ steps.versioning.outputs.TAG_NAME }}" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "**Version:** \`${{ steps.versioning.outputs.VERSION_NAME }}\` (Build ${{ steps.versioning.outputs.VERSION_CODE }})" >> RELEASE_NOTES.md
+          echo "**Package ID:** \`com.aistudio.soundsync.fxmk\`" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "#### What's Changed" >> RELEASE_NOTES.md
+          if [ -n "$PREV_TAG" ]; then
+            git log --pretty=format:"* %s ([%h](https://github.com/jtmeaker-hash/Sound-sync/commit/%H))" ${PREV_TAG}..HEAD >> RELEASE_NOTES.md
+          else
+            git log -n 15 --pretty=format:"* %s ([%h](https://github.com/jtmeaker-hash/Sound-sync/commit/%H))" >> RELEASE_NOTES.md
+          fi
+          echo "" >> RELEASE_NOTES.md
+          echo "---" >> RELEASE_NOTES.md
+          echo "**SHA-256 Checksum:**" >> RELEASE_NOTES.md
+          echo "\`\`\`" >> RELEASE_NOTES.md
+          cat ${{ steps.package.outputs.TARGET_SHA }} >> RELEASE_NOTES.md
+          echo "\`\`\`" >> RELEASE_NOTES.md
+
+      - name: Create GitHub Release & Upload APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.versioning.outputs.TAG_NAME }}
+          name: SoundSync ${{ steps.versioning.outputs.TAG_NAME }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            ${{ steps.package.outputs.TARGET_APK }}
+            ${{ steps.package.outputs.TARGET_SHA }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

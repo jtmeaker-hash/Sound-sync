@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "onResume: Activity in foreground.")
+        activeViewModel?.resumePendingUpdateInstall(this)
     }
 
     override fun onPause() {

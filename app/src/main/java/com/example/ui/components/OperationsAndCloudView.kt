@@ -87,6 +87,12 @@ import com.example.ui.theme.NeonPurple
 import com.example.ui.theme.NeonRed
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import com.example.BuildConfig
+import com.example.model.UpdateState
+import com.example.model.UpdateInfo
 import com.example.ui.theme.TextSecondary
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -97,6 +103,11 @@ fun OperationsAndCloudView(
     storageSources: List<StorageSource>,
     operationJournal: List<OperationJournalItem>,
     scanServiceState: AudioScanState = AudioScanState(),
+    updateState: UpdateState = UpdateState.Idle,
+    lastCheckedTimestamp: Long = 0L,
+    isAutoCheckEnabled: Boolean = true,
+    onCheckForUpdates: () -> Unit = {},
+    onToggleAutoCheck: (Boolean) -> Unit = {},
     onTriggerSync: () -> Unit,
     onExportRekordbox: () -> Unit,
     onUndoOperation: (String) -> Unit,
@@ -121,6 +132,17 @@ fun OperationsAndCloudView(
             .testTag("operations_and_cloud_view"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // App Updates & Version Management Card (GitHub Releases)
+        item {
+            UpdateSectionCard(
+                updateState = updateState,
+                lastCheckedTimestamp = lastCheckedTimestamp,
+                isAutoCheckEnabled = isAutoCheckEnabled,
+                onCheckForUpdates = onCheckForUpdates,
+                onToggleAutoCheck = onToggleAutoCheck
+            )
+        }
+
         // DocumentFile Background Scanner Live Status Card
         item {
             BackgroundScannerStatusCard(
@@ -782,6 +804,211 @@ private fun PlatformStatusCard(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateSectionCard(
+    updateState: UpdateState,
+    lastCheckedTimestamp: Long,
+    isAutoCheckEnabled: Boolean,
+    onCheckForUpdates: () -> Unit,
+    onToggleAutoCheck: (Boolean) -> Unit
+) {
+    val isChecking = updateState is UpdateState.Checking
+
+    val formattedLastChecked = if (lastCheckedTimestamp > 0) {
+        val dateFormat = SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault())
+        dateFormat.format(Date(lastCheckedTimestamp))
+    } else {
+        "Never checked"
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("update_section_card"),
+        colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(DeckACyan.copy(alpha = 0.15f), CircleShape)
+                            .border(1.dp, DeckACyan, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SystemUpdate,
+                            contentDescription = null,
+                            tint = DeckACyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "SoundSync In-App Updates",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "GitHub Releases · jtmeaker-hash/Sound-sync",
+                            color = DeckACyan,
+                            fontSize = 10.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                }
+
+                Surface(
+                    color = DjSurfaceElevated,
+                    shape = RoundedCornerShape(6.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                ) {
+                    Text(
+                        text = "v${BuildConfig.VERSION_NAME}",
+                        color = TextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // Version details & Channel
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DjSurfaceElevated, RoundedCornerShape(8.dp))
+                    .padding(10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Installed Build",
+                        color = TextMuted,
+                        fontSize = 10.sp
+                    )
+                    Text(
+                        text = "v${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})",
+                        color = TextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "Last Checked",
+                        color = TextMuted,
+                        fontSize = 10.sp
+                    )
+                    Text(
+                        text = formattedLastChecked,
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            // Automatic Check Toggle Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Automatic update checks",
+                        color = TextPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "Silently check GitHub Releases for signed APKs once daily in background.",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Switch(
+                    checked = isAutoCheckEnabled,
+                    onCheckedChange = onToggleAutoCheck,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = DjObsidian,
+                        checkedTrackColor = DeckACyan,
+                        uncheckedThumbColor = TextMuted,
+                        uncheckedTrackColor = DjSurfaceElevated
+                    ),
+                    modifier = Modifier.testTag("auto_update_switch")
+                )
+            }
+
+            // Action Button
+            Button(
+                onClick = onCheckForUpdates,
+                enabled = !isChecking,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = DeckACyan,
+                    contentColor = DjObsidian,
+                    disabledContainerColor = DjSurfaceElevated,
+                    disabledContentColor = TextMuted
+                ),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .testTag("check_for_updates_button")
+            ) {
+                if (isChecking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = DjObsidian,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Checking GitHub...",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Check for Updates Now",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

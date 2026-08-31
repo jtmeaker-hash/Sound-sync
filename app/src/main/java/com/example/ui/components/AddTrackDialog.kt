@@ -56,8 +56,8 @@ fun AddTrackDialog(
     var title by remember { mutableStateOf("") }
     var artist by remember { mutableStateOf("") }
     var genre by remember { mutableStateOf("Tech House") }
-    var bpmText by remember { mutableStateOf("126") }
-    var keyText by remember { mutableStateOf("8A") }
+    var bpmText by remember { mutableStateOf("") }
+    var keyText by remember { mutableStateOf("") }
     var formatText by remember { mutableStateOf("MP3") }
     var bitrateText by remember { mutableStateOf("320") }
 
@@ -155,9 +155,10 @@ fun AddTrackDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val bpm = bpmText.toDoubleOrNull() ?: 126.0
+                    val bpm = bpmText.toDoubleOrNull() ?: 0.0
+                    val cleanKey = com.example.analysis.TunebatMetadataService.normalizeCamelotKey(keyText)
                     val bitrate = bitrateText.toIntOrNull() ?: 320
-                    onAddTrack(title, artist, genre, bpm, keyText, formatText.uppercase(), bitrate)
+                    onAddTrack(title, artist, genre, bpm, cleanKey, formatText.uppercase(), bitrate)
                     onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = DeckACyan, contentColor = DjObsidian),

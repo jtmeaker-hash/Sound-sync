@@ -142,11 +142,13 @@ class DjAudioEngine(private val context: Context) {
         _playbackProgress.value = if (duration > 0) (initialSec.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
         activeCueSeconds = 0
 
-        // Check if waveform is already in memory cache
-        WaveformCache.get(track.id)?.let { cached ->
+        // Immediately check if waveform is already cached for this exact file identity
+        val cacheKey = WaveformCache.getCacheKey(track, context)
+        WaveformCache.get(cacheKey, context)?.let { cached ->
             _waveformData.value = cached
             _isWaveformLoading.value = false
         } ?: run {
+            _waveformData.value = null
             _isWaveformLoading.value = true
         }
 
@@ -156,15 +158,19 @@ class DjAudioEngine(private val context: Context) {
             com.example.util.DjLogger.startTiming("PLAYER_PREPARE", "'${track.title}'")
             Log.d(TAG, "Playback preparation started for '${track.title}'")
 
-            // 1. Asynchronously extract full Rekordbox peak waveform
+            // 1. Asynchronously extract full Rekordbox peak waveform from real audio PCM
             launch {
                 try {
                     val fullWaveform = WaveformAnalyzer.analyze(context, track)
-                    _waveformData.value = fullWaveform
+                    if (_currentTrack.value?.id == track.id) {
+                        _waveformData.value = fullWaveform
+                    }
                 } catch (e: Exception) {
                     Log.w(TAG, "Waveform analysis failed: ${e.message}")
                 } finally {
-                    _isWaveformLoading.value = false
+                    if (_currentTrack.value?.id == track.id) {
+                        _isWaveformLoading.value = false
+                    }
                 }
             }
 

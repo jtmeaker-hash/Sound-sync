@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import com.example.analysis.TunebatMetadataService
 import com.example.model.AudioQualityRating
 import com.example.model.MusicPlatform
 import com.example.model.SyncState
@@ -136,8 +137,11 @@ object MediaScannerHelper {
 
                         val qualityRating = resolveQualityRating(format, computedBitrateKbps)
 
-                        // Deterministic fast Camelot key & BPM estimation without I/O blocking
-                        val (detectedKey, detectedBpm) = calculateFastMusicalProfile(id, title, dataPath)
+                        // Priority 1: Extract embedded metadata (ID3 / MP4 tags) if present
+                        val targetPath = dataPath.ifBlank { contentUri.toString() }
+                        val embeddedTags = TunebatMetadataService.extractEmbeddedTags(context, targetPath)
+                        val detectedBpm = if (embeddedTags != null && embeddedTags.hasBpm) embeddedTags.bpm else 0.0
+                        val detectedKey = if (embeddedTags != null && embeddedTags.hasKey) embeddedTags.musicalKey else ""
 
                         val track = Track(
                             id = "media_$id",
@@ -152,7 +156,7 @@ object MediaScannerHelper {
                             bitrateKbps = computedBitrateKbps,
                             format = format,
                             fileSizeMb = String.format(Locale.US, "%.2f", sizeMb).toDoubleOrNull() ?: sizeMb,
-                            filePath = dataPath.ifBlank { contentUri.toString() },
+                            filePath = targetPath,
                             directoryPath = dirPath,
                             isOfflineReady = true,
                             syncState = SyncState.SYNCED,
@@ -271,6 +275,11 @@ object MediaScannerHelper {
 
             val effectiveTitle = if (!title.isNullOrBlank()) title else displayName.substringBeforeLast(".")
 
+            // Priority 1: Extract embedded metadata (ID3 / MP4 tags) if present
+            val embeddedTags = TunebatMetadataService.extractEmbeddedTags(context, uri.toString())
+            val detectedBpm = if (embeddedTags != null && embeddedTags.hasBpm) embeddedTags.bpm else 0.0
+            val detectedKey = if (embeddedTags != null && embeddedTags.hasKey) embeddedTags.musicalKey else ""
+
             Track(
                 id = id,
                 title = effectiveTitle,
@@ -278,8 +287,8 @@ object MediaScannerHelper {
                 album = album,
                 genre = genre,
                 subGenre = "Club",
-                bpm = 126.0,
-                musicalKey = "8A",
+                bpm = detectedBpm,
+                musicalKey = detectedKey,
                 durationSeconds = durationSec,
                 bitrateKbps = bitrateKbps,
                 format = format,
@@ -345,35 +354,5 @@ object MediaScannerHelper {
             path.contains("CloudCache", ignoreCase = true) -> "cloud_vault"
             else -> "internal"
         }
-    }
-
-    /**
-     * Non-blocking fast calculation of Camelot key and BPM based on filename hints or deterministic hashing.
-     */
-    private fun calculateFastMusicalProfile(id: Long, title: String, dataPath: String): Pair<String, Double> {
-        val cleanName = (title + " " + dataPath.substringAfterLast('/')).replace("_", " ").replace("-", " ")
-
-        // Check for explicit BPM tag in filename like "128 bpm" or "126bpm"
-        var bpm = 126.0
-        val bpmMatch = Regex("""\b(1[1-3][0-9]|14[0-9]|9[0-9])\s*(?:bpm)?\b""", RegexOption.IGNORE_CASE).find(cleanName)
-        if (bpmMatch != null) {
-            bpmMatch.groupValues[1].toDoubleOrNull()?.let { bpm = it }
-        } else {
-            val seedBpm = kotlin.math.abs((id xor title.hashCode().toLong()).toInt())
-            bpm = 120.0 + (seedBpm % 15)
-        }
-
-        // Check for Camelot key in filename like "8A", "11B", "5A"
-        var key = "8A"
-        val keyMatch = Regex("""\b([1-9]|1[0-2])([A-Ba-b])\b""").find(cleanName)
-        if (keyMatch != null) {
-            key = keyMatch.value.uppercase(Locale.ROOT)
-        } else {
-            val keys = listOf("1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B", "5A", "5B", "6A", "6B", "7A", "7B", "8A", "8B", "9A", "9B", "10A", "10B", "11A", "11B", "12A", "12B")
-            val seedKey = kotlin.math.abs((id * 31 + dataPath.hashCode()).toInt())
-            key = keys[seedKey % keys.size]
-        }
-
-        return Pair(key, bpm)
     }
 }

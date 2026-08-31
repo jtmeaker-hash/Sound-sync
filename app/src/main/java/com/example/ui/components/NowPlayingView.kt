@@ -176,7 +176,7 @@ fun NowPlayingView(
                     border = androidx.compose.foundation.BorderStroke(1.dp, DeckACyan.copy(alpha = 0.5f))
                 ) {
                     Text(
-                        text = if (track.bpm > 0) String.format(Locale.US, "%.1f", track.bpm) else "126.0",
+                        text = if (track.hasValidBpm) String.format(Locale.US, "%.1f", track.bpm) else "—",
                         color = DeckACyan,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -191,7 +191,7 @@ fun NowPlayingView(
                     border = androidx.compose.foundation.BorderStroke(1.dp, DeckBPink.copy(alpha = 0.5f))
                 ) {
                     Text(
-                        text = track.musicalKey,
+                        text = if (track.hasValidKey) track.musicalKey else "—",
                         color = DeckBPink,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -306,61 +306,39 @@ fun NowPlayingView(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceEvenly
+            horizontalArrangement = Arrangement.Center
         ) {
-            // Hot Cue A Jump
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = DjSurfaceCard,
-                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
-                modifier = Modifier
-                    .size(42.dp)
-                    .clickable {
-                        val cueSec = track.hotCues.firstOrNull() ?: 0
-                        onSeekToMs(cueSec * 1000L)
-                    }
-                    .testTag("cue_a_button")
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "CUE",
-                        color = NeonAmber,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            }
-
             // Previous Track Button
             Surface(
                 shape = CircleShape,
                 color = DjSurfaceCard,
                 border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
-                modifier = Modifier.size(48.dp)
+                modifier = Modifier.size(52.dp)
             ) {
                 IconButton(
                     onClick = onPreviousTrack,
                     modifier = Modifier
-                        .size(48.dp)
+                        .fillMaxSize()
                         .testTag("previous_track_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.SkipPrevious,
                         contentDescription = "Previous Track",
                         tint = TextPrimary,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
             }
 
-            // Big Center Play / Pause Button (Glowing DJ Deck style)
+            Spacer(modifier = Modifier.width(24.dp))
+
+            // Big Center Play / Pause Button
             Surface(
                 shape = CircleShape,
                 color = if (isPlaying) DeckBPink else DeckACyan,
                 shadowElevation = 8.dp,
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(68.dp)
                     .clickable { onTogglePlayPause() }
                     .testTag("play_pause_button")
             ) {
@@ -372,52 +350,31 @@ fun NowPlayingView(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
                         tint = Color.Black,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(38.dp)
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.width(24.dp))
 
             // Next Track Button
             Surface(
                 shape = CircleShape,
                 color = DjSurfaceCard,
                 border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
-                modifier = Modifier.size(48.dp)
+                modifier = Modifier.size(52.dp)
             ) {
                 IconButton(
                     onClick = onNextTrack,
                     modifier = Modifier
-                        .size(48.dp)
+                        .fillMaxSize()
                         .testTag("next_track_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "Next Track",
                         tint = TextPrimary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-
-            // Loop 4-Bars Toggle
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = DjSurfaceCard,
-                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
-                modifier = Modifier
-                    .size(42.dp)
-                    .clickable {
-                        // Quick 4-bar loop
-                    }
-                    .testTag("loop_4_button")
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "4 BAR",
-                        color = DeckACyan,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
+                        modifier = Modifier.size(26.dp)
                     )
                 }
             }

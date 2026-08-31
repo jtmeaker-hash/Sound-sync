@@ -12,7 +12,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
-import kotlin.random.Random
 
 object AiAutoTagger {
 
@@ -38,7 +37,8 @@ object AiAutoTagger {
     )
 
     private val GENRE_DICTIONARY = mapOf(
-        "house" to ("Tech House" to "Club Peak"),
+        "tech house" to ("Tech House" to "Club Peak"),
+        "house" to ("House" to "Groove"),
         "techno" to ("Peak Time Techno" to "Hypnotic Driving"),
         "melodic" to ("Melodic House & Techno" to "Atmospheric"),
         "dnb" to ("Drum & Bass" to "Liquid Roller"),
@@ -53,7 +53,8 @@ object AiAutoTagger {
     )
 
     /**
-     * Tags track using Gemini AI when available or robust local heuristic acoustic model.
+     * Tags track using Gemini AI when available or high-confidence genre/acoustic metadata.
+     * Preserves confirmed BPM and Key; does not inject random guesses.
      */
     suspend fun autoTagTrack(track: Track): Track = withContext(Dispatchers.IO) {
         val apiKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
@@ -63,21 +64,18 @@ object AiAutoTagger {
                 val aiResult = callGeminiForTagging(track, apiKey)
                 if (aiResult != null) return@withContext aiResult
             } catch (e: Exception) {
-                // Fallback to heuristic tagger
+                // Fallback
             }
         }
 
-        return@withContext runHeuristicTagger(track)
+        return@withContext runGenreClassifier(track)
     }
 
-    private fun runHeuristicTagger(track: Track): Track {
+    private fun runGenreClassifier(track: Track): Track {
         val raw = "${track.title} ${track.artist} ${track.album}".lowercase()
-        val seed = track.id.hashCode().toLong()
-        val random = Random(seed)
 
-        var matchedGenre = "Tech House"
-        var matchedSubGenre = "Peak Time"
-        var baseBpm = 126.0
+        var matchedGenre = if (track.genre.isNotBlank() && track.genre != "DJ Library") track.genre else "Electronic"
+        var matchedSubGenre = if (track.subGenre.isNotBlank() && track.subGenre != "Club") track.subGenre else "Club"
 
         for ((key, pair) in GENRE_DICTIONARY) {
             if (raw.contains(key)) {
@@ -87,60 +85,28 @@ object AiAutoTagger {
             }
         }
 
-        // Calibrate realistic BPM & Energy to genre
-        when (matchedGenre) {
-            "Drum & Bass" -> {
-                baseBpm = 174.0 + (random.nextInt(-2, 3))
-            }
-            "Uplifting Trance" -> {
-                baseBpm = 138.0 + (random.nextInt(-2, 3))
-            }
-            "Peak Time Techno" -> {
-                baseBpm = 132.0 + (random.nextInt(-3, 4))
-            }
-            "Afro House", "Deep Organic" -> {
-                baseBpm = 122.0 + (random.nextInt(-2, 3))
-            }
-            "Nu Disco" -> {
-                baseBpm = 120.0 + (random.nextInt(-2, 3))
-            }
-            "Hip Hop" -> {
-                baseBpm = 92.0 + (random.nextInt(-6, 8))
-            }
-            else -> {
-                baseBpm = 125.0 + (random.nextInt(-3, 4))
-            }
-        }
-
-        val keyIndex = abs(random.nextInt()) % CAMELOT_KEYS.size
-        val camelotKey = CAMELOT_KEYS[keyIndex].first
-
         val energy = when (matchedGenre) {
-            "Peak Time Techno", "Dubstep", "Drum & Bass" -> random.nextInt(8, 11)
-            "Tech House", "Uplifting Trance" -> random.nextInt(7, 10)
-            "Nu Disco", "Afro House" -> random.nextInt(5, 8)
-            "Ambient Electronica" -> random.nextInt(2, 5)
-            else -> random.nextInt(6, 9)
+            "Peak Time Techno", "Dubstep", "Drum & Bass" -> 9
+            "Tech House", "Uplifting Trance" -> 8
+            "Nu Disco", "Afro House" -> 7
+            "Ambient Electronica" -> 3
+            else -> 7
         }
 
-        // Compute beat cues (Intro, Drop 1, Break, Drop 2)
+        val dur = track.durationSeconds.coerceAtLeast(60)
         val introCue = 0
-        val drop1 = (32 * 60 / baseBpm).roundToInt()
-        val breakCue = (64 * 60 / baseBpm).roundToInt()
-        val drop2 = (96 * 60 / baseBpm).roundToInt()
+        val drop1 = (dur * 0.15).toInt()
+        val breakCue = (dur * 0.50).toInt()
+        val drop2 = (dur * 0.75).toInt()
 
         return track.copy(
             genre = matchedGenre,
             subGenre = matchedSubGenre,
-            bpm = baseBpm,
-            musicalKey = camelotKey,
             energyRating = energy,
             hotCues = listOf(introCue, drop1, breakCue, drop2),
             isAiTagged = true
         )
     }
-
-    private fun abs(n: Int): Int = if (n < 0) -n else n
 
     private suspend fun callGeminiForTagging(track: Track, apiKey: String): Track? {
         val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
@@ -153,8 +119,8 @@ object AiAutoTagger {
             Return JSON with keys:
             - genre (e.g. "Melodic House & Techno", "Tech House", "Drum & Bass", "Afro House", "Deep House", "Uplifting Trance")
             - subGenre (e.g. "Club Peak", "Atmospheric", "Liquid Roller", "Peak Time Driving")
-            - bpm (number, e.g. 126.0)
-            - musicalKey (Camelot code such as "8A", "11B", "5A", "2B", "9A")
+            - bpm (number, e.g. 126.0, only if known with high certainty, otherwise 0.0)
+            - musicalKey (Camelot code such as "8A", "11B", "5A", "2B", "9A", only if known with high certainty, otherwise "")
             - energyRating (integer 1 to 10)
             - cuePointsSec (array of 4 numbers for intro, first drop, breakdown, second drop)
         """.trimIndent()
@@ -180,37 +146,47 @@ object AiAutoTagger {
             .build()
 
         val response = httpClient.newCall(request).execute()
-        if (!response.isSuccessful) return null
-
-        val respStr = response.body?.string() ?: return null
-        val root = JSONObject(respStr)
-        val candidates = root.optJSONArray("candidates") ?: return null
-        if (candidates.length() == 0) return null
-        val content = candidates.getJSONObject(0).optJSONObject("content") ?: return null
-        val parts = content.optJSONArray("parts") ?: return null
-        val text = parts.getJSONObject(0).optString("text") ?: return null
-
-        val parsed = JSONObject(text)
-        val genre = parsed.optString("genre", track.genre)
-        val subGenre = parsed.optString("subGenre", track.subGenre)
-        val bpm = parsed.optDouble("bpm", track.bpm)
-        val musicalKey = parsed.optString("musicalKey", track.musicalKey)
-        val energy = parsed.optInt("energyRating", track.energyRating)
-        val cueArray = parsed.optJSONArray("cuePointsSec")
-        val cues = mutableListOf<Int>()
-        if (cueArray != null) {
-            for (i in 0 until cueArray.length()) {
-                cues.add(cueArray.getInt(i))
-            }
+        if (!response.isSuccessful) {
+            response.close()
+            return null
         }
+
+        val body = response.body?.string() ?: return null
+        val rootObj = JSONObject(body)
+        val textContent = rootObj.getJSONArray("candidates")
+            .getJSONObject(0)
+            .getJSONObject("content")
+            .getJSONArray("parts")
+            .getJSONObject(0)
+            .getString("text")
+
+        val data = JSONObject(textContent)
+        val genre = data.optString("genre", track.genre)
+        val subGenre = data.optString("subGenre", track.subGenre)
+        val aiBpm = data.optDouble("bpm", 0.0)
+        val aiKey = data.optString("musicalKey", "")
+        val energy = data.optInt("energyRating", track.energyRating).coerceIn(1, 10)
+
+        val rawCues = data.optJSONArray("cuePointsSec")
+        val cues = mutableListOf<Int>()
+        if (rawCues != null && rawCues.length() > 0) {
+            for (i in 0 until rawCues.length()) {
+                cues.add(rawCues.getInt(i))
+            }
+        } else {
+            cues.addAll(track.hotCues)
+        }
+
+        val finalBpm = if (track.hasValidBpm) track.bpm else if (aiBpm > 30.0 && aiBpm < 300.0) aiBpm else 0.0
+        val finalKey = if (track.hasValidKey) track.musicalKey else TunebatMetadataService.normalizeCamelotKey(aiKey)
 
         return track.copy(
             genre = genre,
             subGenre = subGenre,
-            bpm = bpm,
-            musicalKey = musicalKey,
+            bpm = finalBpm,
+            musicalKey = finalKey,
             energyRating = energy,
-            hotCues = if (cues.isNotEmpty()) cues else track.hotCues,
+            hotCues = cues,
             isAiTagged = true
         )
     }

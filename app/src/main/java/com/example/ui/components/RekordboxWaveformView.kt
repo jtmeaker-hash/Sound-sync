@@ -121,7 +121,6 @@ fun RekordboxWaveformView(
             waveformData = waveformData,
             currentPositionMs = effectivePositionMs,
             durationMs = safeDurationMs,
-            hotCues = track.hotCues,
             onSeekFraction = { fraction ->
                 val targetMs = (safeDurationMs * fraction.coerceIn(0f, 1f)).toLong()
                 onSeekToMs(targetMs)
@@ -179,7 +178,6 @@ fun RekordboxWaveformView(
                     durationMs = safeDurationMs,
                     visibleWindowSeconds = visibleWindowSeconds,
                     trackBpm = track.bpm,
-                    hotCues = track.hotCues,
                     textMeasurer = textMeasurer
                 )
             }
@@ -262,7 +260,6 @@ private fun DrawScope.drawRekordboxScrollingWaveform(
     durationMs: Long,
     visibleWindowSeconds: Float,
     trackBpm: Double,
-    hotCues: List<Int>,
     textMeasurer: TextMeasurer
 ) {
     val width = size.width
@@ -362,20 +359,21 @@ private fun DrawScope.drawRekordboxScrollingWaveform(
 
             if (sampleTimeMs in 0f..durationMs.toFloat()) {
                 val binIndex = (sampleTimeMs / msPerBin).toInt().coerceIn(0, totalBins - 1)
-                val peak = peaks[binIndex].coerceIn(0.05f, 1.0f)
-                val low = lowBand[binIndex].coerceIn(0.02f, 1.0f)
-                val mid = midBand[binIndex].coerceIn(0.02f, 1.0f)
-                val high = highBand[binIndex].coerceIn(0.02f, 1.0f)
+                val peak = peaks[binIndex].coerceIn(0.0f, 1.0f)
+                val low = lowBand[binIndex].coerceIn(0.0f, 1.0f)
+                val mid = midBand[binIndex].coerceIn(0.0f, 1.0f)
+                val high = highBand[binIndex].coerceIn(0.0f, 1.0f)
 
-                val barHalfHeight = max(2.5f, peak * maxPeakHeight)
+                // True dynamic range: Silence approaches 0 (flat 0.5px line), quiet sections are small, drops/choruses reach full height
+                val barHalfHeight = if (peak < 0.015f) 0.5f else (peak * maxPeakHeight).coerceAtLeast(1.0f)
                 val isPast = sampleTimeMs < currentPositionMs
 
-                // Rekordbox 3-Band Color Composition:
+                // 3-Band Color Composition:
                 // Bass (Blue) dominates the center core, Mids (Orange/Amber) form body, Highs (Cyan/White) tip transients
-                val colorAlpha = if (isPast) 0.65f else 1.0f
+                val colorAlpha = if (isPast) 0.60f else 1.0f
                 val barColor = when {
                     high > 0.65f -> Color(0xFF00FFFF).copy(alpha = colorAlpha) // Bright Cyan Transient
-                    low > 0.55f -> Color(0xFF1E6CFF).copy(alpha = colorAlpha)  // Deep Rekordbox Bass Blue
+                    low > 0.55f -> Color(0xFF1E6CFF).copy(alpha = colorAlpha)  // Deep Bass Blue
                     mid > 0.45f -> Color(0xFFFF9500).copy(alpha = colorAlpha)  // Vibrant Vocal/Snare Amber
                     else -> Color(0xFF00C8FF).copy(alpha = colorAlpha * 0.85f)
                 }
@@ -389,7 +387,7 @@ private fun DrawScope.drawRekordboxScrollingWaveform(
                 )
 
                 // High transient tip highlight
-                if (high > 0.70f) {
+                if (high > 0.70f && peak > 0.3f) {
                     drawCircle(
                         color = Color.White.copy(alpha = colorAlpha * 0.9f),
                         radius = 1.2f,
@@ -415,61 +413,6 @@ private fun DrawScope.drawRekordboxScrollingWaveform(
                 end = Offset(sx, centerY + 6f),
                 strokeWidth = 2f
             )
-        }
-    }
-
-    // -------------------------------------------------------------
-    // 3. DRAW HOT CUE MARKERS (A, B, C, D)
-    // -------------------------------------------------------------
-    val cueLabels = listOf("A", "B", "C", "D", "E", "F")
-    val cueColors = listOf(DeckACyan, DeckBPink, NeonAmber, NeonGreen, Color(0xFF9D4EDD), Color(0xFFFF5500))
-
-    hotCues.forEachIndexed { index, cueSec ->
-        val cueTimeMs = cueSec * 1000L
-        if (cueTimeMs in 0..durationMs) {
-            val cueX = centerX + ((cueTimeMs - currentPositionMs) / msPerPixel)
-            if (cueX in -20f..(width + 20f)) {
-                val label = cueLabels.getOrElse(index) { "${index + 1}" }
-                val color = cueColors.getOrElse(index) { DeckACyan }
-
-                // Vertical cue line
-                if (cueX in -2f..(width + 2f)) {
-                    drawLine(
-                        color = color.copy(alpha = 0.9f),
-                        start = Offset(cueX, 0f),
-                        end = Offset(cueX, height),
-                        strokeWidth = 1.8f
-                    )
-                }
-
-                // Top Cue Flag Banner and text label
-                if (cueX in 0f..(width - 20f)) {
-                    val flagWidth = 16f
-                    val flagHeight = 14f
-                    val path = Path().apply {
-                        moveTo(cueX, 0f)
-                        lineTo(cueX + flagWidth, 0f)
-                        lineTo(cueX + flagWidth, flagHeight)
-                        lineTo(cueX, flagHeight)
-                        close()
-                    }
-                    drawPath(path, color)
-
-                    val cueTextLayout = textMeasurer.measure(
-                        text = AnnotatedString(label),
-                        style = TextStyle(
-                            color = Color.Black,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    )
-                    drawText(
-                        textLayoutResult = cueTextLayout,
-                        topLeft = Offset(cueX + 3f, 1f)
-                    )
-                }
-            }
         }
     }
 }
@@ -525,7 +468,6 @@ private fun FullTrackOverviewScrubber(
     waveformData: WaveformData?,
     currentPositionMs: Long,
     durationMs: Long,
-    hotCues: List<Int>,
     onSeekFraction: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -561,7 +503,7 @@ private fun FullTrackOverviewScrubber(
                 for (i in peaks.indices) {
                     val x = i * step
                     val peak = peaks[i]
-                    val barH = max(1.5f, peak * (centerY * 0.8f))
+                    val barH = if (peak < 0.015f) 0.5f else (peak * (centerY * 0.85f)).coerceAtLeast(1.0f)
                     val isPast = x <= playheadX
                     val color = if (isPast) DeckACyan.copy(alpha = 0.9f) else Color(0xFF2A364F)
 
@@ -571,22 +513,6 @@ private fun FullTrackOverviewScrubber(
                         end = Offset(x, centerY + barH),
                         strokeWidth = max(1f, step - 0.5f)
                     )
-                }
-
-                // Hot Cues on mini overview
-                val cueColors = listOf(DeckACyan, DeckBPink, NeonAmber, NeonGreen)
-                hotCues.forEachIndexed { idx, sec ->
-                    val cueMs = sec * 1000L
-                    if (cueMs in 0..durationMs && durationMs > 0) {
-                        val cx = (cueMs.toFloat() / durationMs.toFloat()) * width
-                        val cColor = cueColors.getOrElse(idx) { DeckACyan }
-                        drawLine(
-                            color = cColor,
-                            start = Offset(cx, 0f),
-                            end = Offset(cx, height),
-                            strokeWidth = 2f
-                        )
-                    }
                 }
 
                 // Playhead needle

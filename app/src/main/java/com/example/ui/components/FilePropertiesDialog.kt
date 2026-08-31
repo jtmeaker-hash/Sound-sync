@@ -87,7 +87,7 @@ fun FilePropertiesDialog(
     var album by remember { mutableStateOf(track.album) }
     var genre by remember { mutableStateOf(track.genre) }
     var subGenre by remember { mutableStateOf(track.subGenre) }
-    var bpmString by remember { mutableStateOf(track.bpm.toString()) }
+    var bpmString by remember { mutableStateOf(if (track.hasValidBpm) track.bpm.toString() else "") }
     var musicalKey by remember { mutableStateOf(track.musicalKey) }
     var energyRating by remember { mutableIntStateOf(track.energyRating) }
 
@@ -415,7 +415,8 @@ fun FilePropertiesDialog(
                     // Save Button
                     Button(
                         onClick = {
-                            val parsedBpm = bpmString.toDoubleOrNull() ?: track.bpm
+                            val parsedBpm = bpmString.toDoubleOrNull() ?: 0.0
+                            val cleanKey = com.example.analysis.TunebatMetadataService.normalizeCamelotKey(musicalKey)
                             val updated = track.copy(
                                 title = title,
                                 artist = artist,
@@ -423,7 +424,7 @@ fun FilePropertiesDialog(
                                 genre = genre,
                                 subGenre = subGenre,
                                 bpm = parsedBpm,
-                                musicalKey = musicalKey,
+                                musicalKey = cleanKey,
                                 energyRating = energyRating
                             )
                             onSave(updated)

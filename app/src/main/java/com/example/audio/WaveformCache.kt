@@ -1,7 +1,16 @@
 package com.example.audio
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
 import androidx.collection.LruCache
+import com.example.model.Track
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.File
 
 /**
  * Compact data structure holding precomputed waveform peak and frequency energy arrays for a track.
@@ -40,35 +49,189 @@ data class WaveformData(
 }
 
 /**
- * High-performance, thread-safe LRU cache for audio waveforms.
- * Retains pre-analyzed track peaks in memory so switching back to a track instantly restores its waveform.
+ * High-performance two-tier (Memory + Disk) Waveform Cache.
+ *
+ * Cache Identity Scheme:
+ * "trackId + fileModifiedTime + fileSize + waveformAnalysisVersion"
+ * Ensures replaced/modified files immediately invalidate older waveform data.
  */
 object WaveformCache {
     private const val TAG = "WaveformCache"
-    // Maximum 50 full track waveforms in memory (~2.5 MB total RAM footprint)
-    private val cache = LruCache<String, WaveformData>(50)
+    const val WAVEFORM_ANALYSIS_VERSION = 5
+    private const val MAGIC_HEADER = 0x53594E43 // "SYNC"
 
-    fun get(trackId: String): WaveformData? {
-        val result = cache.get(trackId)
-        if (result != null) {
-            Log.d(TAG, "Cache HIT for trackId=$trackId (${result.samplePoints} points)")
+    // Memory LRU Cache (up to 100 waveform objects in RAM ~5MB max)
+    private val memoryCache = LruCache<String, WaveformData>(100)
+
+    /**
+     * Constructs a unique cache identity based on:
+     * trackId + fileModifiedTime + fileSize + waveformAnalysisVersion
+     */
+    fun getCacheKey(track: Track, context: Context? = null): String {
+        var fileSize: Long = (track.fileSizeMb * 1024 * 1024).toLong()
+        var fileModified: Long = track.dateAdded
+
+        if (track.filePath.isNotBlank()) {
+            try {
+                if (track.filePath.startsWith("content://") && context != null) {
+                    val uri = Uri.parse(track.filePath)
+                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (sizeIdx >= 0) {
+                                val sz = cursor.getLong(sizeIdx)
+                                if (sz > 0) fileSize = sz
+                            }
+                        }
+                    }
+                } else if (!track.filePath.startsWith("http")) {
+                    val file = File(track.filePath)
+                    if (file.exists()) {
+                        val sz = file.length()
+                        val mod = file.lastModified()
+                        if (sz > 0) fileSize = sz
+                        if (mod > 0) fileModified = mod
+                    }
+                }
+            } catch (ignored: Exception) {}
         }
-        return result
+
+        val sanitizedTrackId = track.id.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        return "${sanitizedTrackId}_${fileModified}_${fileSize}_v${WAVEFORM_ANALYSIS_VERSION}"
     }
 
-    fun put(trackId: String, data: WaveformData) {
-        cache.put(trackId, data)
-        Log.d(TAG, "Cached waveform for trackId=$trackId (${data.samplePoints} points, duration=${data.durationMs}ms)")
+    /**
+     * Retrieves waveform data from memory cache, or falls back to fast disk cache.
+     */
+    fun get(cacheKey: String, context: Context? = null): WaveformData? {
+        // 1. Check Memory Cache
+        memoryCache.get(cacheKey)?.let {
+            return it
+        }
+
+        // 2. Check Disk Cache
+        if (context != null) {
+            val diskData = readFromDisk(cacheKey, context)
+            if (diskData != null) {
+                memoryCache.put(cacheKey, diskData)
+                return diskData
+            }
+        }
+
+        return null
     }
 
-    fun contains(trackId: String): Boolean = cache.get(trackId) != null
-
-    fun remove(trackId: String) {
-        cache.remove(trackId)
+    /**
+     * Saves waveform data to both memory cache and disk cache.
+     */
+    fun put(cacheKey: String, data: WaveformData, context: Context? = null) {
+        memoryCache.put(cacheKey, data)
+        if (context != null) {
+            writeToDisk(cacheKey, data, context)
+        }
+        Log.d(TAG, "Cached waveform for key='$cacheKey' (${data.samplePoints} points, isReal=${data.isRealAudioData})")
     }
 
-    fun clear() {
-        cache.evictAll()
-        Log.d(TAG, "Waveform cache cleared")
+    fun contains(cacheKey: String, context: Context? = null): Boolean {
+        if (memoryCache.get(cacheKey) != null) return true
+        if (context != null) {
+            val file = getDiskFile(cacheKey, context)
+            return file.exists() && file.length() > 0
+        }
+        return false
+    }
+
+    fun remove(cacheKey: String, context: Context? = null) {
+        memoryCache.remove(cacheKey)
+        if (context != null) {
+            val file = getDiskFile(cacheKey, context)
+            if (file.exists()) file.delete()
+        }
+    }
+
+    fun clear(context: Context? = null) {
+        memoryCache.evictAll()
+        if (context != null) {
+            val dir = getCacheDir(context)
+            dir.listFiles()?.forEach { it.delete() }
+        }
+        Log.d(TAG, "Waveform memory and disk cache cleared")
+    }
+
+    private fun getCacheDir(context: Context): File {
+        val dir = File(context.cacheDir, "waveforms_v$WAVEFORM_ANALYSIS_VERSION")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    private fun getDiskFile(cacheKey: String, context: Context): File {
+        val safeFileName = "${cacheKey.hashCode().toUInt().toString(16)}_${cacheKey.take(32)}.bin"
+        return File(getCacheDir(context), safeFileName)
+    }
+
+    private fun writeToDisk(cacheKey: String, data: WaveformData, context: Context) {
+        try {
+            val file = getDiskFile(cacheKey, context)
+            val tmpFile = File(file.parentFile, "${file.name}.tmp")
+            DataOutputStream(BufferedOutputStream(tmpFile.outputStream())).use { out ->
+                out.writeInt(MAGIC_HEADER)
+                out.writeUTF(data.trackId)
+                out.writeLong(data.durationMs)
+                out.writeInt(data.samplePoints)
+                out.writeDouble(data.bpm)
+                out.writeBoolean(data.isRealAudioData)
+
+                // Write arrays
+                for (i in 0 until data.samplePoints) out.writeFloat(data.peaks.getOrElse(i) { 0f })
+                for (i in 0 until data.samplePoints) out.writeFloat(data.lowBand.getOrElse(i) { 0f })
+                for (i in 0 until data.samplePoints) out.writeFloat(data.midBand.getOrElse(i) { 0f })
+                for (i in 0 until data.samplePoints) out.writeFloat(data.highBand.getOrElse(i) { 0f })
+            }
+            if (tmpFile.renameTo(file)) {
+                // success
+            } else {
+                tmpFile.copyTo(file, overwrite = true)
+                tmpFile.delete()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed writing waveform to disk cache: ${e.message}")
+        }
+    }
+
+    private fun readFromDisk(cacheKey: String, context: Context): WaveformData? {
+        val file = getDiskFile(cacheKey, context)
+        if (!file.exists() || file.length() < 32) return null
+        return try {
+            DataInputStream(BufferedInputStream(file.inputStream())).use { inStream ->
+                val magic = inStream.readInt()
+                if (magic != MAGIC_HEADER) return null
+                val trackId = inStream.readUTF()
+                val durationMs = inStream.readLong()
+                val samplePoints = inStream.readInt()
+                val bpm = inStream.readDouble()
+                val isReal = inStream.readBoolean()
+
+                val peaks = FloatArray(samplePoints) { inStream.readFloat() }
+                val lowBand = FloatArray(samplePoints) { inStream.readFloat() }
+                val midBand = FloatArray(samplePoints) { inStream.readFloat() }
+                val highBand = FloatArray(samplePoints) { inStream.readFloat() }
+
+                WaveformData(
+                    trackId = trackId,
+                    durationMs = durationMs,
+                    samplePoints = samplePoints,
+                    peaks = peaks,
+                    lowBand = lowBand,
+                    midBand = midBand,
+                    highBand = highBand,
+                    bpm = bpm,
+                    isRealAudioData = isReal
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed reading waveform from disk cache: ${e.message}")
+            try { file.delete() } catch (ignored: Exception) {}
+            null
+        }
     }
 }

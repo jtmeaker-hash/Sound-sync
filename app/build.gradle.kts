@@ -15,19 +15,27 @@ android {
     applicationId = "com.aistudio.soundsync.fxmk"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
+    versionName = System.getenv("VERSION_NAME") ?: "1.0.0"
+
+    buildConfigField("String", "GITHUB_REPO_OWNER", "\"jtmeaker-hash\"")
+    buildConfigField("String", "GITHUB_REPO_NAME", "\"Sound-sync\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+      val keystorePath = System.getenv("KEYSTORE_PATH")
+        ?: System.getenv("RELEASE_KEYSTORE_PATH")
+        ?: "${rootDir}/release.keystore"
+      val keystoreFile = file(keystorePath)
+      if (keystoreFile.exists()) {
+        storeFile = keystoreFile
+      }
+      storePassword = System.getenv("STORE_PASSWORD") ?: System.getenv("RELEASE_STORE_PASSWORD") ?: ""
+      keyAlias = System.getenv("KEY_ALIAS") ?: System.getenv("RELEASE_KEY_ALIAS") ?: "soundsync"
+      keyPassword = System.getenv("KEY_PASSWORD") ?: System.getenv("RELEASE_KEY_PASSWORD") ?: ""
     }
     val customDebugKeystore = file("${rootDir}/debug.keystore")
     if (customDebugKeystore.exists()) {
@@ -100,6 +108,7 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
+  implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)

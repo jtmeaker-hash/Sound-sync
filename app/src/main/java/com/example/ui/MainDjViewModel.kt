@@ -31,6 +31,11 @@ import com.example.model.StorageSource
 import com.example.model.StorageSourceType
 import com.example.model.SyncState
 import com.example.model.Track
+import com.example.model.UpdateInfo
+import com.example.model.UpdateState
+import com.example.update.UpdateCheckWorker
+import com.example.update.UpdateManager
+import android.app.Activity
 import com.example.service.AudioScanService
 import com.example.service.AudioScanState
 import com.example.storage.LocalFileSystemScanner
@@ -449,9 +454,59 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         DuplicateDetector.findDuplicates(tracks)
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    // SoundSync In-App Update System State
+    val updateState: StateFlow<UpdateState> = UpdateManager.updateState
+    val updateLastCheckedTimestamp: StateFlow<Long> = UpdateManager.lastCheckedTimestamp
+    val isAutoUpdateCheckEnabled: StateFlow<Boolean> = UpdateManager.isAutoCheckEnabled
+
     init {
         initializeStorageAndData()
         observeBackgroundScanner()
+        initializeUpdateSystem()
+    }
+
+    private fun initializeUpdateSystem() {
+        val app = getApplication<Application>()
+        UpdateManager.init(app)
+        if (UpdateManager.isAutoCheckEnabled.value) {
+            UpdateCheckWorker.schedulePeriodicCheck(app)
+            // Non-blocking asynchronous startup update check with safe delay
+            viewModelScope.launch(Dispatchers.IO) {
+                kotlinx.coroutines.delay(3500)
+                UpdateManager.checkForUpdates(app, isManual = false)
+            }
+        }
+    }
+
+    fun checkForUpdates(isManual: Boolean = true) {
+        val app = getApplication<Application>()
+        UpdateManager.checkForUpdates(app, isManual = isManual)
+    }
+
+    fun startUpdateDownload(info: UpdateInfo) {
+        val app = getApplication<Application>()
+        UpdateManager.startDownload(app, info)
+    }
+
+    fun cancelUpdateDownload() {
+        UpdateManager.cancelDownload()
+    }
+
+    fun installUpdateApk(activity: Activity, apkFile: java.io.File, info: UpdateInfo?) {
+        UpdateManager.installApk(activity, apkFile, info)
+    }
+
+    fun dismissUpdateDialog(tagName: String? = null) {
+        UpdateManager.dismissUpdate(tagName)
+    }
+
+    fun setAutoUpdateCheckEnabled(enabled: Boolean) {
+        val app = getApplication<Application>()
+        UpdateManager.setAutoCheckEnabled(app, enabled)
+    }
+
+    fun resumePendingUpdateInstall(activity: Activity) {
+        UpdateManager.resumePendingInstall(activity)
     }
 
     private fun observeBackgroundScanner() {
@@ -1276,6 +1331,32 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             audioEngine.loadTrack(track, autoPlay = true)
             inspectTrackSpectrogram(track)
+            resolveBpmAndKeyForTrack(track)
+        }
+    }
+
+    fun resolveBpmAndKeyForTrack(track: Track) {
+        if (track.hasValidBpm && track.hasValidKey) return
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val verified = com.example.analysis.TunebatMetadataService.resolveTrackMetadata(app, track, writeTagsToFile = true)
+            if (verified.hasBpm || verified.hasKey) {
+                val updatedTrack = track.copy(
+                    bpm = if (verified.hasBpm) verified.bpm else track.bpm,
+                    musicalKey = if (verified.hasKey) verified.musicalKey else track.musicalKey
+                )
+                trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
+                if (audioEngine.currentTrack.value?.id == track.id) {
+                    val wasPlaying = audioEngine.isPlaying.value
+                    val currentSec = audioEngine.currentPositionSec.value
+                    withContext(Dispatchers.Main) {
+                        audioEngine.loadTrack(updatedTrack, autoPlay = wasPlaying, initialPositionSec = currentSec)
+                    }
+                }
+                if (_inspectingTrackForProperties.value?.id == track.id) {
+                    _inspectingTrackForProperties.value = updatedTrack
+                }
+            }
         }
     }
 
@@ -1476,8 +1557,17 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun saveTrackProperties(updatedTrack: Track) {
+        val app = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
+            if (updatedTrack.hasValidBpm || updatedTrack.hasValidKey) {
+                com.example.storage.AudioTagWriter.writeConfirmedBpmAndKey(
+                    context = app,
+                    filePathOrUri = updatedTrack.filePath,
+                    bpm = if (updatedTrack.hasValidBpm) updatedTrack.bpm else 0.0,
+                    musicalKey = if (updatedTrack.hasValidKey) updatedTrack.musicalKey else ""
+                )
+            }
             if (audioEngine.currentTrack.value?.id == updatedTrack.id) {
                 val wasPlaying = audioEngine.isPlaying.value
                 val currentSec = audioEngine.currentPositionSec.value

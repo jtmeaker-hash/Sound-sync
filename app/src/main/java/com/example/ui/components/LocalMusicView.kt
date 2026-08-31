@@ -459,7 +459,7 @@ fun LocalTrackCard(
                 val durM = track.durationSeconds / 60
                 val durS = track.durationSeconds % 60
                 Text(
-                    text = String.format(Locale.US, "%d:%02d • %.0f BPM", durM, durS, track.bpm),
+                    text = if (track.hasValidBpm) String.format(Locale.US, "%d:%02d • %.0f BPM", durM, durS, track.bpm) else String.format(Locale.US, "%d:%02d • BPM —", durM, durS),
                     color = TextMuted,
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace

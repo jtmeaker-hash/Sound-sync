@@ -854,7 +854,7 @@ private fun DjTrackFileRow(
                     border = androidx.compose.foundation.BorderStroke(1.dp, keyColor)
                 ) {
                     Text(
-                        text = track.musicalKey,
+                        text = if (track.hasValidKey) track.musicalKey else "—",
                         color = keyColor,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Black,
@@ -869,7 +869,7 @@ private fun DjTrackFileRow(
                     color = DjSurfaceElevated
                 ) {
                     Text(
-                        text = String.format(Locale.US, "%.0f", track.bpm),
+                        text = if (track.hasValidBpm) String.format(Locale.US, "%.0f", track.bpm) else "—",
                         color = NeonAmber,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,

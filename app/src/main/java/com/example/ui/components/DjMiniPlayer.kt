@@ -200,7 +200,7 @@ fun DjMiniPlayer(
                             color = DeckBPink.copy(alpha = 0.15f)
                         ) {
                             Text(
-                                text = track.musicalKey,
+                                text = if (track.hasValidKey) track.musicalKey else "—",
                                 color = DeckBPink,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,

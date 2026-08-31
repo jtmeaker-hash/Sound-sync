@@ -306,10 +306,16 @@ class AudioScanService : Service() {
         var genre = "DJ Library"
         var durationSec = 210
         var bitrateKbps = if (format == "FLAC" || format == "WAV") 1411 else 320
-        var bpm = 126.0
-        var musicalKey = "8A"
+        var bpm = 0.0
+        var musicalKey = ""
         var sampleRate = 44100
         var bitDepth = 16
+
+        val embedded = com.example.analysis.TunebatMetadataService.extractEmbeddedTags(this, uri.toString())
+        if (embedded != null) {
+            if (embedded.hasBpm) bpm = embedded.bpm
+            if (embedded.hasKey) musicalKey = embedded.musicalKey
+        }
 
         val retriever = MediaMetadataRetriever()
         try {

@@ -323,7 +323,7 @@ private fun TrackRowItem(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = track.musicalKey,
+                        text = if (track.hasValidKey) track.musicalKey else "—",
                         color = DeckBPink,
                         fontWeight = FontWeight.Black,
                         fontSize = 13.sp,
@@ -373,7 +373,7 @@ private fun TrackRowItem(
             // BPM & Duration
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.Center) {
                 Text(
-                    text = "${track.bpm.toInt()} BPM",
+                    text = if (track.hasValidBpm) "${track.bpm.toInt()} BPM" else "BPM —",
                     color = DeckACyan,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Black,

@@ -66,22 +66,22 @@ data class Track(
     val title: String,
     val artist: String,
     val album: String = "Single",
-    val genre: String = "Tech House",
+    val genre: String = "DJ Library",
     val subGenre: String = "Club",
-    val bpm: Double = 126.0,
-    val musicalKey: String = "8A", // Camelot key e.g. 8A (A Minor), 11B (A Major)
+    val bpm: Double = 0.0,
+    val musicalKey: String = "", // Camelot key e.g. 8A (A Minor), 11B (A Major) or "" if unknown
     val durationSeconds: Int = 210,
     val bitrateKbps: Int = 320,
     val format: String = "MP3", // MP3, FLAC, WAV, AAC, AIFF
     val fileSizeMb: Double = 8.4,
-    val filePath: String = "/Music/Tech House/track.mp3",
-    val directoryPath: String = "/Music/Tech House",
+    val filePath: String = "/Music/track.mp3",
+    val directoryPath: String = "/Music",
     val isOfflineReady: Boolean = true,
     val syncState: SyncState = SyncState.SYNCED,
     val platforms: List<MusicPlatform> = listOf(MusicPlatform.LOCAL),
-    val energyRating: Int = 8, // 1 to 10 scale for DJ set building
+    val energyRating: Int = 7, // 1 to 10 scale for DJ set building
     val hotCues: List<Int> = listOf(0, 32, 64, 128), // Cue positions in beats/seconds
-    val isAiTagged: Boolean = true,
+    val isAiTagged: Boolean = false,
     val qualityRating: AudioQualityRating = AudioQualityRating.TRUE_320,
     val dateAdded: Long = System.currentTimeMillis(),
     val crateId: String = "default",
@@ -89,7 +89,28 @@ data class Track(
     val trackNumber: Int = 0,
     val discNumber: Int = 1,
     val storageRelativePath: String = ""
-)
+) {
+    val hasValidBpm: Boolean
+        get() = bpm > 30.0 && bpm < 300.0
+
+    val hasValidKey: Boolean
+        get() = musicalKey.isNotBlank() && musicalKey != "—" && musicalKey != "-" && !musicalKey.equals("Unknown", ignoreCase = true)
+
+    val bpmDisplay: String
+        get() = if (hasValidBpm) String.format(java.util.Locale.US, "%.1f BPM", bpm) else "BPM —"
+
+    val bpmIntDisplay: String
+        get() = if (hasValidBpm) "${bpm.toInt()} BPM" else "BPM —"
+
+    val bpmValueDisplay: String
+        get() = if (hasValidBpm) String.format(java.util.Locale.US, "%.1f", bpm) else "—"
+
+    val keyDisplay: String
+        get() = if (hasValidKey) "KEY $musicalKey" else "KEY —"
+
+    val keyShortDisplay: String
+        get() = if (hasValidKey) musicalKey else "—"
+}
 
 data class Album(
     val id: String,

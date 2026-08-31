@@ -1,6 +1,10 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -63,11 +67,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.model.FileOperationType
 import com.example.model.NowPlayingDisplayMode
 import com.example.model.Track
+import com.example.model.UpdateState
 import com.example.ui.components.ApiConfigDialog
 import com.example.ui.components.DjMiniPlayer
 import com.example.ui.components.LocalMusicView
+import com.example.ui.components.NowPlayingFullScreen
 import com.example.ui.components.NowPlayingModalSheet
 import com.example.ui.components.OperationsAndCloudView
+import com.example.ui.components.UpdateDialog
+import android.app.Activity
 import com.example.ui.components.SoundCloudTab
 import com.example.ui.components.SoundCloudOrange
 import com.example.ui.components.SpectrogramAnalyzerView
@@ -138,6 +146,11 @@ fun MainDjScreen(
     val currentPosSec by viewModel.audioEngine.currentPositionSec.collectAsState()
     val playbackProgress by viewModel.audioEngine.playbackProgress.collectAsState()
     val currentPositionMs by viewModel.currentPositionMs.collectAsState()
+
+    // SoundSync In-App Update States
+    val updateState by viewModel.updateState.collectAsState()
+    val updateLastCheckedTimestamp by viewModel.updateLastCheckedTimestamp.collectAsState()
+    val isAutoUpdateCheckEnabled by viewModel.isAutoUpdateCheckEnabled.collectAsState()
 
     // Now Playing Display Mode & Waveform States
     val nowPlayingDisplayMode by viewModel.nowPlayingDisplayMode.collectAsState()
@@ -346,6 +359,11 @@ fun MainDjScreen(
                         storageSources = storageSources,
                         operationJournal = operationJournal,
                         scanServiceState = scanServiceState,
+                        updateState = updateState,
+                        lastCheckedTimestamp = updateLastCheckedTimestamp,
+                        isAutoCheckEnabled = isAutoUpdateCheckEnabled,
+                        onCheckForUpdates = { viewModel.checkForUpdates(isManual = true) },
+                        onToggleAutoCheck = { viewModel.setAutoUpdateCheckEnabled(it) },
                         onTriggerSync = { viewModel.triggerCloudSync() },
                         onExportRekordbox = { viewModel.exportRekordboxXml() },
                         onUndoOperation = { viewModel.undoJournalOperation(it) },
@@ -362,6 +380,22 @@ fun MainDjScreen(
                 }
             }
 
+            // In-App Update Dialog / Progress / Install Sheet
+            val activity = context as? Activity
+            UpdateDialog(
+                updateState = updateState,
+                onStartDownload = { info -> viewModel.startUpdateDownload(info) },
+                onCancelDownload = { viewModel.cancelUpdateDownload() },
+                onInstallApk = { apkFile, info ->
+                    activity?.let { act -> viewModel.installUpdateApk(act, apkFile, info) }
+                },
+                onDismiss = {
+                    val tagName = (updateState as? UpdateState.UpdateAvailable)?.info?.tagName
+                    viewModel.dismissUpdateDialog(tagName)
+                },
+                onRetry = { viewModel.checkForUpdates(isManual = true) }
+            )
+
             // API Configuration Dialog
             if (showApiConfigDialog) {
                 ApiConfigDialog(
@@ -373,25 +407,31 @@ fun MainDjScreen(
                 )
             }
 
-            // Expanded Full Now Playing Rekordbox Player Sheet
-            if (isNowPlayingExpanded && playingTrack != null) {
-                NowPlayingModalSheet(
-                    track = playingTrack!!,
-                    displayMode = nowPlayingDisplayMode,
-                    waveformData = waveformData,
-                    isWaveformLoading = isWaveformLoading,
-                    isPlaying = isPlaying,
-                    currentPositionMs = currentPositionMs,
-                    durationMs = if (playingTrack!!.durationSeconds > 0) playingTrack!!.durationSeconds * 1000L else 0L,
-                    onDismiss = { viewModel.closeNowPlaying() },
-                    onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
-                    onPreviousTrack = { viewModel.previousTrack() },
-                    onNextTrack = { viewModel.nextTrack() },
-                    onSeekToMs = { ms -> viewModel.seekToMs(ms) },
-                    onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
-                    onSetDisplayMode = { mode -> viewModel.setNowPlayingDisplayMode(mode) },
-                    onOpenProperties = { track -> viewModel.openTrackProperties(track) }
-                )
+            // Full-Screen Now Playing Page
+            AnimatedVisibility(
+                visible = isNowPlayingExpanded && playingTrack != null,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { it })
+            ) {
+                if (playingTrack != null) {
+                    NowPlayingFullScreen(
+                        track = playingTrack!!,
+                        displayMode = nowPlayingDisplayMode,
+                        waveformData = waveformData,
+                        isWaveformLoading = isWaveformLoading,
+                        isPlaying = isPlaying,
+                        currentPositionMs = currentPositionMs,
+                        durationMs = if (playingTrack!!.durationSeconds > 0) playingTrack!!.durationSeconds * 1000L else 0L,
+                        onDismiss = { viewModel.closeNowPlaying() },
+                        onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
+                        onPreviousTrack = { viewModel.previousTrack() },
+                        onNextTrack = { viewModel.nextTrack() },
+                        onSeekToMs = { ms -> viewModel.seekToMs(ms) },
+                        onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
+                        onSetDisplayMode = { mode -> viewModel.setNowPlayingDisplayMode(mode) },
+                        onOpenProperties = { track -> viewModel.openTrackProperties(track) }
+                    )
+                }
             }
         }
     }
