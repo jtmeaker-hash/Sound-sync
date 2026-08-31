@@ -4,10 +4,10 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
-import android.media.MediaPlayer
-import android.media.PlaybackParams
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.net.Uri
-import android.os.Build
 import android.util.Log
 import com.example.model.Track
 import kotlinx.coroutines.CoroutineScope
@@ -19,17 +19,21 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+import java.nio.ByteOrder
 import kotlin.math.PI
+import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * Single authoritative DJ Audio Engine managing playback state, MediaPlayer lifecycle,
- * fallback procedural synthesis, and DJ deck parameters (Pitch, EQ, 4-bar Looping, Cues).
+ * Single authoritative DJ Audio Engine managing playback state, real-time DSP decoding
+ * via MediaCodec + AudioTrack (EQ + Haas applied to actual audio), fallback procedural
+ * synthesis for demo tracks, and DJ deck parameters (Pitch, EQ, 4-bar Looping, Cues).
  */
 class DjAudioEngine(private val context: Context) {
 
     companion object {
         private const val TAG = "DjAudioEngine"
+        private const val TIMEOUT_US: Long = 10_000L
 
         @Volatile
         private var instance: DjAudioEngine? = null
@@ -46,21 +50,26 @@ class DjAudioEngine(private val context: Context) {
     var onStopCallback: (() -> Unit)? = null
 
     private val scope = CoroutineScope(Dispatchers.Default)
-    private var playbackJob: Job? = null
+    private var streamingJob: Job? = null
+    private var synthesisJob: Job? = null
+    private var prepareJob: Job? = null
 
     @Volatile
     private var audioTrack: AudioTrack? = null
     private val audioTrackLock = Any()
 
     @Volatile
-    private var mediaPlayer: MediaPlayer? = null
-    private val mediaPlayerLock = Any()
+    private var streamingTrack: AudioTrack? = null
 
+    // Pending seek target (ms) consumed by the streaming decode loop
     @Volatile
-    private var isUsingMediaPlayer = false
+    private var pendingSeekMs: Long? = null
 
     @Volatile
     private var isEngineReleased = false
+
+    // EQ applied to real audio in the DSP decode path
+    private val parametricEq = ParametricEq(44100)
 
     // Authoritative Playback State: initialized strictly in a paused/stopped state
     private val _isPlaying = MutableStateFlow(false)
@@ -133,8 +142,6 @@ class DjAudioEngine(private val context: Context) {
         haasEffect.setAmount(savedHaas.amount)
         haasEffect.setDelayMs(savedHaas.delayMs)
     }
-
-    private var prepareJob: Job? = null
 
     /**
      * Loads a track for playback or preview.
@@ -213,8 +220,8 @@ class DjAudioEngine(private val context: Context) {
             val waveform = SpectrogramEngine.extractWaveform(context, track)
             _waveformHeights.value = waveform
 
-            // 3. Prepare MediaPlayer on background IO thread
-            prepareMediaPlayerForTrack(track, initialSec)
+            // 3. Store the current position for seamless resume after lazy playback start
+            pendingSeekMs = null
             val prepTime = System.currentTimeMillis() - prepStartTime
             com.example.util.DjLogger.endTiming("PLAYER_PREPARE", "Prepared in ${prepTime}ms for '${track.title}'")
             com.example.util.DjLogger.endTiming("TRACK_LOAD_END", "'${track.title}' ready in paused state")
@@ -230,7 +237,7 @@ class DjAudioEngine(private val context: Context) {
     }
 
     private fun isUriAccessible(uriOrPath: String): Boolean {
-        if (uriOrPath.isBlank()) return false
+        if (uriOrPath.isBlank() || uriOrPath.startsWith("demo://")) return false
         return try {
             if (uriOrPath.startsWith("content://")) {
                 val uri = Uri.parse(uriOrPath)
@@ -251,96 +258,20 @@ class DjAudioEngine(private val context: Context) {
         }
     }
 
-    private fun prepareMediaPlayerForTrack(track: Track, initialPositionSec: Int) {
-        val uriOrPath = track.filePath
-        if (!isUriAccessible(uriOrPath)) {
-            Log.d(TAG, "URI or path '$uriOrPath' is not directly accessible. Synthesis fallback will be used when played.")
-            isUsingMediaPlayer = false
-            return
-        }
-
-        var mp: MediaPlayer? = null
-        try {
-            mp = MediaPlayer().apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-            }
-
-            Log.d(TAG, "Opening URI in MediaPlayer: $uriOrPath")
-            if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
-                mp.setDataSource(context, Uri.parse(uriOrPath))
-            } else {
-                mp.setDataSource(uriOrPath)
-            }
-
-            mp.prepare()
-            applyPlaybackParams(mp)
-
-            if (initialPositionSec > 0) {
-                mp.seekTo(initialPositionSec * 1000)
-            }
-
-            mp.setOnCompletionListener {
-                Log.d(TAG, "MediaPlayer completed playback")
-                if (_activeLoopBars.value > 0) {
-                    seekToSecond(activeCueSeconds)
-                    if (_isPlaying.value) {
-                        try {
-                            it.start()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Error restarting loop in MediaPlayer: ${e.message}")
-                        }
-                    }
-                } else {
-                    if (onNextTrackCallback != null) {
-                        Log.d(TAG, "Auto-advancing to next track in queue...")
-                        onNextTrackCallback?.invoke()
-                    } else {
-                        seekToSecond(0)
-                        pause()
-                    }
+    private fun setExtractorDataSource(extractor: MediaExtractor, uriOrPath: String) {
+        if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
+            val uri = Uri.parse(uriOrPath)
+            try {
+                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                    extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    return
                 }
+                extractor.setDataSource(context, uri, null)
+            } catch (e: Exception) {
+                extractor.setDataSource(context, uri, null)
             }
-
-            mp.setOnErrorListener { _, what, extra ->
-                Log.e(TAG, "MediaPlayer asynchronous error: what=$what, extra=$extra. Reverting to paused synthesis.")
-                synchronized(mediaPlayerLock) {
-                    isUsingMediaPlayer = false
-                    try {
-                        mediaPlayer?.release()
-                    } catch (ignored: Exception) {}
-                    mediaPlayer = null
-                }
-                true
-            }
-
-            synchronized(mediaPlayerLock) {
-                mediaPlayer = mp
-                isUsingMediaPlayer = true
-            }
-            Log.d(TAG, "MediaPlayer successfully prepared for '${track.title}'. Ready in paused state.")
-        } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException preparing MediaPlayer for '${track.filePath}': ${e.message}")
-            safeReleaseMediaPlayer(mp)
-            isUsingMediaPlayer = false
-        } catch (e: Exception) {
-            Log.e(TAG, "Exception preparing MediaPlayer for '${track.filePath}': ${e.message}")
-            safeReleaseMediaPlayer(mp)
-            isUsingMediaPlayer = false
-        }
-    }
-
-    private fun safeReleaseMediaPlayer(mp: MediaPlayer?) {
-        if (mp == null) return
-        try {
-            mp.reset()
-            mp.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error releasing temporary MediaPlayer: ${e.message}")
+        } else {
+            extractor.setDataSource(uriOrPath)
         }
     }
 
@@ -359,7 +290,7 @@ class DjAudioEngine(private val context: Context) {
             return
         }
 
-        Log.d(TAG, "Explicit playback started by user for track: '${track.title}' (isUsingMediaPlayer=$isUsingMediaPlayer)")
+        Log.d(TAG, "Explicit playback started by user for track: '${track.title}'")
         com.example.util.DjLogger.log("PLAYER_PLAY", "'${track.title}' by '${track.artist}'")
         _isPlaying.value = true
 
@@ -369,32 +300,9 @@ class DjAudioEngine(private val context: Context) {
             Log.w(TAG, "Could not start MediaPlaybackService: ${e.message}")
         }
 
-        if (isUsingMediaPlayer) {
-            val mp = synchronized(mediaPlayerLock) { mediaPlayer }
-            if (mp != null) {
-                try {
-                    applyPlaybackParams(mp)
-                    mp.start()
-                    startMediaPlayerTracking()
-                    return
-                } catch (e: IllegalStateException) {
-                    Log.e(TAG, "MediaPlayer was in an invalid state when start() called: ${e.message}. Falling back to synthesis.")
-                    synchronized(mediaPlayerLock) {
-                        isUsingMediaPlayer = false
-                        try {
-                            mediaPlayer?.release()
-                        } catch (ignored: Exception) {}
-                        mediaPlayer = null
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error starting MediaPlayer: ${e.message}. Falling back to synthesis.")
-                    isUsingMediaPlayer = false
-                }
-            }
-        }
-
-        // Fallback to audio synthesis preview
-        startAudioSynthesis()
+        // Real audio files: route through MediaCodec decoder + AudioTrack so DSP (EQ + Haas) is applied.
+        // Demo / inaccessible tracks fall back to procedural synthesis.
+        startStreamingPlayback()
     }
 
     /**
@@ -404,21 +312,11 @@ class DjAudioEngine(private val context: Context) {
         Log.d(TAG, "Playback paused.")
         com.example.util.DjLogger.log("PLAYER_STOP", "Playback paused")
         _isPlaying.value = false
-        playbackJob?.cancel()
-
-        synchronized(mediaPlayerLock) {
-            if (mediaPlayer != null) {
-                try {
-                    if (mediaPlayer?.isPlaying == true) {
-                        mediaPlayer?.pause()
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Ignored exception during MediaPlayer pause: ${e.message}")
-                }
-            }
-        }
-
+        streamingJob?.cancel()
+        streamingJob = null
+        synthesisJob?.cancel()
         stopAudioSynthesis()
+        streamingTrack?.let { t -> runCatching { t.pause() } }
     }
 
     fun togglePlayPause() {
@@ -448,12 +346,8 @@ class DjAudioEngine(private val context: Context) {
         _pitchPercent.value = percent.coerceIn(-16f, 16f)
         val base = _currentTrack.value?.bpm ?: 126.0
         _effectiveBpm.value = base * (1.0 + _pitchPercent.value / 100.0)
-
-        synchronized(mediaPlayerLock) {
-            if (isUsingMediaPlayer && mediaPlayer != null) {
-                applyPlaybackParams(mediaPlayer)
-            }
-        }
+        // The streaming decode loop reads _pitchPercent each buffer and applies it
+        // via AudioTrack.playbackRate, so pitch changes are picked up immediately.
     }
 
     fun setEq(low: Float, mid: Float, high: Float) {
@@ -535,64 +429,281 @@ class DjAudioEngine(private val context: Context) {
         _currentPositionSec.value = clampedSec
         _playbackProgress.value = if (durationMs > 0) clampedMs.toFloat() / durationMs.toFloat() else 0f
 
-        synchronized(mediaPlayerLock) {
-            if (isUsingMediaPlayer && mediaPlayer != null) {
-                try {
-                    mediaPlayer?.seekTo(clampedMs.toInt())
-                } catch (e: Exception) {
-                    Log.w(TAG, "Seek error in MediaPlayer: ${e.message}")
-                }
-            }
+        // If streaming playback is active, queue the seek for the decode loop to apply.
+        if (streamingTrack != null) {
+            pendingSeekMs = clampedMs
         }
     }
 
-    private fun applyPlaybackParams(mp: MediaPlayer?) {
-        if (mp == null) return
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val speed = (1.0f + _pitchPercent.value / 100.0f).coerceIn(0.5f, 2.0f)
-                val params = PlaybackParams().apply {
-                    this.speed = speed
-                    this.pitch = speed
-                }
-                mp.playbackParams = params
+    /**
+     * Start real-audio playback through a MediaCodec decoder + AudioTrack.
+     * Decoded PCM is passed through the parametric EQ and Haas effect before
+     * being written to the output, so both effects genuinely alter the audio.
+     */
+    private fun startStreamingPlayback() {
+        streamingJob?.cancel()
+        streamingJob = scope.launch(Dispatchers.IO) {
+            val track = _currentTrack.value
+            if (track == null) {
+                Log.w(TAG, "Streaming playback cancelled: no track loaded.")
+                return@launch
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Cannot apply playback params: ${e.message}")
-        }
-    }
+            val uriOrPath = track.filePath
 
-    private fun startMediaPlayerTracking() {
-        playbackJob?.cancel()
-        playbackJob = scope.launch {
-            while (isActive && _isPlaying.value && !isEngineReleased) {
-                val mp = synchronized(mediaPlayerLock) { mediaPlayer }
-                val track = _currentTrack.value
-                if (mp != null && track != null) {
-                    try {
-                        val currentMs = mp.currentPosition.toLong()
-                        val currentSec = (currentMs / 1000).toInt()
-                        _currentPositionMs.value = currentMs
-                        _currentPositionSec.value = currentSec
-                        val durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else mp.duration.toLong()
-                        if (durationMs > 0) {
-                            _playbackProgress.value = (currentMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-                        }
+            if (!isUriAccessible(uriOrPath)) {
+                Log.d(TAG, "Track '$uriOrPath' is not directly accessible. Using synthesis fallback.")
+                startAudioSynthesis()
+                return@launch
+            }
 
-                        // Check active loop
-                        if (_activeLoopBars.value > 0) {
-                            val currentBpm = _effectiveBpm.value.coerceIn(20.0, 300.0)
-                            val loopLengthSec = (_activeLoopBars.value * 4 * 60 / currentBpm).toInt().coerceAtLeast(2)
-                            val startLoopSec = activeCueSeconds
-                            if (currentSec >= startLoopSec + loopLengthSec) {
-                                seekToSecond(startLoopSec)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Exception in tracking loop: ${e.message}")
+            var extractor: MediaExtractor? = null
+            var codec: MediaCodec? = null
+            var audioTrack: AudioTrack? = null
+            try {
+                val ex = MediaExtractor()
+                extractor = ex
+                setExtractorDataSource(ex, uriOrPath)
+
+                var audioIndex = -1
+                var format: MediaFormat? = null
+                for (i in 0 until ex.trackCount) {
+                    val f = ex.getTrackFormat(i)
+                    val mime = f.getString(MediaFormat.KEY_MIME) ?: ""
+                    if (mime.startsWith("audio/")) {
+                        audioIndex = i
+                        format = f
+                        break
                     }
                 }
-                delay(30)
+                if (audioIndex < 0 || format == null) {
+                    Log.w(TAG, "No audio track found for '$uriOrPath'. Using synthesis fallback.")
+                    startAudioSynthesis()
+                    return@launch
+                }
+                ex.selectTrack(audioIndex)
+
+                val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+                val chCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: "audio/mp4"
+
+                codec = MediaCodec.createDecoderByType(mime)
+                codec.configure(format, null, null, 0)
+                codec.start()
+
+                val minBuf = AudioTrack.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_OUT_STEREO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+                val bufferSize = if (minBuf > 0) minBuf.coerceAtLeast(8192) else 8192
+                audioTrack = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(bufferSize)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+
+                if (audioTrack.state != AudioTrack.STATE_INITIALIZED) {
+                    Log.w(TAG, "AudioTrack failed to initialize for '$uriOrPath'.")
+                    startAudioSynthesis()
+                    return@launch
+                }
+                audioTrack.play()
+                streamingTrack = audioTrack
+
+                // Apply pitch via AudioTrack playback rate (matches prior fast-forward behavior)
+                runCatching {
+                    audioTrack.playbackRate = (sampleRate * (1f + _pitchPercent.value / 100f)).toInt().coerceIn(4000, 192000)
+                }
+
+                // Seek to the requested start position
+                var startMs = _currentPositionMs.value.coerceAtLeast(0L)
+                pendingSeekMs?.let { startMs = it; pendingSeekMs = null }
+                if (startMs > 0) {
+                    runCatching { ex.seekTo(startMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC) }
+                }
+
+                val durationMs = (track.durationSeconds.coerceAtLeast(1) * 1000L)
+                _currentPositionMs.value = startMs
+                _currentPositionSec.value = (startMs / 1000).toInt()
+                _playbackProgress.value = if (durationMs > 0) (startMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+
+                // DSP engine configured for the decoded sample rate
+                val eq = ParametricEq(sampleRate)
+                val bufferInfo = MediaCodec.BufferInfo()
+                val pcmStereo = ShortArray(bufferSize / 2)
+                var inputEos = false
+                var outputEos = false
+                var iterations = 0L
+
+                while (isActive && _isPlaying.value && !isEngineReleased) {
+                    iterations++
+                    if (iterations > 2_000_000L) {
+                        Log.w(TAG, "Streaming loop safety limit hit for '${track.title}'")
+                        break
+                    }
+
+                    // Apply a queued seek if any
+                    pendingSeekMs?.let { seekMs ->
+                        pendingSeekMs = null
+                        val target = seekMs.coerceIn(0L, durationMs)
+                        runCatching {
+                            ex.seekTo(target * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                            codec.flush()
+                        }
+                        inputEos = false
+                        outputEos = false
+                        _currentPositionMs.value = target
+                        _currentPositionSec.value = (target / 1000).toInt()
+                        _playbackProgress.value = if (durationMs > 0) (target.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                    }
+
+                    if (!inputEos) {
+                        val inIdx = codec.dequeueInputBuffer(TIMEOUT_US)
+                        if (inIdx >= 0) {
+                            val inBuf = codec.getInputBuffer(inIdx)
+                            if (inBuf != null) {
+                                val size = ex.readSampleData(inBuf, 0)
+                                if (size < 0) {
+                                    codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                    inputEos = true
+                                } else {
+                                    codec.queueInputBuffer(inIdx, 0, size, ex.sampleTime, 0)
+                                    ex.advance()
+                                }
+                            } else {
+                                // Could not obtain input buffer; wait and retry.
+                            }
+                        }
+                    }
+
+                    val outIdx = codec.dequeueOutputBuffer(bufferInfo, 0)
+                    when {
+                        outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            // Output format may change (rare); ignore for now.
+                        }
+                        outIdx >= 0 -> {
+                            val outBuf = codec.getOutputBuffer(outIdx)
+                            if (outBuf != null && bufferInfo.size > 0 &&
+                                (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                                outBuf.position(bufferInfo.offset)
+                                outBuf.limit(bufferInfo.offset + bufferInfo.size)
+                                outBuf.order(ByteOrder.LITTLE_ENDIAN)
+                                val ss = outBuf.asShortBuffer()
+
+                                val frames = min(ss.remaining() / chCount.coerceAtLeast(1), pcmStereo.size / 2)
+                                var filled = 0
+                                if (chCount <= 1) {
+                                    while (ss.hasRemaining() && filled < frames) {
+                                        val s = ss.get()
+                                        pcmStereo[filled * 2] = s
+                                        pcmStereo[filled * 2 + 1] = s
+                                        filled++
+                                    }
+                                } else {
+                                    var fi = 0
+                                    while (ss.remaining() >= 2 && fi < frames) {
+                                        val l = ss.get()
+                                        val r = ss.get()
+                                        pcmStereo[fi * 2] = l
+                                        pcmStereo[fi * 2 + 1] = r
+                                        fi++
+                                    }
+                                    filled = fi
+                                }
+
+                                if (filled > 0) {
+                                    // Apply parametric EQ
+                                    eq.lowGain = _eqLow.value
+                                    eq.midGain = _eqMid.value
+                                    eq.highGain = _eqHigh.value
+                                    eq.processStereo(pcmStereo, 0, filled)
+
+                                    // Apply Haas Surround effect
+                                    if (haasEffect.isActive) {
+                                        haasEffect.process(pcmStereo, 0, filled)
+                                    }
+
+                                    // Write decoded+processed PCM (blocks -> backpressure)
+                                    audioTrack.write(pcmStereo, 0, filled * 2)
+
+                                    // Track position from the media PTS (source of truth)
+                                    val pts = bufferInfo.presentationTimeUs
+                                    if (pts >= 0) {
+                                        val posMs = (pts / 1000L).coerceIn(0L, durationMs)
+                                        _currentPositionMs.value = posMs
+                                        _currentPositionSec.value = (posMs / 1000).toInt()
+                                        _playbackProgress.value = if (durationMs > 0) (posMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                                    }
+
+                                    // Refresh pitch (applied via playback rate)
+                                    runCatching {
+                                        audioTrack.playbackRate = (sampleRate * (1f + _pitchPercent.value / 100f)).toInt().coerceIn(4000, 192000)
+                                    }
+                                }
+                            }
+                            codec.releaseOutputBuffer(outIdx, false)
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                outputEos = true
+                            }
+                        }
+                    }
+
+                    // Handle loop boundary / completion
+                    if (_activeLoopBars.value > 0) {
+                        val currentBpm = _effectiveBpm.value.coerceIn(20.0, 300.0)
+                        val loopLenSec = (_activeLoopBars.value * 4 * 60 / currentBpm).toInt().coerceAtLeast(2)
+                        val loopEndMs = activeCueSeconds * 1000L + loopLenSec * 1000L
+                        if (_currentPositionMs.value >= loopEndMs) {
+                            runCatching {
+                                ex.seekTo(activeCueSeconds * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                                codec.flush()
+                            }
+                            inputEos = false
+                            outputEos = false
+                            continue
+                        }
+                    }
+
+                    if (inputEos && outputEos) {
+                        if (onNextTrackCallback != null) {
+                            Log.d(TAG, "Streaming playback completed, auto-advancing.")
+                            pause()
+                            onNextTrackCallback?.invoke()
+                        } else {
+                            pause()
+                            seekToSecond(0)
+                        }
+                        break
+                    }
+                }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                Log.e(TAG, "Streaming playback error for '${_currentTrack.value?.title}': ${e.message}", e)
+            } finally {
+                try { codec?.stop() } catch (ignored: Exception) {}
+                try { codec?.release() } catch (ignored: Exception) {}
+                try { extractor?.release() } catch (ignored: Exception) {}
+                if (streamingTrack === audioTrack) {
+                    streamingTrack = null
+                }
+                try {
+                    if (audioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING) audioTrack?.pause()
+                    audioTrack?.flush()
+                    audioTrack?.release()
+                } catch (ignored: Exception) {}
             }
         }
     }
@@ -607,8 +718,8 @@ class DjAudioEngine(private val context: Context) {
     }
 
     private fun startAudioSynthesis() {
-        playbackJob?.cancel()
-        playbackJob = scope.launch {
+        synthesisJob?.cancel()
+        synthesisJob = scope.launch {
             val sampleRate = 22050
             val minBuf = AudioTrack.getMinBufferSize(
                 sampleRate,
@@ -765,18 +876,14 @@ class DjAudioEngine(private val context: Context) {
     }
 
     private fun releasePlayers() {
-        synchronized(mediaPlayerLock) {
+        streamingTrack?.let { t ->
             try {
-                if (mediaPlayer?.isPlaying == true) {
-                    mediaPlayer?.stop()
-                }
-                mediaPlayer?.reset()
-                mediaPlayer?.release()
+                if (t.playState == AudioTrack.PLAYSTATE_PLAYING) t.stop()
+                t.release()
             } catch (e: Exception) {
-                Log.w(TAG, "Ignored error releasing MediaPlayer: ${e.message}")
+                Log.w(TAG, "Ignored error releasing streaming AudioTrack: ${e.message}")
             }
-            mediaPlayer = null
-            isUsingMediaPlayer = false
+            streamingTrack = null
         }
         stopAudioSynthesis()
     }
@@ -789,6 +896,8 @@ class DjAudioEngine(private val context: Context) {
         isEngineReleased = true
         pause()
         releasePlayers()
-        playbackJob?.cancel()
+        prepareJob?.cancel()
+        streamingJob?.cancel()
+        synthesisJob?.cancel()
     }
 }
