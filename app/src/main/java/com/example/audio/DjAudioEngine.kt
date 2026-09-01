@@ -564,6 +564,7 @@ class DjAudioEngine(private val context: Context) {
                 }
 
                 val durationMs = (track.durationSeconds.coerceAtLeast(1) * 1000L)
+                var renderedPositionUs = startMs * 1000L
                 _currentPositionMs.value = startMs
                 _currentPositionSec.value = (startMs / 1000).toInt()
                 _playbackProgress.value = if (durationMs > 0) (startMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
@@ -616,6 +617,7 @@ class DjAudioEngine(private val context: Context) {
                         }
                         inputEos = false
                         outputEos = false
+                        renderedPositionUs = target * 1000L
                         _currentPositionMs.value = target
                         _currentPositionSec.value = (target / 1000).toInt()
                         _playbackProgress.value = if (durationMs > 0) (target.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
@@ -676,8 +678,10 @@ class DjAudioEngine(private val context: Context) {
                                 }
 
                                 if (filled > 0) {
-                                    val pts = bufferInfo.presentationTimeUs
-                                    val currentPtsMs = if (pts >= 0) (pts / 1000L).coerceIn(0L, durationMs) else _currentPositionMs.value
+                                    // MediaCodec PTS describes decoded input, while AudioTrack.write
+                                    // may still hold several buffers. Use the rendered sample clock for
+                                    // the UI so the waveform follows audible output rather than queued PCM.
+                                    val currentPtsMs = (renderedPositionUs / 1000L).coerceIn(0L, durationMs)
                                     val transitionStartMs = (durationMs - crossfadeDurationMs).coerceAtLeast(0L)
 
                                     var crossfadePcm: ShortArray? = null
@@ -756,7 +760,10 @@ class DjAudioEngine(private val context: Context) {
                                     }
 
                                     // Write decoded+processed PCM (blocks -> backpressure)
-                                    audioTrack.write(pcmStereo, 0, filled * 2)
+                                    val written = audioTrack.write(pcmStereo, 0, filled * 2)
+                                    if (written > 0) {
+                                        renderedPositionUs += (written.toLong() / 2L) * 1_000_000L / sampleRate
+                                    }
 
                                     if (!crossfadeStarted) {
                                         _currentPositionMs.value = currentPtsMs
@@ -1032,6 +1039,7 @@ class DjAudioEngine(private val context: Context) {
                 var step = 0
                 var syntheticPositionMs = _currentPositionMs.value
                 val eq = ParametricEq(sampleRate)
+                val synthStartNs = System.nanoTime() - syntheticPositionMs * 1_000_000L
 
                 while (isActive && _isPlaying.value && !isEngineReleased) {
                     val track = _currentTrack.value ?: break
@@ -1107,7 +1115,7 @@ class DjAudioEngine(private val context: Context) {
 
                     // Advance using the number of samples written, not an unrelated timer.
                     val duration = track.durationSeconds.coerceAtLeast(1)
-                    syntheticPositionMs += monoBuffer.size * 1000L / sampleRate
+                    syntheticPositionMs = ((System.nanoTime() - synthStartNs) / 1_000_000L).coerceAtLeast(syntheticPositionMs)
                     val newSec = (syntheticPositionMs / 1000L).toInt()
                     _currentPositionMs.value = syntheticPositionMs.coerceAtMost(duration * 1000L)
                     _currentPositionSec.value = newSec
