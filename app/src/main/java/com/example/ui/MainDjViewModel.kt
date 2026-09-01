@@ -10,6 +10,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.analysis.AiAutoTagger
+import com.example.metadata.EnrichedTrackMetadata
+import com.example.metadata.LocalPcmAudioAnalyzer
+import com.example.metadata.MusicBrainzClient
+import com.example.metadata.MusicMetadataEnrichmentService
+import com.example.metadata.MetadataFileWriter
+import com.example.metadata.MetadataWriteResult
+import com.example.metadata.OkHttpMusicBrainzTransport
 import com.example.analysis.DuplicateDetector
 import com.example.audio.DjAudioEngine
 import com.example.audio.SpectrogramEngine
@@ -98,6 +105,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val scanStateManager = ScanStateManager(application)
     private val scanMutex = Mutex()
     private var currentScanJob: Job? = null
+    private val metadataEnrichmentService = MusicMetadataEnrichmentService(
+        musicBrainzClient = MusicBrainzClient(OkHttpMusicBrainzTransport()),
+        audioAnalyzer = LocalPcmAudioAnalyzer(application)
+    )
+    private val metadataFileWriter = MetadataFileWriter(application)
 
     private val prefs = getApplication<Application>().getSharedPreferences("soundsync_player_prefs", Context.MODE_PRIVATE)
 
@@ -811,6 +823,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 onBatch = { batch ->
                     val entities = batch.map { TrackEntity.fromTrack(it) }
                     trackDao.insertTracks(entities)
+                    queueMetadataEnrichment(batch)
                     refreshStorageSourcesList()
 
                     if (isFirstBatch && batch.isNotEmpty() && audioEngine.currentTrack.value == null) {
@@ -930,6 +943,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
             if (imported.isNotEmpty()) {
                 trackDao.insertTracks(imported.map { TrackEntity.fromTrack(it) })
+                queueMetadataEnrichment(imported)
                 refreshStorageSourcesList()
 
                 val log = OperationJournalItem(
@@ -968,6 +982,77 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             _isScanning.value = false
             _scanProgressMessage.value = ""
         }
+    }
+
+    fun refreshMusicBrainzMetadata(track: Track) {
+        queueMetadataEnrichment(listOf(track))
+    }
+
+    fun reanalyseAudio(track: Track) {
+        queueMetadataEnrichment(listOf(track))
+    }
+
+    fun writeMetadataToFile(track: Track) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = metadataFileWriter.write(track)
+            withContext(Dispatchers.Main) {
+                showSnackbar(
+                    when (result) {
+                        MetadataWriteResult.Written -> "Metadata written to file."
+                        is MetadataWriteResult.Unsupported -> "Metadata write unavailable: ${result.reason}"
+                        is MetadataWriteResult.Failed -> "Metadata write failed: ${result.reason}"
+                    }
+                )
+            }
+        }
+    }
+
+    private fun queueMetadataEnrichment(tracks: List<Track>) {
+        tracks.forEach { track ->
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching {
+                    val enriched = metadataEnrichmentService.enrich(track)
+                    persistEnrichedMetadata(enriched, track)
+                }.onFailure { error ->
+                    Log.w("MainDjViewModel", "Metadata enrichment failed for ${track.id}: ${error.message}")
+                }
+            }
+        }
+    }
+
+    private suspend fun persistEnrichedMetadata(enriched: EnrichedTrackMetadata, original: Track) {
+        val current = trackDao.getTrackById(original.id) ?: return
+        val merged = current.toTrack().copy(
+            title = enriched.title,
+            artist = enriched.artist,
+            album = enriched.album,
+            albumArtist = enriched.albumArtist,
+            genre = enriched.genre ?: current.genre,
+            trackNumber = enriched.trackNumber ?: current.trackNumber,
+            discNumber = enriched.discNumber ?: current.discNumber,
+            bpm = enriched.bpm ?: current.bpm,
+            bpmConfidence = enriched.bpmConfidence,
+            bpmAnalysisVersion = enriched.bpmAnalysisVersion,
+            bpmLastAnalyzed = enriched.bpmLastAnalyzed,
+            musicalKey = enriched.musicalKey ?: current.musicalKey,
+            camelotKey = enriched.camelotKey ?: current.camelotKey,
+            keyConfidence = enriched.keyConfidence,
+            keyAnalysisVersion = enriched.keyAnalysisVersion,
+            keyLastAnalyzed = enriched.keyLastAnalyzed,
+            isrc = enriched.isrc,
+            releaseDate = enriched.releaseDate,
+            releaseYear = enriched.releaseYear,
+            recordLabel = enriched.recordLabel,
+            barcode = enriched.barcode,
+            musicBrainzRecordingId = enriched.musicBrainzRecordingId,
+            musicBrainzArtistId = enriched.musicBrainzArtistId,
+            musicBrainzReleaseId = enriched.musicBrainzReleaseId,
+            musicBrainzReleaseGroupId = enriched.musicBrainzReleaseGroupId,
+            musicBrainzMatchConfidence = enriched.musicBrainzConfidence,
+            musicBrainzLastChecked = enriched.musicBrainzLastChecked,
+            artworkUrl = enriched.artworkUrl
+        )
+        trackDao.updateTrack(TrackEntity.fromTrack(merged))
     }
 
     fun loadDemoTracks() {

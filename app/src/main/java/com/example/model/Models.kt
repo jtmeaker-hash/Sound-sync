@@ -63,7 +63,14 @@ data class Track(
     val genre: String = "DJ Library",
     val subGenre: String = "Club",
     val bpm: Double = 0.0,
-    val musicalKey: String = "", // Camelot key e.g. 8A (A Minor), 11B (A Major) or "" if unknown
+    val bpmConfidence: Double = 0.0,
+    val bpmAnalysisVersion: String? = null,
+    val bpmLastAnalyzed: Long? = null,
+    val musicalKey: String = "", // Canonical key name; empty means unknown
+    val camelotKey: String = "",
+    val keyConfidence: Double = 0.0,
+    val keyAnalysisVersion: String? = null,
+    val keyLastAnalyzed: Long? = null,
     val durationSeconds: Int = 210,
     val bitrateKbps: Int = 320,
     val format: String = "MP3", // MP3, FLAC, WAV, AAC, AIFF
@@ -82,6 +89,19 @@ data class Track(
     val sourceId: String = "internal",
     val trackNumber: Int = 0,
     val discNumber: Int = 1,
+    val albumArtist: String = "",
+    val releaseDate: String? = null,
+    val releaseYear: Int? = null,
+    val recordLabel: String? = null,
+    val barcode: String? = null,
+    val isrc: String? = null,
+    val musicBrainzRecordingId: String? = null,
+    val musicBrainzArtistId: String? = null,
+    val musicBrainzReleaseId: String? = null,
+    val musicBrainzReleaseGroupId: String? = null,
+    val musicBrainzMatchConfidence: Double = 0.0,
+    val musicBrainzLastChecked: Long? = null,
+    val artworkUrl: String? = null,
     val storageRelativePath: String = "",
     val contentFingerprint: String = ""
 ) {

@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaylistEntity::class,
         PlaylistTrackEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -93,6 +93,37 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val columns = listOf(
+                    "bpmConfidence REAL NOT NULL DEFAULT 0.0",
+                    "bpmAnalysisVersion TEXT",
+                    "bpmLastAnalyzed INTEGER",
+                    "camelotKey TEXT NOT NULL DEFAULT ''",
+                    "keyConfidence REAL NOT NULL DEFAULT 0.0",
+                    "keyAnalysisVersion TEXT",
+                    "keyLastAnalyzed INTEGER",
+                    "albumArtist TEXT NOT NULL DEFAULT ''",
+                    "releaseDate TEXT",
+                    "releaseYear INTEGER",
+                    "recordLabel TEXT",
+                    "barcode TEXT",
+                    "isrc TEXT",
+                    "musicBrainzRecordingId TEXT",
+                    "musicBrainzArtistId TEXT",
+                    "musicBrainzReleaseId TEXT",
+                    "musicBrainzReleaseGroupId TEXT",
+                    "musicBrainzMatchConfidence REAL NOT NULL DEFAULT 0.0",
+                    "musicBrainzLastChecked INTEGER",
+                    "artworkUrl TEXT"
+                )
+                columns.forEach { definition ->
+                    val name = definition.substringBefore(' ')
+                    try { db.execSQL("ALTER TABLE tracks ADD COLUMN $name $definition") } catch (_: Exception) { }
+                }
+            }
+        }
+
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 try {
@@ -112,8 +143,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "soundsync_dj_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
-                .fallbackToDestructiveMigration(dropAllTables = true)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
                 INSTANCE = instance
                 instance
