@@ -375,35 +375,38 @@ object UpdateManager {
                     throw IllegalStateException("Downloaded APK file is empty or missing")
                 }
 
-                // Verify expected SHA-256 if checksum URL is provided
+                // Verify expected SHA-256 if checksum URL is provided.
+                // Fail hard on mismatch: never mark an unverified APK as verified.
                 var sha256Matches: Boolean? = null
                 if (!info.sha256ChecksumUrl.isNullOrBlank()) {
-                    try {
-                        val shaResponse = service.downloadFile(info.sha256ChecksumUrl)
-                        if (shaResponse.isSuccessful) {
-                            val shaText = shaResponse.body()?.string()?.trim() ?: ""
-                            val expectedHash = extractSha256Hex(shaText)
-                            if (expectedHash.isNotBlank()) {
-                                val actualHash = calculateSha256(tempFile)
-                                val matches = actualHash.equals(expectedHash, ignoreCase = true)
-                                sha256Matches = matches
-                                Log.i(TAG, "SHA-256 Checksum: expected=$expectedHash, actual=$actualHash, matches=$matches")
-                                if (!matches) {
-                                    tempFile.delete()
-                                    throw IllegalStateException("SHA-256 checksum mismatch! Expected: $expectedHash, got: $actualHash")
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Could not verify SHA-256 asset: ${e.message}")
+                    val shaResponse = service.downloadFile(info.sha256ChecksumUrl)
+                    if (!shaResponse.isSuccessful) {
+                        tempFile.delete()
+                        throw IllegalStateException("Could not download SHA-256 checksum (HTTP ${shaResponse.code()}). Download aborted.")
+                    }
+                    val shaText = shaResponse.body()?.string()?.trim() ?: ""
+                    val expectedHash = extractSha256Hex(shaText)
+                    if (expectedHash.isBlank()) {
+                        tempFile.delete()
+                        throw IllegalStateException("SHA-256 checksum file has no valid hash. Download aborted.")
+                    }
+                    val actualHash = calculateSha256(tempFile)
+                    sha256Matches = actualHash.equals(expectedHash, ignoreCase = true)
+                    Log.i(TAG, "SHA-256 Checksum: expected=$expectedHash, actual=$actualHash, matches=$sha256Matches")
+                    if (sha256Matches != true) {
+                        tempFile.delete()
+                        throw IllegalStateException("SHA-256 checksum mismatch! Expected: $expectedHash, got: $actualHash")
                     }
                 }
 
-                // Atomic rename temp -> target
+                // Atomic rename temp -> target (only reached when verification passed)
                 if (targetFile.exists()) {
                     targetFile.delete()
                 }
-                tempFile.renameTo(targetFile)
+                if (!tempFile.renameTo(targetFile)) {
+                    tempFile.delete()
+                    throw IllegalStateException("Failed to move downloaded APK into place: ${targetFile.absolutePath}")
+                }
 
                 Log.i(TAG, "APK download completed successfully: ${targetFile.length()} bytes")
                 _updateState.value = UpdateState.Downloaded(

@@ -32,6 +32,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.cancel
 
 /**
  * Foreground Media Playback Service providing native Android system media controls,
@@ -46,6 +47,8 @@ class MediaPlaybackService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
     private var progressJob: Job? = null
     private var currentArtwork: Bitmap? = null
+    private var lastNotifiedPlaying: Boolean? = null
+    private var lastNotifiedTrackId: String? = null
     private var lastArtworkTrackId: String? = null
 
     private var isForegroundActive = false
@@ -157,17 +160,18 @@ class MediaPlaybackService : Service() {
             }
         }
 
-        // 2. Observe play/pause state
+        // 2. Observe play/pause state. Notification content changes only when the
+        // transport state changes; position updates are kept in MediaSession only.
         serviceScope.launch {
             audioEngine.isPlaying.collectLatest { isPlaying ->
                 updatePlaybackState(isPlaying, audioEngine.currentPositionMs.value)
                 val track = audioEngine.currentTrack.value
-                if (track != null) {
+                if (track != null && lastNotifiedPlaying != isPlaying) {
+                    lastNotifiedPlaying = isPlaying
                     val notification = buildNotification(track, isPlaying)
                     if (isPlaying) {
                         startForegroundWithNotification(notification)
                     } else {
-                        // Keep notification visible when paused so user can resume from lockscreen/shade
                         notificationManager.notify(NOTIFICATION_ID, notification)
                         if (isForegroundActive) {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -208,7 +212,7 @@ class MediaPlaybackService : Service() {
         if (lastArtworkTrackId != track.id) {
             lastArtworkTrackId = track.id
             currentArtwork = withContext(Dispatchers.IO) {
-                AlbumArtHelper.getArtworkForTrack(applicationContext, track)
+                AlbumArtHelper.getArtworkForTrack(applicationContext, track, sizePx = 512)
             }
         }
 
@@ -231,6 +235,8 @@ class MediaPlaybackService : Service() {
         val isPlaying = audioEngine.isPlaying.value
         updatePlaybackState(isPlaying, audioEngine.currentPositionMs.value)
 
+        lastNotifiedPlaying = isPlaying
+        lastNotifiedTrackId = track.id
         val notification = buildNotification(track, isPlaying)
         if (isPlaying) {
             startForegroundWithNotification(notification)
@@ -391,6 +397,9 @@ class MediaPlaybackService : Service() {
             unregisterReceiver(noisyReceiver)
         } catch (ignored: Exception) {}
 
+        progressJob?.cancel()
+        serviceScope.coroutineContext.cancel()
+        currentArtwork = null
         mediaSession.isActive = false
         mediaSession.release()
         super.onDestroy()

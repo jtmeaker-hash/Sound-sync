@@ -186,7 +186,9 @@ data class OperationJournalItem(
     val affectedTracksCount: Int,
     val summary: String,
     val canUndo: Boolean = true,
-    val isUndone: Boolean = false
+    val isUndone: Boolean = false,
+    /** Snapshot for real undo: old -> new path per track (move), or full path (trash). */
+    val undoData: List<Pair<String, String>> = emptyList()
 )
 
 enum class ExplorerSortOption(val displayName: String) {
