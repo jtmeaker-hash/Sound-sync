@@ -139,6 +139,9 @@ class DjAudioEngine(private val context: Context) {
     private val _isWaveformLoading = MutableStateFlow(false)
     val isWaveformLoading = _isWaveformLoading.asStateFlow()
 
+    // Invalidates queued waveform jobs when a different track is loaded.
+    private var waveformGeneration = 0L
+
     // DJ Deck controls state
     private val _pitchPercent = MutableStateFlow(0.0f)
     val pitchPercent = _pitchPercent.asStateFlow()
@@ -218,6 +221,7 @@ class DjAudioEngine(private val context: Context) {
         }
 
         _currentTrack.value = track
+        val generation = ++waveformGeneration
         val baseBpm = if (track.bpm > 0) track.bpm else 126.0
         _effectiveBpm.value = baseBpm * (1.0 + _pitchPercent.value / 100.0)
 
@@ -245,13 +249,13 @@ class DjAudioEngine(private val context: Context) {
         analysisScope.launch {
             try {
                 val fullWaveform = WaveformAnalyzer.analyze(context, track)
-                if (_currentTrack.value?.id == track.id) {
+                if (_currentTrack.value?.id == track.id && waveformGeneration == generation) {
                     _waveformData.value = fullWaveform
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Waveform analysis failed: ${e.message}")
             } finally {
-                if (_currentTrack.value?.id == track.id) {
+                if (_currentTrack.value?.id == track.id && waveformGeneration == generation) {
                     _isWaveformLoading.value = false
                 }
             }
@@ -260,7 +264,9 @@ class DjAudioEngine(private val context: Context) {
         analysisScope.launch {
             try {
                 val waveform = SpectrogramEngine.extractWaveform(context, track)
-                _waveformHeights.value = waveform
+                if (_currentTrack.value?.id == track.id && waveformGeneration == generation) {
+                    _waveformHeights.value = waveform
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Spectrogram extraction failed: ${e.message}")
             }

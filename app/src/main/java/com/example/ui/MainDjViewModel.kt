@@ -590,7 +590,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 if (index >= 0) queueIndex.value = index
                 nextTrackForCrossfade = null
                 inspectTrackSpectrogram(startedTrack, showTab = false)
-                resolveBpmAndKeyForTrack(startedTrack)
             }
         }
         audioEngine.onNextTrackCallback = {
@@ -677,7 +676,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 nextTrackForCrossfade = null
                 audioEngine.loadTrack(next, autoPlay = true)
                 inspectTrackSpectrogram(next, showTab = false)
-                resolveBpmAndKeyForTrack(next)
             }
         }
     }
@@ -1725,26 +1723,30 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun resolveBpmAndKeyForTrack(track: Track) {
-        if (track.hasValidBpm && track.hasValidKey) return
-        val app = getApplication<Application>()
+        // MusicBrainz + local audio analysis pipeline. Never Tunebat, and never
+        // a mid-playback reload: reloading the current track is what made the
+        // waveform skip. We only update the DB row and any open inspector.
+        val settings = _metadataSettings.value
+        if (!settings.enrichmentEnabled) return
+        if (!settings.musicBrainzEnabled && !settings.bpmAnalysisEnabled && !settings.keyAnalysisEnabled) return
+        if (track.hasValidBpm && track.hasValidKey && track.musicBrainzRecordingId != null) return
         viewModelScope.launch(Dispatchers.IO) {
-            val verified = com.example.analysis.TunebatMetadataService.resolveTrackMetadata(app, track, writeTagsToFile = true)
-            if (verified.hasBpm || verified.hasKey) {
-                val updatedTrack = track.copy(
-                    bpm = if (verified.hasBpm) verified.bpm else track.bpm,
-                    musicalKey = if (verified.hasKey) verified.musicalKey else track.musicalKey
+            runCatching {
+                val enriched = metadataEnrichmentService.enrich(
+                    track,
+                    musicBrainzEnabled = settings.musicBrainzEnabled,
+                    bpmAnalysisEnabled = settings.bpmAnalysisEnabled,
+                    keyAnalysisEnabled = settings.keyAnalysisEnabled
                 )
-                trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
-                if (audioEngine.currentTrack.value?.id == track.id) {
-                    val wasPlaying = audioEngine.isPlaying.value
-                    val currentSec = audioEngine.currentPositionSec.value
-                    withContext(Dispatchers.Main) {
-                        audioEngine.loadTrack(updatedTrack, autoPlay = wasPlaying, initialPositionSec = currentSec)
-                    }
-                }
+                persistEnrichedMetadata(enriched, track)
+                val updatedTrack = trackDao.getTrackById(track.id)?.toTrack() ?: return@runCatching
+                // Deliberately NOT reloading the audio engine here: reloading
+                // the current track mid-playback caused the waveform to skip.
                 if (_inspectingTrackForProperties.value?.id == track.id) {
                     _inspectingTrackForProperties.value = updatedTrack
                 }
+            }.onFailure { error ->
+                Log.w("MainDjViewModel", "Metadata resolve failed for ${track.id}: ${error.message}")
             }
         }
     }
