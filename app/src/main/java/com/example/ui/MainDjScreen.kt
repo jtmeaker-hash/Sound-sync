@@ -154,12 +154,12 @@ fun MainDjScreen(
     val driveSyncStatusMap by viewModel.driveSyncStatusMap.collectAsState()
     val driveDownloadProgressMap by viewModel.driveDownloadProgressMap.collectAsState()
 
-    // Audio Engine Playback States
+    // Audio Engine Playback States (low-frequency only at root level)
     val playingTrack by viewModel.audioEngine.currentTrack.collectAsState()
     val isPlaying by viewModel.audioEngine.isPlaying.collectAsState()
-    val currentPosSec by viewModel.audioEngine.currentPositionSec.collectAsState()
-    val playbackProgress by viewModel.audioEngine.playbackProgress.collectAsState()
-    val currentPositionMs by viewModel.currentPositionMs.collectAsState()
+    // High-frequency position state is collected inside the specific child composables
+    // that display it (DjMiniPlayer, NowPlayingFullScreen, SpectrogramAnalyzerView)
+    // to avoid causing the entire MainDjScreen to recompose on every position update.
 
     // EQ & Haas Audio Effect States
     val eqEnabled by viewModel.audioEngine.eqEnabled.collectAsState()
@@ -232,15 +232,14 @@ fun MainDjScreen(
         },
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                // Docked Mini-Player Bar (When a track is loaded/playing)
+                // Docked Mini-Player Bar (position collected locally to avoid root recomposition)
                 playingTrack?.let { track ->
-                    DjMiniPlayer(
+                    PositionAwareMiniPlayer(
                         track = track,
                         displayMode = nowPlayingDisplayMode,
                         waveformData = waveformData,
                         isPlaying = isPlaying,
-                        currentPositionMs = currentPositionMs,
-                        durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L,
+                        audioEngine = viewModel.audioEngine,
                         onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
                         onPreviousTrack = { viewModel.previousTrack() },
                         onNextTrack = { viewModel.nextTrack() },
@@ -361,13 +360,12 @@ fun MainDjScreen(
                     )
                 }
                 DjTab.SPECTROGRAM -> {
-                    SpectrogramAnalyzerView(
+                    PositionAwareSpectrogramTab(
                         analyzedTrack = analyzedTrack ?: playingTrack ?: allTracks.firstOrNull(),
                         spectrogramData = spectrogramData,
                         allTracks = allTracks,
                         isPlaying = isPlaying,
-                        currentPositionSec = currentPosSec,
-                        playbackProgress = playbackProgress,
+                        audioEngine = viewModel.audioEngine,
                         onSelectTrack = { viewModel.inspectTrackSpectrogram(it, showTab = false) },
                         onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
                         onSeekToRatio = { ratio ->
@@ -475,21 +473,20 @@ fun MainDjScreen(
                 )
             }
 
-            // Full-Screen Now Playing Page
+            // Full-Screen Now Playing Page (position collected locally)
             AnimatedVisibility(
                 visible = isNowPlayingExpanded && playingTrack != null,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { it })
             ) {
                 if (playingTrack != null) {
-                    NowPlayingFullScreen(
+                    PositionAwareNowPlaying(
                         track = playingTrack!!,
                         displayMode = nowPlayingDisplayMode,
                         waveformData = waveformData,
                         isWaveformLoading = isWaveformLoading,
                         isPlaying = isPlaying,
-                        currentPositionMs = currentPositionMs,
-                        durationMs = if (playingTrack!!.durationSeconds > 0) playingTrack!!.durationSeconds * 1000L else 0L,
+                        audioEngine = viewModel.audioEngine,
                         eqEnabled = eqEnabled,
                         eqLow = eqLow,
                         eqMid = eqMid,
@@ -811,4 +808,117 @@ private fun DjBottomNavigationBar(
             )
         }
     }
+}
+
+// ── Position-aware wrappers that collect high-frequency state locally ────
+// These prevent the entire MainDjScreen from recomposing on every position update.
+
+@Composable
+private fun PositionAwareMiniPlayer(
+    track: com.example.model.Track,
+    displayMode: com.example.model.NowPlayingDisplayMode,
+    waveformData: com.example.audio.WaveformData?,
+    isPlaying: Boolean,
+    audioEngine: com.example.audio.DjAudioEngine,
+    onTogglePlayPause: () -> Unit,
+    onPreviousTrack: () -> Unit,
+    onNextTrack: () -> Unit,
+    onSeekToMs: (Long) -> Unit,
+    onToggleDisplayMode: () -> Unit,
+    onOpenNowPlaying: () -> Unit
+) {
+    val currentPositionMs = audioEngine.currentPositionMs.collectAsState().value
+    DjMiniPlayer(
+        track = track,
+        displayMode = displayMode,
+        waveformData = waveformData,
+        isPlaying = isPlaying,
+        currentPositionMs = currentPositionMs,
+        durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L,
+        onTogglePlayPause = onTogglePlayPause,
+        onPreviousTrack = onPreviousTrack,
+        onNextTrack = onNextTrack,
+        onSeekToMs = onSeekToMs,
+        onToggleDisplayMode = onToggleDisplayMode,
+        onOpenNowPlaying = onOpenNowPlaying
+    )
+}
+
+@Composable
+private fun PositionAwareNowPlaying(
+    track: com.example.model.Track,
+    displayMode: com.example.model.NowPlayingDisplayMode,
+    waveformData: com.example.audio.WaveformData?,
+    isWaveformLoading: Boolean,
+    isPlaying: Boolean,
+    audioEngine: com.example.audio.DjAudioEngine,
+    eqEnabled: Boolean, eqLow: Float, eqMid: Float, eqHigh: Float,
+    onSetEqEnabled: (Boolean) -> Unit, onSetEqLow: (Float) -> Unit,
+    onSetEqMid: (Float) -> Unit, onSetEqHigh: (Float) -> Unit,
+    haasEnabled: Boolean, haasAmount: Float, haasDelayMs: Float,
+    onSetHaasEnabled: (Boolean) -> Unit, onSetHaasAmount: (Float) -> Unit,
+    onSetHaasDelayMs: (Float) -> Unit,
+    onDismiss: () -> Unit, onTogglePlayPause: () -> Unit,
+    onPreviousTrack: () -> Unit, onNextTrack: () -> Unit,
+    onSeekToMs: (Long) -> Unit, onToggleDisplayMode: () -> Unit,
+    onSetDisplayMode: (com.example.model.NowPlayingDisplayMode) -> Unit,
+    onOpenSettings: () -> Unit, onOpenProperties: (com.example.model.Track) -> Unit
+) {
+    val currentPositionMs = audioEngine.currentPositionMs.collectAsState().value
+    NowPlayingFullScreen(
+        track = track,
+        displayMode = displayMode,
+        waveformData = waveformData,
+        isWaveformLoading = isWaveformLoading,
+        isPlaying = isPlaying,
+        currentPositionMs = currentPositionMs,
+        durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L,
+        eqEnabled = eqEnabled, eqLow = eqLow, eqMid = eqMid, eqHigh = eqHigh,
+        onSetEqEnabled = onSetEqEnabled, onSetEqLow = onSetEqLow,
+        onSetEqMid = onSetEqMid, onSetEqHigh = onSetEqHigh,
+        haasEnabled = haasEnabled, haasAmount = haasAmount, haasDelayMs = haasDelayMs,
+        onSetHaasEnabled = onSetHaasEnabled, onSetHaasAmount = onSetHaasAmount,
+        onSetHaasDelayMs = onSetHaasDelayMs,
+        onDismiss = onDismiss, onTogglePlayPause = onTogglePlayPause,
+        onPreviousTrack = onPreviousTrack, onNextTrack = onNextTrack,
+        onSeekToMs = onSeekToMs, onToggleDisplayMode = onToggleDisplayMode,
+        onSetDisplayMode = onSetDisplayMode, onOpenSettings = onOpenSettings,
+        onOpenProperties = onOpenProperties
+    )
+}
+
+@Composable
+private fun PositionAwareSpectrogramTab(
+    analyzedTrack: com.example.model.Track?,
+    spectrogramData: com.example.model.SpectrogramAnalysis?,
+    allTracks: List<com.example.model.Track>,
+    isPlaying: Boolean,
+    audioEngine: com.example.audio.DjAudioEngine,
+    onSelectTrack: (com.example.model.Track) -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onSeekToRatio: (Float) -> Unit,
+    onLoadToDeck: (com.example.model.Track) -> Unit,
+    isLoading: Boolean,
+    analysisProgressPercent: Int,
+    errorMessage: String?,
+    onRetryAnalysis: () -> Unit
+) {
+    val currentPositionSec = audioEngine.currentPositionSec.collectAsState().value
+    val playbackProgress = audioEngine.playbackProgress.collectAsState().value
+    SpectrogramAnalyzerView(
+        analyzedTrack = analyzedTrack,
+        spectrogramData = spectrogramData,
+        allTracks = allTracks,
+        isPlaying = isPlaying,
+        currentPositionSec = currentPositionSec,
+        playbackProgress = playbackProgress,
+        onSelectTrack = onSelectTrack,
+        onTogglePlayPause = onTogglePlayPause,
+        onSeekToRatio = onSeekToRatio,
+        onLoadToDeck = onLoadToDeck,
+        isLoading = isLoading,
+        analysisProgressPercent = analysisProgressPercent,
+        errorMessage = errorMessage,
+        onRetryAnalysis = onRetryAnalysis
+    )
 }
