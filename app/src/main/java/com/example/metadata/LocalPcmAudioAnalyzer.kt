@@ -15,6 +15,9 @@ import kotlin.math.sqrt
 class LocalPcmAudioAnalyzer(
     private val context: Context
 ) : LocalAudioAnalyzer {
+    /** Inclusive BPM search window; the detector folds candidates into it. */
+    var bpmRange: IntRange = 60..260
+
     override suspend fun analyze(track: Track): AudioAnalysisResult {
         val decoded = AudioDecoder.decodeToMonoPcm(
             context = context,
@@ -47,8 +50,8 @@ class LocalPcmAudioAnalyzer(
         }
         val novelty = FloatArray(envelope.size)
         for (i in 1 until envelope.size) novelty[i] = (envelope[i] - envelope[i - 1]).coerceAtLeast(0f)
-        val minLag = (envelopeRate * 60.0 / 180.0).roundToInt()
-        val maxLag = (envelopeRate * 60.0 / 60.0).roundToInt()
+        val minLag = (envelopeRate * 60.0 / bpmRange.last).roundToInt()
+        val maxLag = (envelopeRate * 60.0 / bpmRange.first).roundToInt()
         val candidates = (minLag..maxLag).map { lag ->
             var correlation = 0.0
             var count = 0
@@ -62,8 +65,11 @@ class LocalPcmAudioAnalyzer(
         val second = candidates.getOrNull(1)?.second ?: 0.0
         if (best.second <= 0.0) return null
         var bpm = envelopeRate * 60.0 / best.first
-        while (bpm < 80.0) bpm *= 2.0
-        while (bpm > 180.0) bpm /= 2.0
+        // Fold half/double-time candidates into the configured window. The
+        // fold is monotonic (never oscillates): each step moves strictly
+        // closer to the window, so the loop terminates.
+        while (bpm < bpmRange.first) bpm *= 2.0
+        while (bpm > bpmRange.last) bpm /= 2.0
         val confidence = ((best.second - second) / best.second).coerceIn(0.0, 1.0)
         return bpm to confidence
     }

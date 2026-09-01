@@ -12,10 +12,12 @@ import androidx.lifecycle.viewModelScope
 import com.example.analysis.AiAutoTagger
 import com.example.metadata.EnrichedTrackMetadata
 import com.example.metadata.LocalPcmAudioAnalyzer
+import com.example.metadata.MetadataSettings
+import com.example.metadata.MetadataSettingsStore
+import com.example.metadata.MetadataWriteResult
 import com.example.metadata.MusicBrainzClient
 import com.example.metadata.MusicMetadataEnrichmentService
 import com.example.metadata.MetadataFileWriter
-import com.example.metadata.MetadataWriteResult
 import com.example.metadata.OkHttpMusicBrainzTransport
 import com.example.analysis.DuplicateDetector
 import com.example.audio.DjAudioEngine
@@ -63,6 +65,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -105,13 +109,71 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val scanStateManager = ScanStateManager(application)
     private val scanMutex = Mutex()
     private var currentScanJob: Job? = null
+    private val audioAnalyzer = LocalPcmAudioAnalyzer(application)
     private val metadataEnrichmentService = MusicMetadataEnrichmentService(
         musicBrainzClient = MusicBrainzClient(OkHttpMusicBrainzTransport()),
-        audioAnalyzer = LocalPcmAudioAnalyzer(application)
+        audioAnalyzer = audioAnalyzer
     )
     private val metadataFileWriter = MetadataFileWriter(application)
 
     private val prefs = getApplication<Application>().getSharedPreferences("soundsync_player_prefs", Context.MODE_PRIVATE)
+
+    // Metadata pipeline settings (Operations tab). Persisted in their own
+    // store; the analyzer's BPM window is applied live so re-analysis uses
+    // the configured range.
+    private val metadataSettingsStore = MetadataSettingsStore(application)
+    private val _metadataSettings = MutableStateFlow(metadataSettingsStore.load())
+    val metadataSettings: StateFlow<MetadataSettings> = _metadataSettings.asStateFlow()
+
+    fun setEnrichmentEnabled(enabled: Boolean) {
+        val next = _metadataSettings.value.copy(enrichmentEnabled = enabled)
+        _metadataSettings.value = next
+        metadataSettingsStore.save(next)
+    }
+
+    fun setMusicBrainzEnabled(enabled: Boolean) {
+        val next = _metadataSettings.value.copy(musicBrainzEnabled = enabled)
+        _metadataSettings.value = next
+        metadataSettingsStore.save(next)
+    }
+
+    fun setBpmAnalysisEnabled(enabled: Boolean) {
+        val next = _metadataSettings.value.copy(bpmAnalysisEnabled = enabled)
+        _metadataSettings.value = next
+        metadataSettingsStore.save(next)
+    }
+
+    fun setKeyAnalysisEnabled(enabled: Boolean) {
+        val next = _metadataSettings.value.copy(keyAnalysisEnabled = enabled)
+        _metadataSettings.value = next
+        metadataSettingsStore.save(next)
+    }
+
+    fun setWriteToFileEnabled(enabled: Boolean) {
+        val next = _metadataSettings.value.copy(writeToFileEnabled = enabled)
+        _metadataSettings.value = next
+        metadataSettingsStore.save(next)
+    }
+
+    fun setEnrichmentConcurrency(concurrency: Int) {
+        val next = _metadataSettings.value.copy(concurrency = concurrency.coerceIn(1, MetadataSettings.MAX_CONCURRENCY))
+        _metadataSettings.value = next
+        metadataSettingsStore.save(next)
+    }
+
+    fun setBpmRange(min: Int, max: Int) {
+        val (lo, hi) = MetadataSettings.clampBpmRange(min, max)
+        val next = _metadataSettings.value.copy(bpmMin = lo, bpmMax = hi)
+        _metadataSettings.value = next
+        metadataSettingsStore.save(next)
+        audioAnalyzer.bpmRange = lo..hi
+    }
+
+    init {
+        // Apply the persisted BPM window to the analyzer before any scan runs.
+        val s = _metadataSettings.value
+        audioAnalyzer.bpmRange = s.bpmMin..s.bpmMax
+    }
 
     val audioEngine = DjAudioEngine.getInstance(application)
 
@@ -1008,13 +1070,33 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun queueMetadataEnrichment(tracks: List<Track>) {
+        val settings = _metadataSettings.value
+        if (!settings.enrichmentEnabled) return
+        // Bounded concurrency: at most `concurrency` enrichment tasks run at
+        // once so a large import neither floods MusicBrainz nor saturates the
+        // audio-analysis thread pool.
+        val gate = Semaphore(settings.concurrency)
         tracks.forEach { track ->
             viewModelScope.launch(Dispatchers.IO) {
-                runCatching {
-                    val enriched = metadataEnrichmentService.enrich(track)
-                    persistEnrichedMetadata(enriched, track)
-                }.onFailure { error ->
-                    Log.w("MainDjViewModel", "Metadata enrichment failed for ${track.id}: ${error.message}")
+                gate.withPermit {
+                    runCatching {
+                        val enriched = metadataEnrichmentService.enrich(
+                            track,
+                            musicBrainzEnabled = settings.musicBrainzEnabled,
+                            bpmAnalysisEnabled = settings.bpmAnalysisEnabled,
+                            keyAnalysisEnabled = settings.keyAnalysisEnabled,
+                        )
+                        persistEnrichedMetadata(enriched, track)
+                        if (settings.writeToFileEnabled) {
+                            when (val result = metadataFileWriter.write(track)) {
+                                is MetadataWriteResult.Written -> Log.i("MainDjViewModel", "Metadata written to file for ${track.id}")
+                                is MetadataWriteResult.Unsupported -> Log.i("MainDjViewModel", "File write unsupported for ${track.id}: ${result.reason}")
+                                is MetadataWriteResult.Failed -> Log.w("MainDjViewModel", "File write failed for ${track.id}: ${result.reason}")
+                            }
+                        }
+                    }.onFailure { error ->
+                        Log.w("MainDjViewModel", "Metadata enrichment failed for ${track.id}: ${error.message}")
+                    }
                 }
             }
         }

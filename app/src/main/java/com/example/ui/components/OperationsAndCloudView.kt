@@ -93,7 +93,13 @@ import com.example.ui.theme.TextPrimary
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.example.BuildConfig
+import com.example.metadata.MetadataSettings
 import com.example.model.UpdateState
 import com.example.model.UpdateInfo
 import com.example.ui.theme.TextSecondary
@@ -129,6 +135,14 @@ fun OperationsAndCloudView(
     onDisconnectGoogleDrive: () -> Unit = {},
     themeMode: ThemeMode = ThemeMode.CURRENT,
     onSetThemeMode: (ThemeMode) -> Unit = {},
+    metadataSettings: MetadataSettings = MetadataSettings(),
+    onSetEnrichmentEnabled: (Boolean) -> Unit = {},
+    onSetMusicBrainzEnabled: (Boolean) -> Unit = {},
+    onSetBpmAnalysisEnabled: (Boolean) -> Unit = {},
+    onSetKeyAnalysisEnabled: (Boolean) -> Unit = {},
+    onSetWriteToFileEnabled: (Boolean) -> Unit = {},
+    onSetConcurrency: (Int) -> Unit = {},
+    onSetBpmRange: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val platformStatuses by CloudSyncManager.platformStatuses.collectAsState()
@@ -147,6 +161,19 @@ fun OperationsAndCloudView(
             AppearanceSectionCard(
                 themeMode = themeMode,
                 onSetThemeMode = onSetThemeMode
+            )
+        }
+
+        item {
+            MetadataEnrichmentSettingsCard(
+                settings = metadataSettings,
+                onSetEnrichmentEnabled = onSetEnrichmentEnabled,
+                onSetMusicBrainzEnabled = onSetMusicBrainzEnabled,
+                onSetBpmAnalysisEnabled = onSetBpmAnalysisEnabled,
+                onSetKeyAnalysisEnabled = onSetKeyAnalysisEnabled,
+                onSetWriteToFileEnabled = onSetWriteToFileEnabled,
+                onSetConcurrency = onSetConcurrency,
+                onSetBpmRange = onSetBpmRange
             )
         }
 
