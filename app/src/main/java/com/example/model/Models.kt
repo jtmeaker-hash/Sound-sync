@@ -67,6 +67,36 @@ data class SpectrogramAnalysis(
 /** Bitstream rate mode. Only set when actually verified from the container/bitstream; never guessed. */
 enum class BitrateMode { CBR, VBR }
 
+/**
+ * Distinguishes the origin and verification status of a track's metadata.
+ */
+enum class MetadataProvenance(
+    val shortLabel: String,
+    val fullLabel: String,
+    val description: String
+) {
+    MUSICBRAINZ_CANONICAL(
+        shortLabel = "MB CANONICAL",
+        fullLabel = "MusicBrainz Canonical Catalogue",
+        description = "Identified against official MusicBrainz open database (ISRC/MBID/Release Group)."
+    ),
+    LOCAL_DSP_ANALYZED(
+        shortLabel = "LOCAL DSP",
+        fullLabel = "Locally Analyzed Audio DSP",
+        description = "BPM, Musical Key, and Camelot Key computed directly from decoded PCM audio via local autocorrelation & FFT chroma."
+    ),
+    VERIFIED_HYBRID(
+        shortLabel = "HYBRID",
+        fullLabel = "Hybrid Verified (MB + Local DSP)",
+        description = "Canonical MusicBrainz catalogue release metadata paired with high-precision local PCM audio analysis."
+    ),
+    EMBEDDED_TAGS(
+        shortLabel = "EMBEDDED",
+        fullLabel = "Embedded File Tags",
+        description = "Standard metadata read from local audio container ID3/Vorbis tags without external verification."
+    )
+}
+
 data class Track(
     val id: String,
     val title: String,
@@ -122,6 +152,23 @@ data class Track(
 
     val hasValidKey: Boolean
         get() = musicalKey.isNotBlank() && musicalKey != "—" && musicalKey != "-" && !musicalKey.equals("Unknown", ignoreCase = true)
+
+    val isMusicBrainzEnriched: Boolean
+        get() = !musicBrainzRecordingId.isNullOrBlank() || !musicBrainzReleaseId.isNullOrBlank()
+
+    val isLocallyAnalyzed: Boolean
+        get() = (bpmLastAnalyzed != null && bpmLastAnalyzed > 0L) ||
+                (keyLastAnalyzed != null && keyLastAnalyzed > 0L) ||
+                !bpmAnalysisVersion.isNullOrBlank() ||
+                !keyAnalysisVersion.isNullOrBlank()
+
+    val metadataProvenance: MetadataProvenance
+        get() = when {
+            isMusicBrainzEnriched && isLocallyAnalyzed -> MetadataProvenance.VERIFIED_HYBRID
+            isMusicBrainzEnriched -> MetadataProvenance.MUSICBRAINZ_CANONICAL
+            isLocallyAnalyzed -> MetadataProvenance.LOCAL_DSP_ANALYZED
+            else -> MetadataProvenance.EMBEDDED_TAGS
+        }
 
     val bpmDisplay: String
         get() = if (hasValidBpm) String.format(java.util.Locale.US, "%.1f BPM", bpm) else "BPM —"

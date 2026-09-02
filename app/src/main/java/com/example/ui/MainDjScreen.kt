@@ -445,6 +445,7 @@ fun MainDjScreen(
                             onSetBpmAnalysisEnabled = viewModel::setBpmAnalysisEnabled,
                             onSetKeyAnalysisEnabled = viewModel::setKeyAnalysisEnabled,
                             onSetWriteToFileEnabled = viewModel::setWriteToFileEnabled,
+                            onSetShowProvenanceBadges = viewModel::setShowProvenanceBadges,
                             onSetConcurrency = viewModel::setEnrichmentConcurrency,
                             onSetBpmRange = viewModel::setBpmRange
                         )

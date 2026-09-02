@@ -31,6 +31,36 @@ class AudioAnalysisContractTest {
     }
 
     @Test
+    fun `classifies metadata provenance correctly between MusicBrainz, local DSP, hybrid, and embedded`() {
+        val embeddedTrack = com.example.model.Track(
+            id = "1",
+            title = "Track 1",
+            artist = "Artist"
+        )
+        assertEquals(com.example.model.MetadataProvenance.EMBEDDED_TAGS, embeddedTrack.metadataProvenance)
+
+        val mbTrack = embeddedTrack.copy(
+            musicBrainzRecordingId = "rec-1234-abcd"
+        )
+        assertEquals(com.example.model.MetadataProvenance.MUSICBRAINZ_CANONICAL, mbTrack.metadataProvenance)
+
+        val localDspTrack = embeddedTrack.copy(
+            bpm = 128.0,
+            bpmLastAnalyzed = 1700000000000L,
+            bpmAnalysisVersion = "v1.0-stft"
+        )
+        assertEquals(com.example.model.MetadataProvenance.LOCAL_DSP_ANALYZED, localDspTrack.metadataProvenance)
+
+        val hybridTrack = embeddedTrack.copy(
+            musicBrainzRecordingId = "rec-1234-abcd",
+            bpm = 128.0,
+            bpmLastAnalyzed = 1700000000000L,
+            bpmAnalysisVersion = "v1.0-stft"
+        )
+        assertEquals(com.example.model.MetadataProvenance.VERIFIED_HYBRID, hybridTrack.metadataProvenance)
+    }
+
+    @Test
     fun `invalid and blank musical keys remain unknown`() {
         assertNull(CamelotKey.fromMusicalKey(null))
         assertNull(CamelotKey.fromMusicalKey(""))

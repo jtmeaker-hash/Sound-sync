@@ -436,6 +436,7 @@ fun LocalTrackCard(
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold
                     )
+                    MetadataProvenanceBadge(track = track, compact = true)
                 }
             }
 

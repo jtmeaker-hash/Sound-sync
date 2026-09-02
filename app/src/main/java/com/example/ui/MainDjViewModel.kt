@@ -130,6 +130,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             bpmAnalysisEnabled = prefs.getBoolean("metadata_bpm_enabled", true),
             keyAnalysisEnabled = prefs.getBoolean("metadata_key_enabled", true),
             writeToFileEnabled = prefs.getBoolean("metadata_write_file_enabled", false),
+            showProvenanceBadges = prefs.getBoolean("metadata_show_provenance_badges", true),
             concurrency = prefs.getInt("metadata_concurrency", 2),
             bpmMin = prefs.getInt("metadata_bpm_min", 60),
             bpmMax = prefs.getInt("metadata_bpm_max", 200)
@@ -165,6 +166,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             .putBoolean("metadata_bpm_enabled", metadataSettingsState.value.bpmAnalysisEnabled)
             .putBoolean("metadata_key_enabled", metadataSettingsState.value.keyAnalysisEnabled)
             .putBoolean("metadata_write_file_enabled", metadataSettingsState.value.writeToFileEnabled)
+            .putBoolean("metadata_show_provenance_badges", metadataSettingsState.value.showProvenanceBadges)
             .putInt("metadata_concurrency", metadataSettingsState.value.concurrency)
             .putInt("metadata_bpm_min", metadataSettingsState.value.bpmMin)
             .putInt("metadata_bpm_max", metadataSettingsState.value.bpmMax)
@@ -176,6 +178,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun setBpmAnalysisEnabled(value: Boolean) = updateMetadataSettings { it.copy(bpmAnalysisEnabled = value) }
     fun setKeyAnalysisEnabled(value: Boolean) = updateMetadataSettings { it.copy(keyAnalysisEnabled = value) }
     fun setWriteToFileEnabled(value: Boolean) = updateMetadataSettings { it.copy(writeToFileEnabled = value) }
+    fun setShowProvenanceBadges(value: Boolean) = updateMetadataSettings { it.copy(showProvenanceBadges = value) }
     fun setEnrichmentConcurrency(value: Int) = updateMetadataSettings { it.copy(concurrency = value.coerceIn(1, com.example.metadata.MetadataSettings.MAX_CONCURRENCY)) }
     fun setBpmRange(min: Int, max: Int) = updateMetadataSettings { it.copy(bpmMin = min, bpmMax = max.coerceAtLeast(min)) }
 

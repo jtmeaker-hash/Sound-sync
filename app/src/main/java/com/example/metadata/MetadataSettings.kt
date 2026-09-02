@@ -8,6 +8,7 @@ data class MetadataSettings(
     val bpmAnalysisEnabled: Boolean = true,
     val keyAnalysisEnabled: Boolean = true,
     val writeToFileEnabled: Boolean = false,
+    val showProvenanceBadges: Boolean = true,
     val concurrency: Int = 2,
     val bpmMin: Int = 60,
     val bpmMax: Int = 300
@@ -47,6 +48,7 @@ class MetadataSettingsStore(private val context: Context) {
             bpmAnalysisEnabled = prefs.getBoolean(KEY_BPM, true),
             keyAnalysisEnabled = prefs.getBoolean(KEY_KEY, true),
             writeToFileEnabled = prefs.getBoolean(KEY_WRITE_TO_FILE, false),
+            showProvenanceBadges = prefs.getBoolean(KEY_SHOW_PROVENANCE_BADGES, true),
             concurrency = prefs.getInt(KEY_CONCURRENCY, 2).coerceIn(1, MetadataSettings.MAX_CONCURRENCY),
             bpmMin = min,
             bpmMax = max
@@ -61,6 +63,7 @@ class MetadataSettingsStore(private val context: Context) {
             .putBoolean(KEY_BPM, settings.bpmAnalysisEnabled)
             .putBoolean(KEY_KEY, settings.keyAnalysisEnabled)
             .putBoolean(KEY_WRITE_TO_FILE, settings.writeToFileEnabled)
+            .putBoolean(KEY_SHOW_PROVENANCE_BADGES, settings.showProvenanceBadges)
             .putInt(KEY_CONCURRENCY, settings.concurrency.coerceIn(1, MetadataSettings.MAX_CONCURRENCY))
             .putInt(KEY_BPM_MIN, min)
             .putInt(KEY_BPM_MAX, max)
@@ -74,6 +77,7 @@ class MetadataSettingsStore(private val context: Context) {
         const val KEY_BPM = "bpm_analysis_enabled"
         const val KEY_KEY = "key_analysis_enabled"
         const val KEY_WRITE_TO_FILE = "write_to_file_enabled"
+        const val KEY_SHOW_PROVENANCE_BADGES = "show_provenance_badges"
         const val KEY_CONCURRENCY = "enrichment_concurrency"
         const val KEY_BPM_MIN = "bpm_range_min"
         const val KEY_BPM_MAX = "bpm_range_max"

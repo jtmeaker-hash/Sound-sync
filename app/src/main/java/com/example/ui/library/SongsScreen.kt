@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.AudioQualityRating
 import com.example.model.Track
+import com.example.ui.components.MetadataProvenanceBadge
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
@@ -508,6 +509,8 @@ fun SongTrackRow(
                             )
                         }
                     }
+
+                    MetadataProvenanceBadge(track = track, compact = true)
                 }
             }
 

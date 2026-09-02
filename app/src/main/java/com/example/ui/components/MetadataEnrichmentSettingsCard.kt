@@ -37,6 +37,7 @@ fun MetadataEnrichmentSettingsCard(
     onSetBpmAnalysisEnabled: (Boolean) -> Unit,
     onSetKeyAnalysisEnabled: (Boolean) -> Unit,
     onSetWriteToFileEnabled: (Boolean) -> Unit,
+    onSetShowProvenanceBadges: (Boolean) -> Unit = {},
     onSetConcurrency: (Int) -> Unit,
     onSetBpmRange: (Int, Int) -> Unit,
 ) {
@@ -52,16 +53,19 @@ fun MetadataEnrichmentSettingsCard(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Metadata Enrichment", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text("Metadata Enrichment & Catalogue", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
             Text(
-                "MusicBrainz identifies the recording. BPM and key are measured from the local audio file.",
+                "MusicBrainz canonical database matches recordings; high-precision DSP analyzes BPM & Key locally from PCM.",
                 color = TextSecondary, fontSize = 10.sp
             )
-            SettingSwitch("Enable enrichment", settings.enrichmentEnabled, onSetEnrichmentEnabled)
-            SettingSwitch("Use MusicBrainz catalog", settings.musicBrainzEnabled, onSetMusicBrainzEnabled)
-            SettingSwitch("Analyse BPM locally", settings.bpmAnalysisEnabled, onSetBpmAnalysisEnabled)
-            SettingSwitch("Analyse key locally", settings.keyAnalysisEnabled, onSetKeyAnalysisEnabled)
-            SettingSwitch("Write completed metadata to files", settings.writeToFileEnabled, onSetWriteToFileEnabled)
+            SettingSwitch("Enable enrichment engine", settings.enrichmentEnabled, onSetEnrichmentEnabled)
+            SettingSwitch("Use MusicBrainz open catalogue", settings.musicBrainzEnabled, onSetMusicBrainzEnabled)
+            SettingSwitch("Analyse BPM locally via PCM STFT", settings.bpmAnalysisEnabled, onSetBpmAnalysisEnabled)
+            SettingSwitch("Analyse Musical Key locally via chroma", settings.keyAnalysisEnabled, onSetKeyAnalysisEnabled)
+            SettingSwitch("Show Metadata Provenance Badges", settings.showProvenanceBadges, onSetShowProvenanceBadges)
+            SettingSwitch("Write completed metadata to ID3 tags", settings.writeToFileEnabled, onSetWriteToFileEnabled)
+
+            MetadataProvenanceLegend(modifier = Modifier.padding(vertical = 4.dp))
 
             Text("BPM analysis range: ${settings.bpmMin}-${settings.bpmMax} BPM", color = TextSecondary, fontSize = 10.sp)
             Slider(

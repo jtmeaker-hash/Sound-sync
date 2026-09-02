@@ -368,6 +368,9 @@ fun SpectrogramAnalyzerView(
             // Audio Specs Metric Grid
             AudioSpecsMetricGrid(track = analyzedTrack, analysis = spectrogramData)
 
+            // Metadata Provenance Breakdown (MusicBrainz Canonical Catalogue vs Local Audio DSP)
+            MetadataProvenanceCard(track = analyzedTrack, modifier = Modifier.fillMaxWidth())
+
             // Sound Quality Education & Analysis Guide
             SpectrogramGuideCard()
         }

@@ -141,6 +141,7 @@ fun OperationsAndCloudView(
     onSetBpmAnalysisEnabled: (Boolean) -> Unit = {},
     onSetKeyAnalysisEnabled: (Boolean) -> Unit = {},
     onSetWriteToFileEnabled: (Boolean) -> Unit = {},
+    onSetShowProvenanceBadges: (Boolean) -> Unit = {},
     onSetConcurrency: (Int) -> Unit = {},
     onSetBpmRange: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
@@ -172,6 +173,7 @@ fun OperationsAndCloudView(
                 onSetBpmAnalysisEnabled = onSetBpmAnalysisEnabled,
                 onSetKeyAnalysisEnabled = onSetKeyAnalysisEnabled,
                 onSetWriteToFileEnabled = onSetWriteToFileEnabled,
+                onSetShowProvenanceBadges = onSetShowProvenanceBadges,
                 onSetConcurrency = onSetConcurrency,
                 onSetBpmRange = onSetBpmRange
             )
