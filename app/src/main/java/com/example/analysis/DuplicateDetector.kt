@@ -116,8 +116,9 @@ object DuplicateDetector {
     fun normalizeTrackString(input: String): String {
         return input.lowercase(Locale.ROOT)
             .replace(Regex("^\\d{1,3}[.\\-\\s_]+"), "") // leading track numbers like "01. " or "02 - "
-            .replace(Regex("\\.(mp3|flac|wav|aac|aiff|m4a)$"), "")
-            .replace(Regex("[\\[\\(](original mix|extended mix|club mix|radio edit|remastered|clean|explicit|hq|320|12'' mix|official audio)[\\]\\)]"), "")
+            .replace(Regex("\\.(mp3|flac|wav|aac|aiff|m4a|ogg)$"), "")
+            .replace(Regex("[\\[\\(][^\\]\\)]*[\\]\\)]"), " ") // strip bracketed/parenthesized content
+            .replace(Regex("^[a-z0-9\\s]+[\\-–—:]\\s*"), " ") // strip "Artist - " prefix in title
             .replace(Regex("[^a-z0-9\\s]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
@@ -135,12 +136,13 @@ object DuplicateDetector {
 
         val intersection = tokens1.intersect(tokens2).size
         val union = tokens1.union(tokens2).size
+        val minSize = min(tokens1.size, tokens2.size)
 
-        // Jaccard similarity with Levenshtein backup
         val jaccard = intersection.toFloat() / union.toFloat()
+        val containment = if (minSize > 0) intersection.toFloat() / minSize.toFloat() else 0.0f
         val lev = 1.0f - (levenshteinDistance(s1, s2).toFloat() / max(s1.length, s2.length).toFloat())
 
-        return max(jaccard, lev)
+        return maxOf(jaccard, containment * 0.9f, lev)
     }
 
     private fun levenshteinDistance(lhs: CharSequence, rhs: CharSequence): Int {
