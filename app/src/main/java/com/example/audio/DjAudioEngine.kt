@@ -66,6 +66,9 @@ class DjAudioEngine(private val context: Context) {
     // ── Scopes ─────────────────────────────────────────────────────────────
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var prepareJob: kotlinx.coroutines.Job? = null
+    /** Serializes transport transitions so rapid A -> B -> C requests cannot
+     * tear down resources while the audio thread is still replacing them. */
+    private val transitionLock = ReentrantLock()
 
     // ── Dedicated audio thread ─────────────────────────────────────────────
     private val audioThreadExecutor = Executors.newSingleThreadExecutor { r ->
@@ -210,6 +213,14 @@ class DjAudioEngine(private val context: Context) {
     // ── Track Loading ──────────────────────────────────────────────────────
 
     fun loadTrack(track: Track?, autoPlay: Boolean = false, initialPositionSec: Int = 0) {
+        if (isEngineReleased) return
+
+        transitionLock.withLock {
+            loadTrackLocked(track, autoPlay, initialPositionSec)
+        }
+    }
+
+    private fun loadTrackLocked(track: Track?, autoPlay: Boolean, initialPositionSec: Int) {
         if (isEngineReleased) return
 
         // Atomically invalidate the previous playback session before exposing
@@ -615,6 +626,16 @@ class DjAudioEngine(private val context: Context) {
             internalPositionMs = startMs
             publishThrottledPosition(startMs, durationMs, force = true)
 
+            // ── Authoritative playout clock baselines ──────────────────
+            // The AudioTrack playback head reports frames actually PLAYED OUT,
+            // while renderedPositionUs only tracks frames QUEUED. Publishing
+            // the queue frontier made the waveform lead the audible audio by
+            // the whole buffer depth (~200 ms) and appear to race ahead and
+            // jump. Position is therefore derived from the head relative to
+            // these baselines, clamped to the queued frontier.
+            var headBaseFrames = playedHeadFrames(at)
+            var contentBaseMs = startMs
+
             // Prepare reusable PCM work buffer
             val pcmStereo = ShortArray(maxOf(bufferSize / 2, sampleRate / 5))
             pcmWorkBuffer = pcmStereo
@@ -623,6 +644,7 @@ class DjAudioEngine(private val context: Context) {
             val crossfadeDurationMs = _crossfadeSeconds.value.coerceIn(0, 12) * 1000L
             var crossfadeStarted = false
             var nextOnlyPositionFrames = 0L
+            var nextHeadBaseFrames = 0L
             var crossfadeDecoderPrepared = false
 
             // DSP engine
@@ -679,6 +701,10 @@ class DjAudioEngine(private val context: Context) {
                     renderedPositionUs = target * 1000L
                     internalPositionMs = target
                     publishThrottledPosition(target, durationMs, force = true)
+                    // Rebase the playout clock onto the seek target. The head does
+                    // not reset on extractor seeks, so both baselines move together.
+                    headBaseFrames = playedHeadFrames(at)
+                    contentBaseMs = target
                     // Reset DSP delay state on seek to prevent stale echoes
                     haasEffect.reset()
                 }
@@ -766,6 +792,7 @@ class DjAudioEngine(private val context: Context) {
                                     crossfadePcm = crossfadeNextDecoder?.readFrames(filled)
                                     if (crossfadePcm?.isNotEmpty() == true) {
                                         crossfadeStarted = true
+                                        nextHeadBaseFrames = playedHeadFrames(at)
                                         crossfadeNextTrack?.let { nextTrack ->
                                             // Only publish the crossfade hand-off while this
                                             // session still owns playback; a manual track
@@ -799,7 +826,11 @@ class DjAudioEngine(private val context: Context) {
                                         nextOnlyPositionFrames += nextFrames
                                         crossfadeNextTrack?.let { nextTrack ->
                                             val nextDurationMs = nextTrack.durationSeconds.coerceAtLeast(1) * 1000L
-                                            val nextPositionMs = (nextOnlyPositionFrames * 1000L / sampleRate).coerceAtMost(nextDurationMs)
+                                            // Next-track position also follows the played-out
+                                            // head: subtract head frames consumed since the
+                                            // crossfade began from the queued frame count.
+                                            val nextPlayedFrames = nextOnlyPositionFrames - (playedHeadFrames(at) - nextHeadBaseFrames)
+                                            val nextPositionMs = (nextPlayedFrames * 1000L / sampleRate).coerceIn(0L, nextDurationMs)
                                             internalPositionMs = nextPositionMs
                                             publishThrottledPosition(nextPositionMs, nextDurationMs)
                                         }
@@ -829,10 +860,18 @@ class DjAudioEngine(private val context: Context) {
                                     lastAppliedPlaybackRate = desiredRate
                                 }
 
-                                // ── Position update ────────────────────
+                                // ── Position update (played-out clock) ──
+                                // Published position follows the AudioTrack playback
+                                // head — frames actually audible — so the waveform and
+                                // progress UI match the audio exactly. The queue frontier
+                                // (renderedPositionUs) is only an upper bound.
                                 if (!crossfadeStarted) {
-                                    internalPositionMs = currentPtsMs
-                                    publishThrottledPosition(currentPtsMs, durationMs)
+                                    val headProgressMs =
+                                        (playedHeadFrames(at) - headBaseFrames) * 1000L / sampleRate
+                                    val playedMs = (contentBaseMs + headProgressMs)
+                                        .coerceIn(0L, renderedPositionUs / 1000L)
+                                    internalPositionMs = playedMs
+                                    publishThrottledPosition(playedMs, durationMs)
                                 }
 
                                 // ── Monitor underruns ──────────────────
@@ -885,7 +924,8 @@ class DjAudioEngine(private val context: Context) {
                         nextOnlyPositionFrames += nextFrames
                         crossfadeNextTrack?.let { nextTrack ->
                             val nextDurationMs = nextTrack.durationSeconds.coerceAtLeast(1) * 1000L
-                            val nextPositionMs = (nextOnlyPositionFrames * 1000L / sampleRate).coerceAtMost(nextDurationMs)
+                            val nextPlayedFrames = nextOnlyPositionFrames - (playedHeadFrames(at) - nextHeadBaseFrames)
+                            val nextPositionMs = (nextPlayedFrames * 1000L / sampleRate).coerceIn(0L, nextDurationMs)
                             internalPositionMs = nextPositionMs
                             publishThrottledPosition(nextPositionMs, nextDurationMs)
                         }
@@ -942,6 +982,16 @@ class DjAudioEngine(private val context: Context) {
             }
         }
     }
+
+    /**
+     * AudioTrack playout head in frames, normalized across the 32-bit wrap.
+     * This is the number of frames the hardware has actually consumed — the
+     * authoritative clock for UI position. It advances at the configured
+     * playback rate, so dividing by the content sample rate yields content
+     * milliseconds regardless of pitch/speed changes.
+     */
+    private fun playedHeadFrames(track: AudioTrack): Long =
+        track.playbackHeadPosition.toLong() and 0xFFFF_FFFFL
 
     /**
      * Blocking PCM write that handles partial writes and error codes correctly.

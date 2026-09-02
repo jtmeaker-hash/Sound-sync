@@ -41,7 +41,8 @@ enum class AudioQualityRating(val label: String, val description: String, val cu
     TRUE_320("True 320 kbps MP3", "Clean spectral ceiling at 20.5 kHz. High density high-end detail", 20.5f, false),
     TRUE_256("256 kbps AAC/MP3", "Standard broadcast cutoff at 19.0 kHz. Clean harmonics", 19.0f, false),
     SUSPICIOUS_UPSCALED("Fake 320k (Upscaled)", "Brickwall cutoff at ~16 kHz with zero high frequency. Transcoded from 128k!", 15.5f, false),
-    LOW_128("128 kbps Low Quality", "Severe shelf cutoff at 15-16 kHz. Poor club audio fidelity", 15.0f, false)
+    LOW_128("128 kbps Low Quality", "Severe shelf cutoff at 15-16 kHz. Poor club audio fidelity", 15.0f, false),
+    UNKNOWN_BITRATE("Bitrate Unknown", "Encoded bitrate could not be read reliably from the file. Displayed instead of guessing.", 20.0f, false)
 }
 
 data class SpectrogramAnalysis(
@@ -52,8 +53,19 @@ data class SpectrogramAnalysis(
     val dynamicRangeDb: Float = 14.2f,
     val qualityRating: AudioQualityRating = AudioQualityRating.TRUE_320,
     val spectralSlices: List<FloatArray> = emptyList(), // FFT magnitude columns [time][freq_bin]
-    val notes: String = "Clean audio spectrum verified."
+    val notes: String = "Clean audio spectrum verified.",
+    /** Actual encoded bitrate read from the container/codec (0 = unknown). Primary bitrate source. */
+    val encodedBitrateKbps: Int = 0,
+    /** CBR/VBR only when genuinely verified from the bitstream; null when undetermined. */
+    val bitrateMode: BitrateMode? = null,
+    /** True when the spectral ceiling is well below what the encoded bitrate implies. Secondary indicator only. */
+    val possibleLossyTranscode: Boolean = false,
+    /** Track id the analysis belongs to; guards against stale async results. */
+    val analyzedTrackId: String = ""
 )
+
+/** Bitstream rate mode. Only set when actually verified from the container/bitstream; never guessed. */
+enum class BitrateMode { CBR, VBR }
 
 data class Track(
     val id: String,

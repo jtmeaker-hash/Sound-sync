@@ -845,10 +845,12 @@ private fun QualityAssessmentCard(
 ) {
     val isLossless = analysis.qualityRating.isLossless
     val isFake = analysis.qualityRating == AudioQualityRating.SUSPICIOUS_UPSCALED
+    val isUnknown = analysis.qualityRating == AudioQualityRating.UNKNOWN_BITRATE
     val accentColor = when {
         isLossless -> NeonGreen
         isFake -> NeonRed
         analysis.qualityRating == AudioQualityRating.TRUE_320 -> DeckACyan
+        isUnknown -> TextMuted
         else -> NeonAmber
     }
 
@@ -890,7 +892,16 @@ private fun QualityAssessmentCard(
                     border = androidx.compose.foundation.BorderStroke(1.dp, accentColor)
                 ) {
                     Text(
-                        text = if (isFake) "TRANSDETECT REJECT" else if (isLossless) "LOSSLESS PASSED" else "VERIFIED CBR",
+                        // CBR is only claimed when the bitstream genuinely verified it;
+                        // otherwise show the bitrate source we actually read.
+                        text = when {
+                            isFake -> "TRANSDETECT REJECT"
+                            isLossless -> "LOSSLESS PASSED"
+                            analysis.bitrateMode == com.example.model.BitrateMode.CBR -> "VERIFIED CBR"
+                            analysis.bitrateMode == com.example.model.BitrateMode.VBR -> "VBR (avg)"
+                            analysis.encodedBitrateKbps > 0 -> "READ FROM FILE"
+                            else -> "BITRATE UNKNOWN"
+                        },
                         color = accentColor,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Black,
@@ -947,9 +958,19 @@ private fun AudioSpecsMetricGrid(track: Track, analysis: SpectrogramAnalysis) {
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MetricTile(
-                    title = "DECLARED BITRATE",
-                    value = "${track.bitrateKbps} kbps",
-                    accent = if (analysis.qualityRating == AudioQualityRating.SUSPICIOUS_UPSCALED) NeonRed else TextPrimary,
+                    title = "ENCODED BITRATE",
+                    value = if (analysis.encodedBitrateKbps > 0) "${analysis.encodedBitrateKbps} kbps" else "Unknown",
+                    accent = when {
+                        analysis.qualityRating == AudioQualityRating.SUSPICIOUS_UPSCALED -> NeonRed
+                        analysis.encodedBitrateKbps > 0 -> TextPrimary
+                        else -> TextMuted
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                MetricTile(
+                    title = "DECLARED (TAG)",
+                    value = if (track.bitrateKbps > 0) "${track.bitrateKbps} kbps" else "—",
+                    accent = TextMuted,
                     modifier = Modifier.weight(1f)
                 )
                 MetricTile(
@@ -1015,6 +1036,7 @@ fun QualityPill(rating: AudioQualityRating, modifier: Modifier = Modifier) {
         AudioQualityRating.TRUE_256 -> NeonAmber to "256K"
         AudioQualityRating.SUSPICIOUS_UPSCALED -> NeonRed to "FAKE 320K"
         AudioQualityRating.LOW_128 -> NeonRed to "128K"
+        AudioQualityRating.UNKNOWN_BITRATE -> TextMuted to "? KBPS"
     }
 
     Surface(

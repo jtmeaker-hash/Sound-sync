@@ -66,6 +66,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -225,9 +226,13 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _showCreatePlaylistDialog = MutableStateFlow(false)
     val showCreatePlaylistDialog = _showCreatePlaylistDialog.asStateFlow()
 
-    // Playback Queue
+    // Playback Queue and explicit navigation history. The history is the
+    // source of truth for Previous/Next when shuffle is active.
     val playbackQueue = MutableStateFlow<List<Track>>(emptyList())
     val queueIndex = MutableStateFlow(0)
+    private val playbackHistory = mutableListOf<Track>()
+    private var historyIndex = -1
+    private var shuffleEnabled = false
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
@@ -317,6 +322,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val spectrogramErrorMessage = _spectrogramErrorMessage.asStateFlow()
 
     private var currentAnalysisJob: Job? = null
+    private val metadataJobs = mutableMapOf<String, Job>()
+    private val metadataJobMutex = Mutex()
 
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage = _snackbarMessage.asStateFlow()
@@ -1070,30 +1077,47 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private fun queueMetadataEnrichment(tracks: List<Track>) {
         val settings = _metadataSettings.value
         if (!settings.enrichmentEnabled) return
-        // Bounded concurrency: at most `concurrency` enrichment tasks run at
-        // once so a large import neither floods MusicBrainz nor saturates the
-        // audio-analysis thread pool.
         val gate = Semaphore(settings.concurrency)
         tracks.forEach { track ->
             viewModelScope.launch(Dispatchers.IO) {
-                gate.withPermit {
-                    runCatching {
-                        val enriched = metadataEnrichmentService.enrich(
-                            track,
-                            musicBrainzEnabled = settings.musicBrainzEnabled,
-                            bpmAnalysisEnabled = settings.bpmAnalysisEnabled,
-                            keyAnalysisEnabled = settings.keyAnalysisEnabled,
-                        )
-                        persistEnrichedMetadata(enriched, track)
-                        if (settings.writeToFileEnabled) {
-                            when (val result = metadataFileWriter.write(track)) {
-                                is MetadataWriteResult.Written -> Log.i("MainDjViewModel", "Metadata written to file for ${track.id}")
-                                is MetadataWriteResult.Unsupported -> Log.i("MainDjViewModel", "File write unsupported for ${track.id}: ${result.reason}")
-                                is MetadataWriteResult.Failed -> Log.w("MainDjViewModel", "File write failed for ${track.id}: ${result.reason}")
+                val job = coroutineContext[Job]
+                metadataJobMutex.withLock {
+                    metadataJobs[track.id]?.cancel()
+                    if (job != null) metadataJobs[track.id] = job
+                }
+                try {
+                    gate.withPermit {
+                        var lastError: Throwable? = null
+                        repeat(3) { attempt ->
+                            try {
+                                val enriched = metadataEnrichmentService.enrich(
+                                    track,
+                                    musicBrainzEnabled = settings.musicBrainzEnabled,
+                                    bpmAnalysisEnabled = settings.bpmAnalysisEnabled,
+                                    keyAnalysisEnabled = settings.keyAnalysisEnabled,
+                                )
+                                persistEnrichedMetadata(enriched, track)
+                                if (settings.writeToFileEnabled) {
+                                    when (val result = metadataFileWriter.write(track)) {
+                                        is MetadataWriteResult.Written -> Log.i("MainDjViewModel", "Metadata written to file for ${track.id}")
+                                        is MetadataWriteResult.Unsupported -> Log.i("MainDjViewModel", "File write unsupported for ${track.id}: ${result.reason}")
+                                        is MetadataWriteResult.Failed -> Log.w("MainDjViewModel", "File write failed for ${track.id}: ${result.reason}")
+                                    }
+                                }
+                                lastError = null
+                                return@withPermit
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (error: Throwable) {
+                                lastError = error
+                                if (attempt < 2) kotlinx.coroutines.delay(500L shl attempt)
                             }
                         }
-                    }.onFailure { error ->
-                        Log.w("MainDjViewModel", "Metadata enrichment failed for ${track.id}: ${error.message}")
+                        Log.w("MainDjViewModel", "Metadata enrichment failed for ${track.id}: ${lastError?.message}")
+                    }
+                } finally {
+                    metadataJobMutex.withLock {
+                        if (metadataJobs[track.id] === job) metadataJobs.remove(track.id)
                     }
                 }
             }
@@ -1340,13 +1364,25 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun playTrackList(tracks: List<Track>, shuffle: Boolean = false, startIndex: Int = 0) {
         if (tracks.isEmpty()) return
+        shuffleEnabled = shuffle
         val listToPlay = if (shuffle) tracks.shuffled() else tracks
         val start = if (shuffle) 0 else startIndex.coerceIn(0, listToPlay.lastIndex)
         playbackQueue.value = listToPlay
         queueIndex.value = start
-        val track = listToPlay[start]
-        playOrPreviewTrack(track, preserveQueue = true)
+        playbackHistory.clear()
+        historyIndex = -1
+        appendToPlaybackHistory(listToPlay[start])
+        playOrPreviewTrack(listToPlay[start], preserveQueue = true)
         showSnackbar("${if (shuffle) "Shuffling" else "Playing"} ${tracks.size} tracks")
+    }
+
+    private fun appendToPlaybackHistory(track: Track) {
+        if (historyIndex >= 0 && playbackHistory.getOrNull(historyIndex)?.id == track.id) return
+        if (historyIndex < playbackHistory.lastIndex) {
+            playbackHistory.subList(historyIndex + 1, playbackHistory.size).clear()
+        }
+        playbackHistory.add(track)
+        historyIndex = playbackHistory.lastIndex
     }
 
     fun queueTrack(track: Track, playNext: Boolean = false) {
@@ -1389,6 +1425,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         val idx = queueIndex.value
         if (idx + 1 in q.indices) {
             queueIndex.value = idx + 1
+            appendToPlaybackHistory(q[idx + 1])
             playOrPreviewTrack(q[idx + 1], preserveQueue = true)
         }
     }
@@ -1398,6 +1435,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         val idx = queueIndex.value
         if (idx - 1 in q.indices) {
             queueIndex.value = idx - 1
+            if (historyIndex > 0) historyIndex--
             playOrPreviewTrack(q[idx - 1], preserveQueue = true)
         }
     }
@@ -1678,12 +1716,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             }
             val currentIndex = list.indexOfFirst { it.id == current.id }
             if (currentIndex < 0) return@launch
-            val next = list.drop(currentIndex + 1)
-                .firstOrNull { isTrackAvailableForQueue(it) }
-                ?: return@launch
+            val next = if (shuffleEnabled) {
+                val historicalNext = playbackHistory.getOrNull(historyIndex + 1)
+                historicalNext ?: list.filter { it.id != current.id && isTrackAvailableForQueue(it) }.shuffled().firstOrNull()
+            } else {
+                list.drop(currentIndex + 1).firstOrNull { isTrackAvailableForQueue(it) }
+            } ?: return@launch
 
             withContext(Dispatchers.Main) {
                 if (queue.isNotEmpty()) queueIndex.value = list.indexOf(next)
+                if (shuffleEnabled && historyIndex + 1 < playbackHistory.size) historyIndex++ else appendToPlaybackHistory(next)
                 nextTrackForCrossfade = null
                 playOrPreviewTrack(next, preserveQueue = queue.isNotEmpty())
             }
@@ -1702,14 +1744,26 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
         if (list.isEmpty()) return
         val currentIndex = list.indexOfFirst { it.id == current.id }
+        if (shuffleEnabled && historyIndex > 0) {
+            historyIndex--
+            val previous = playbackHistory[historyIndex]
+            val queueIndexValue = playbackQueue.value.indexOfFirst { it.id == previous.id }
+            if (queueIndexValue >= 0) queueIndex.value = queueIndexValue
+            playOrPreviewTrack(previous, preserveQueue = playbackQueue.value.isNotEmpty())
+            return
+        }
         val prevIndex = currentIndex - 1
         if (prevIndex !in list.indices) return
         if (playbackQueue.value.isNotEmpty()) queueIndex.value = prevIndex
+        appendToPlaybackHistory(list[prevIndex])
         playOrPreviewTrack(list[prevIndex], preserveQueue = playbackQueue.value.isNotEmpty())
     }
 
     fun playOrPreviewTrack(track: Track, preserveQueue: Boolean = false) {
         if (!preserveQueue && playbackQueue.value.isNotEmpty()) {
+            shuffleEnabled = false
+            playbackHistory.clear()
+            historyIndex = -1
             playbackQueue.value = emptyList()
             queueIndex.value = 0
         }
@@ -1778,6 +1832,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun inspectTrackSpectrogram(track: Track, showTab: Boolean = false) {
         _analyzedTrack.value = track
+        _spectrogramData.value = null
         _spectrogramErrorMessage.value = null
         if (showTab) {
             _selectedTab.value = DjTab.SPECTROGRAM
@@ -1802,7 +1857,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     context = app,
                     track = track,
                     onProgress = { percent ->
-                        _analysisProgressPercent.value = percent
+                        if (_analyzedTrack.value?.id == track.id) _analysisProgressPercent.value = percent
                     }
                 )
                 if (_analyzedTrack.value?.id == track.id) {
