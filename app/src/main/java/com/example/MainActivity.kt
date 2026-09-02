@@ -64,11 +64,9 @@ class MainActivity : ComponentActivity() {
             SoundSyncTheme(themeMode = themeMode) {
                 activeViewModel = viewModel
 
-                // Handle incoming OAuth callback URIs if any
+                // Handle incoming OAuth callback URIs or shared song links
                 LaunchedEffect(Unit) {
-                    intent?.data?.let { uri ->
-                        viewModel.handleDeepLinkUri(uri)
-                    }
+                    processIncomingIntent(intent, viewModel)
                 }
 
                 // Permission Launcher
@@ -143,9 +141,26 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.data?.let { uri ->
-            Log.d(TAG, "onNewIntent received URI: $uri")
-            activeViewModel?.handleDeepLinkUri(uri)
+        activeViewModel?.let { vm ->
+            processIncomingIntent(intent, vm)
+        }
+    }
+
+    private fun processIncomingIntent(incomingIntent: Intent?, viewModel: MainDjViewModel) {
+        if (incomingIntent == null) return
+        if (incomingIntent.action == Intent.ACTION_SEND && incomingIntent.type?.startsWith("text/") == true) {
+            val sharedText = incomingIntent.getStringExtra(Intent.EXTRA_TEXT)
+                ?: incomingIntent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            val subject = incomingIntent.getStringExtra(Intent.EXTRA_SUBJECT)
+            if (!sharedText.isNullOrBlank()) {
+                Log.d(TAG, "Received shared text intent for Song Find: $sharedText")
+                viewModel.handleIncomingSharedText(sharedText, subject)
+            }
+        } else {
+            incomingIntent.data?.let { uri ->
+                Log.d(TAG, "Received deep link URI: $uri")
+                viewModel.handleDeepLinkUri(uri)
+            }
         }
     }
 

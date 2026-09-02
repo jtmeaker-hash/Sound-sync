@@ -62,6 +62,7 @@ import java.util.UUID
 
 enum class DjTab(val title: String, val iconName: String) {
     LOCAL("Local", "folder"),
+    FINDS("Finds", "bookmark"),
     SOUNDCLOUD("SoundCloud", "cloud"),
     SPOTIFY("Spotify", "library_music"),
     SPECTROGRAM("Spectrogram", "graphic_eq"),
@@ -81,6 +82,21 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val trackDao = db.trackDao()
     private val sourceFolderDao = db.sourceFolderDao()
     val playlistDao = db.playlistDao()
+
+    val songFindRepository = com.example.data.SongFindRepository(db.songFindDao())
+    val songFinds: StateFlow<List<com.example.model.SongFind>> = songFindRepository.allSongFinds.stateIn(
+        viewModelScope,
+        SharingStarted.Lazily,
+        emptyList()
+    )
+    private val _pendingShare = MutableStateFlow<com.example.model.PendingSongFind?>(null)
+    val pendingShare: StateFlow<com.example.model.PendingSongFind?> = _pendingShare.asStateFlow()
+
+    val musicBrainzClient = com.example.metadata.MusicBrainzClient(com.example.metadata.OkHttpMusicBrainzTransport())
+    val musicMetadataEnrichmentService = com.example.metadata.MusicMetadataEnrichmentService(
+        musicBrainzClient = musicBrainzClient,
+        audioAnalyzer = com.example.metadata.LocalPcmAudioAnalyzer(application)
+    )
 
     val spotifyRepository = com.example.network.spotify.SpotifyRepository(application)
     val soundCloudRepository = com.example.network.soundcloud.SoundCloudRepository(application)
@@ -2119,17 +2135,168 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun handleIncomingSharedText(sharedText: String, subject: String? = null) {
+        if (sharedText.isBlank()) return
+        val urlRegex = Regex("https?://[^\\s]+")
+        val match = urlRegex.find(sharedText)
+        val extractedUrl = match?.value ?: sharedText.trim()
+        val textWithoutUrl = if (match != null) {
+            sharedText.replace(match.value, "").trim()
+        } else {
+            ""
+        }
+        val platform = com.example.model.SongFind.detectPlatform(extractedUrl, sharedText)
+        val initialTitle = subject?.takeIf { it.isNotBlank() } ?: textWithoutUrl.takeIf { it.isNotBlank() } ?: ""
+
+        _pendingShare.value = com.example.model.PendingSongFind(
+            url = extractedUrl,
+            initialTitle = initialTitle,
+            initialNotes = if (textWithoutUrl.isNotBlank() && initialTitle != textWithoutUrl) textWithoutUrl else "",
+            detectedPlatform = platform
+        )
+        _selectedTab.value = DjTab.FINDS
+    }
+
+    fun openCreateSongFindDialog() {
+        _pendingShare.value = com.example.model.PendingSongFind()
+    }
+
+    fun dismissSongFindDialog() {
+        _pendingShare.value = null
+    }
+
+    fun saveSongFind(url: String, title: String, sourceAppName: String, notes: String) {
+        if (url.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val newFind = com.example.model.SongFind(
+                id = "find_${UUID.randomUUID().toString().take(8)}",
+                url = url.trim(),
+                title = title.trim(),
+                sourceAppName = sourceAppName.ifBlank { com.example.model.SongFind.detectPlatform(url) },
+                notes = notes.trim(),
+                createdAt = System.currentTimeMillis(),
+                isCompleted = false
+            )
+            songFindRepository.insert(newFind)
+            _pendingShare.value = null
+            withContext(Dispatchers.Main) {
+                showSnackbar("Saved song find: ${newFind.displayTitle}")
+            }
+        }
+    }
+
+    fun toggleSongFindCompleted(id: String, completed: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            songFindRepository.setCompleted(id, completed)
+        }
+    }
+
+    fun deleteSongFind(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            songFindRepository.deleteById(id)
+            withContext(Dispatchers.Main) {
+                showSnackbar("Removed song find")
+            }
+        }
+    }
+
+    fun clearCompletedSongFinds() {
+        viewModelScope.launch(Dispatchers.IO) {
+            songFindRepository.clearCompleted()
+            withContext(Dispatchers.Main) {
+                showSnackbar("Cleared completed finds")
+            }
+        }
+    }
+
+    private fun applyEnrichedMetadata(track: Track, enriched: com.example.metadata.EnrichedTrackMetadata): Track {
+        return track.copy(
+            title = enriched.title.ifBlank { track.title },
+            artist = enriched.artist.ifBlank { track.artist },
+            album = enriched.album.ifBlank { track.album },
+            albumArtist = enriched.albumArtist.ifBlank { track.albumArtist },
+            genre = enriched.genre ?: track.genre,
+            releaseDate = enriched.releaseDate ?: track.releaseDate,
+            releaseYear = enriched.releaseYear ?: track.releaseYear,
+            trackNumber = enriched.trackNumber ?: track.trackNumber,
+            discNumber = enriched.discNumber ?: track.discNumber,
+            recordLabel = enriched.recordLabel ?: track.recordLabel,
+            barcode = enriched.barcode ?: track.barcode,
+            isrc = enriched.isrc ?: track.isrc,
+            musicBrainzRecordingId = enriched.musicBrainzRecordingId ?: track.musicBrainzRecordingId,
+            musicBrainzArtistId = enriched.musicBrainzArtistId ?: track.musicBrainzArtistId,
+            musicBrainzReleaseId = enriched.musicBrainzReleaseId ?: track.musicBrainzReleaseId,
+            musicBrainzReleaseGroupId = enriched.musicBrainzReleaseGroupId ?: track.musicBrainzReleaseGroupId,
+            musicBrainzMatchConfidence = if (enriched.musicBrainzConfidence > 0) enriched.musicBrainzConfidence else track.musicBrainzMatchConfidence,
+            musicBrainzLastChecked = enriched.musicBrainzLastChecked ?: track.musicBrainzLastChecked,
+            artworkUrl = enriched.artworkUrl ?: track.artworkUrl,
+            bpm = enriched.bpm ?: track.bpm,
+            bpmConfidence = if (enriched.bpm != null) enriched.bpmConfidence else track.bpmConfidence,
+            bpmAnalysisVersion = enriched.bpmAnalysisVersion ?: track.bpmAnalysisVersion,
+            bpmLastAnalyzed = enriched.bpmLastAnalyzed ?: track.bpmLastAnalyzed,
+            musicalKey = enriched.musicalKey ?: track.musicalKey,
+            camelotKey = enriched.camelotKey ?: track.camelotKey,
+            keyConfidence = if (enriched.musicalKey != null) enriched.keyConfidence else track.keyConfidence,
+            keyAnalysisVersion = enriched.keyAnalysisVersion ?: track.keyAnalysisVersion,
+            keyLastAnalyzed = enriched.keyLastAnalyzed ?: track.keyLastAnalyzed,
+            isAiTagged = true
+        )
+    }
+
+    fun enrichTrackWithMusicBrainz(track: Track) {
+        viewModelScope.launch {
+            _isTaggingInProgress.value = true
+            _taggingProgressMessage.value = "Looking up MusicBrainz catalog for '${track.title}'..."
+            try {
+                val enriched = withContext(Dispatchers.IO) {
+                    musicMetadataEnrichmentService.enrich(track)
+                }
+                val updated = applyEnrichedMetadata(track, enriched)
+                withContext(Dispatchers.IO) {
+                    trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                }
+                if (audioEngine.currentTrack.value?.id == track.id) {
+                    val wasPlaying = audioEngine.isPlaying.value
+                    val currentSec = audioEngine.currentPositionSec.value
+                    withContext(Dispatchers.Main) {
+                        audioEngine.loadTrack(updated, autoPlay = wasPlaying, initialPositionSec = currentSec)
+                    }
+                }
+                if (_inspectingTrackForProperties.value?.id == track.id) {
+                    _inspectingTrackForProperties.value = updated
+                }
+                val mbId = updated.musicBrainzRecordingId?.take(8) ?: "Matched"
+                showSnackbar("MusicBrainz catalog enriched '${updated.title}' ($mbId)")
+            } catch (e: Exception) {
+                Log.e("MainDjViewModel", "MusicBrainz enrichment failed", e)
+                showSnackbar("MusicBrainz lookup failed: ${e.message}")
+            } finally {
+                _isTaggingInProgress.value = false
+            }
+        }
+    }
+
     fun runAutoTagAll() {
         viewModelScope.launch {
             _isTaggingInProgress.value = true
             val currentTracks = allTracks.value
-            _taggingProgressMessage.value = "Analyzing audio stems and metadata across ${currentTracks.size} tracks..."
+            _taggingProgressMessage.value = "Enriching catalog with MusicBrainz & stem analysis across ${currentTracks.size} tracks..."
 
             val updatedEntities = mutableListOf<TrackEntity>()
             for ((index, track) in currentTracks.withIndex()) {
-                _taggingProgressMessage.value = "AI Tagging (${index + 1}/${currentTracks.size}): ${track.title}"
-                val tagged = AiAutoTagger.autoTagTrack(track)
-                updatedEntities.add(TrackEntity.fromTrack(tagged))
+                _taggingProgressMessage.value = "MusicBrainz (${index + 1}/${currentTracks.size}): ${track.title}"
+                val enriched = try {
+                    withContext(Dispatchers.IO) {
+                        musicMetadataEnrichmentService.enrich(track)
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+                var updated = if (enriched != null) applyEnrichedMetadata(track, enriched) else track
+                if (!updated.hasValidBpm || updated.genre.isBlank()) {
+                    updated = AiAutoTagger.autoTagTrack(updated)
+                }
+                updatedEntities.add(TrackEntity.fromTrack(updated))
             }
 
             withContext(Dispatchers.IO) {
@@ -2137,30 +2304,49 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             _isTaggingInProgress.value = false
-            showSnackbar("Successfully auto-tagged ${updatedEntities.size} tracks with Genre, Key, BPM & Hot Cues!")
+            showSnackbar("Successfully enriched ${updatedEntities.size} tracks with MusicBrainz catalog, Key & BPM!")
         }
     }
 
     fun autoTagSingleTrack(track: Track) {
         viewModelScope.launch {
             _isTaggingInProgress.value = true
-            _taggingProgressMessage.value = "Auto-tagging '${track.title}' with AI..."
-            val tagged = AiAutoTagger.autoTagTrack(track)
-            withContext(Dispatchers.IO) {
-                trackDao.updateTrack(TrackEntity.fromTrack(tagged))
-            }
-            _isTaggingInProgress.value = false
-            if (audioEngine.currentTrack.value?.id == track.id) {
-                val wasPlaying = audioEngine.isPlaying.value
-                val currentSec = audioEngine.currentPositionSec.value
-                withContext(Dispatchers.Main) {
-                    audioEngine.loadTrack(tagged, autoPlay = wasPlaying, initialPositionSec = currentSec)
+            _taggingProgressMessage.value = "Enriching '${track.title}' with MusicBrainz & AI stems..."
+            try {
+                val enriched = withContext(Dispatchers.IO) {
+                    musicMetadataEnrichmentService.enrich(track)
                 }
+                var updated = applyEnrichedMetadata(track, enriched)
+                if (!updated.hasValidBpm || updated.genre.isBlank()) {
+                    updated = AiAutoTagger.autoTagTrack(updated)
+                }
+                withContext(Dispatchers.IO) {
+                    trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                }
+                if (audioEngine.currentTrack.value?.id == track.id) {
+                    val wasPlaying = audioEngine.isPlaying.value
+                    val currentSec = audioEngine.currentPositionSec.value
+                    withContext(Dispatchers.Main) {
+                        audioEngine.loadTrack(updated, autoPlay = wasPlaying, initialPositionSec = currentSec)
+                    }
+                }
+                if (_inspectingTrackForProperties.value?.id == track.id) {
+                    _inspectingTrackForProperties.value = updated
+                }
+                showSnackbar("Updated MusicBrainz metadata & Camelot key for '${updated.title}'")
+            } catch (e: Exception) {
+                Log.e("MainDjViewModel", "Auto tag failed, falling back to local tagger", e)
+                val fallback = AiAutoTagger.autoTagTrack(track)
+                withContext(Dispatchers.IO) {
+                    trackDao.updateTrack(TrackEntity.fromTrack(fallback))
+                }
+                if (_inspectingTrackForProperties.value?.id == track.id) {
+                    _inspectingTrackForProperties.value = fallback
+                }
+                showSnackbar("Auto-tagged '${fallback.title}'")
+            } finally {
+                _isTaggingInProgress.value = false
             }
-            if (_inspectingTrackForProperties.value?.id == track.id) {
-                _inspectingTrackForProperties.value = tagged
-            }
-            showSnackbar("Updated metadata & Camelot key for '${track.title}'")
         }
     }
 

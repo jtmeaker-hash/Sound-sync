@@ -196,6 +196,35 @@ fun FilePropertiesDialog(
                             fontSize = 9.5.sp,
                             lineHeight = 13.sp
                         )
+
+                        // MusicBrainz Catalog info if present
+                        if (!track.musicBrainzRecordingId.isNullOrBlank() || !track.isrc.isNullOrBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = DjSurfaceElevated,
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, DeckACyan.copy(alpha = 0.5f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("MUSICBRAINZ CATALOG", color = DeckACyan, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                        Spacer(modifier = Modifier.weight(1f))
+                                        if (track.musicBrainzMatchConfidence > 0) {
+                                            Text("${(track.musicBrainzMatchConfidence * 100).toInt()}% match", color = NeonGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                    track.musicBrainzRecordingId?.let {
+                                        Text("Recording ID: $it", color = TextSecondary, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                                    }
+                                    track.isrc?.let {
+                                        Text("ISRC: $it", color = TextSecondary, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                                    }
+                                    if (track.releaseYear != null || track.releaseDate != null) {
+                                        Text("Released: ${track.releaseDate ?: track.releaseYear.toString()}", color = TextSecondary, fontSize = 9.sp)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 

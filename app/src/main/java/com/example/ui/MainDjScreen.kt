@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
@@ -77,6 +78,8 @@ import com.example.ui.components.NowPlayingFullScreen
 import com.example.ui.components.NowPlayingModalSheet
 import com.example.ui.components.NowPlayingSettingsSheet
 import com.example.ui.components.OperationsAndCloudView
+import com.example.ui.components.SaveSongFindDialog
+import com.example.ui.components.SongFindsView
 import com.example.ui.components.UpdateDialog
 import android.app.Activity
 import com.example.ui.components.SoundCloudTab
@@ -130,6 +133,10 @@ fun MainDjScreen(
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
     val showApiConfigDialog by viewModel.showApiConfigDialog.collectAsState()
     val inspectingTrackForProperties by viewModel.inspectingTrackForProperties.collectAsState()
+
+    // Song Finds States
+    val songFinds by viewModel.songFinds.collectAsState()
+    val pendingShare by viewModel.pendingShare.collectAsState()
 
     // Spotify States
     val spotifyAuthState by viewModel.spotifyAuthState.collectAsState()
@@ -319,6 +326,18 @@ fun MainDjScreen(
                         )
                     }
                 }
+                DjTab.FINDS -> {
+                    SongFindsView(
+                        songFinds = songFinds,
+                        onAddNewFind = { viewModel.openCreateSongFindDialog() },
+                        onToggleCompleted = { id, completed -> viewModel.toggleSongFindCompleted(id, completed) },
+                        onDeleteFind = { id -> viewModel.deleteSongFind(id) },
+                        onClearCompleted = { viewModel.clearCompletedSongFinds() },
+                        onSearchInLibrary = { query ->
+                            viewModel.selectTab(DjTab.LOCAL)
+                        }
+                    )
+                }
                 DjTab.SOUNDCLOUD -> {
                     SoundCloudTab(
                         authState = soundCloudAuthState,
@@ -455,6 +474,17 @@ fun MainDjScreen(
                     onSaveSpotifyClientId = { viewModel.saveSpotifyClientId(it) },
                     onSaveSoundCloudClientId = { viewModel.saveSoundCloudClientId(it) },
                     onDismiss = { viewModel.closeApiConfigDialog() }
+                )
+            }
+
+            // Save Song Find Dialog
+            pendingShare?.let { share ->
+                SaveSongFindDialog(
+                    pendingShare = share,
+                    onSave = { url, title, platform, notes ->
+                        viewModel.saveSongFind(url, title, platform, notes)
+                    },
+                    onDismiss = { viewModel.dismissSongFindDialog() }
                 )
             }
 
@@ -687,6 +717,7 @@ private fun DjTopAppBar(
                             shape = RoundedCornerShape(4.dp),
                             color = when (currentTab) {
                                 DjTab.LOCAL -> DeckACyan.copy(alpha = 0.2f)
+                                DjTab.FINDS -> NeonAmber.copy(alpha = 0.2f)
                                 DjTab.SOUNDCLOUD -> SoundCloudOrange.copy(alpha = 0.2f)
                                 DjTab.SPOTIFY -> SpotifyGreen.copy(alpha = 0.2f)
                                 DjTab.SPECTROGRAM -> NeonPurple.copy(alpha = 0.2f)
@@ -697,6 +728,7 @@ private fun DjTopAppBar(
                                 text = currentTab.title.uppercase(),
                                 color = when (currentTab) {
                                     DjTab.LOCAL -> DeckACyan
+                                    DjTab.FINDS -> NeonAmber
                                     DjTab.SOUNDCLOUD -> SoundCloudOrange
                                     DjTab.SPOTIFY -> SpotifyGreen
                                     DjTab.SPECTROGRAM -> NeonPurple
@@ -769,6 +801,7 @@ private fun DjBottomNavigationBar(
     ) {
         val tabs = listOf(
             Triple(DjTab.LOCAL, "Local", Icons.Default.FolderOpen),
+            Triple(DjTab.FINDS, "Finds", Icons.Default.Bookmark),
             Triple(DjTab.SOUNDCLOUD, "SoundCloud", Icons.Default.Cloud),
             Triple(DjTab.SPOTIFY, "Spotify", Icons.Default.LibraryMusic),
             Triple(DjTab.SPECTROGRAM, "Spectrum", Icons.Default.GraphicEq),
@@ -779,6 +812,7 @@ private fun DjBottomNavigationBar(
             val isSelected = selectedTab == tab
             val tabColor = when (tab) {
                 DjTab.LOCAL -> DeckACyan
+                DjTab.FINDS -> NeonAmber
                 DjTab.SOUNDCLOUD -> SoundCloudOrange
                 DjTab.SPOTIFY -> SpotifyGreen
                 DjTab.SPECTROGRAM -> DeckACyan

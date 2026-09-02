@@ -13,15 +13,17 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CrateEntity::class,
         SourceFolderEntity::class,
         PlaylistEntity::class,
-        PlaylistTrackEntity::class
+        PlaylistTrackEntity::class,
+        SongFindEntity::class
     ],
-    version = 4,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun trackDao(): TrackDao
     abstract fun sourceFolderDao(): SourceFolderDao
     abstract fun playlistDao(): PlaylistDao
+    abstract fun songFindDao(): SongFindDao
 
     companion object {
         @Volatile
@@ -93,6 +95,57 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val columns = listOf(
+                    "bpmConfidence REAL NOT NULL DEFAULT 0.0",
+                    "bpmAnalysisVersion TEXT",
+                    "bpmLastAnalyzed INTEGER",
+                    "camelotKey TEXT NOT NULL DEFAULT ''",
+                    "keyConfidence REAL NOT NULL DEFAULT 0.0",
+                    "keyAnalysisVersion TEXT",
+                    "keyLastAnalyzed INTEGER",
+                    "albumArtist TEXT NOT NULL DEFAULT ''",
+                    "releaseDate TEXT",
+                    "releaseYear INTEGER",
+                    "recordLabel TEXT",
+                    "barcode TEXT",
+                    "isrc TEXT",
+                    "musicBrainzRecordingId TEXT",
+                    "musicBrainzArtistId TEXT",
+                    "musicBrainzReleaseId TEXT",
+                    "musicBrainzReleaseGroupId TEXT",
+                    "musicBrainzMatchConfidence REAL NOT NULL DEFAULT 0.0",
+                    "musicBrainzLastChecked INTEGER",
+                    "artworkUrl TEXT"
+                )
+                columns.forEach { definition ->
+                    val name = definition.substringBefore(' ')
+                    try { db.execSQL("ALTER TABLE tracks ADD COLUMN $name $definition") } catch (_: Exception) { }
+                }
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `song_finds` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `url` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `sourceAppName` TEXT NOT NULL,
+                        `notes` TEXT NOT NULL DEFAULT '',
+                        `createdAt` INTEGER NOT NULL,
+                        `isCompleted` INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_song_finds_url` ON `song_finds` (`url`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_song_finds_createdAt` ON `song_finds` (`createdAt`)")
+            }
+        }
+
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 try {
@@ -112,8 +165,8 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "soundsync_dj_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
-                .fallbackToDestructiveMigration(dropAllTables = true)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance
                 instance

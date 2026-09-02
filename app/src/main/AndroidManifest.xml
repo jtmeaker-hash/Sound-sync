@@ -47,6 +47,13 @@
                     android:scheme="soundsync"
                     android:host="gdrive-callback" />
             </intent-filter>
+
+            <!-- Share target for Song Find links (Instagram, TikTok, YouTube, Spotify, SoundCloud, etc.) -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
 
         <service
