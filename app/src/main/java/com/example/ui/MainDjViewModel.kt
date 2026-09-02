@@ -1723,7 +1723,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
                 if (audioEngine.currentTrack.value?.id == track.id) {
                     withContext(Dispatchers.Main) {
-                        audioEngine.loadTrack(updatedTrack, autoPlay = audioEngine.isPlaying.value)
+                        audioEngine.updateCurrentTrackMetadata(updatedTrack)
                     }
                 }
                 if (_inspectingTrackForProperties.value?.id == track.id) {

@@ -7,7 +7,6 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 
 object DuplicateDetector {
 
@@ -108,7 +107,6 @@ object DuplicateDetector {
         val bpmFactor = if (bpmDiff < 1.0) 1.0f else 0.85f
 
         val rawScore = (effectiveTitleSim * 0.6f + artistSim * 0.4f) * durationFactor * bpmFactor
-        return (rawScore * 100f).roundToInt().coerceIn(0, 100)
     }
 
     /**
@@ -118,8 +116,7 @@ object DuplicateDetector {
         return input.lowercase(Locale.ROOT)
             .replace(Regex("^\\d{1,3}[.\\-\\s_]+"), "") // leading track numbers like "01. " or "02 - "
             .replace(Regex("\\.(mp3|flac|wav|aac|aiff|m4a)$"), "")
-            .replace(Regex("[\\[\\(](original mix|extended mix|club mix|radio edit|remastered|clean|explicit|hq|320|12'' mix|official audio|master rip)[\\]\\)]"), "")
-            .replace(Regex("\\b(nexus|solis)\\b"), "")
+            .replace(Regex("[\\[\\(](original mix|extended mix|club mix|radio edit|remastered|clean|explicit|hq|320|12'' mix|official audio)[\\]\\)]"), "")
             .replace(Regex("[^a-z0-9\\s]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
