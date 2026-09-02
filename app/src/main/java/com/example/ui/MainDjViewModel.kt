@@ -649,8 +649,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         val candidates = if (queue.isNotEmpty()) queue else filteredTracks.value.ifEmpty { allTracks.value }
         val currentIndex = candidates.indexOfFirst { it.id == currentId }
         if (currentIndex < 0) return null
-        nextTrackForCrossfade = candidates.drop(currentIndex + 1)
-            .firstOrNull { isTrackAvailableForQueue(it) }
+        nextTrackForCrossfade = if (_isShuffleEnabled.value && candidates.size > 1) {
+            candidates.filter { it.id != currentId }.shuffled().firstOrNull { isTrackAvailableForQueue(it) }
+        } else {
+            val forward = candidates.drop(currentIndex + 1).firstOrNull { isTrackAvailableForQueue(it) }
+            if (forward == null && _repeatMode.value == RepeatMode.ALL) {
+                candidates.firstOrNull { isTrackAvailableForQueue(it) }
+            } else {
+                forward
+            }
+        }
         return nextTrackForCrossfade
     }
 
@@ -658,20 +666,33 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun playDriveTrackFromListing(fileItem: com.example.network.drive.DriveFileItem) {
         val listingTracks = driveListing.value.items
             .filterNot { it.isFolder }
-            .map { item ->
-                val itemPath = item.localFilePath
-                    ?: "https://www.googleapis.com/drive/v3/files/${item.id}?alt=media"
-                item.toAppTrack(itemPath)
-            }
-        val selectedIndex = listingTracks.indexOfFirst { it.id == "gdrive_${fileItem.id}" }
-        if (selectedIndex >= 0 && listingTracks.size > 1) {
-            playbackQueue.value = listingTracks
-            queueIndex.value = selectedIndex
-        } else {
-            playbackQueue.value = emptyList()
-            queueIndex.value = 0
-        }
-        playDriveTrack(fileItem)
+            .map { it.toAppTrack() }
+        val clicked = fileItem.toAppTrack()
+        playTrackList(listingTracks, startIndex = listingTracks.indexOfFirst { it.id == clicked.id }.coerceAtLeast(0))
+    }
+
+    fun playDriveTrack(fileItem: com.example.network.drive.DriveFileItem) {
+        playDriveTrackFromListing(fileItem)
+    }
+
+    fun playTrackFromFolder(track: Track, folderPath: String) {
+        val folderTracks = allTracks.value.filter { it.directoryPath == folderPath }
+        playTrackList(folderTracks, startIndex = folderTracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0))
+    }
+
+    fun playTrackFromAlbum(track: Track, albumName: String) {
+        val albumTracks = allTracks.value.filter { it.album.equals(albumName, ignoreCase = true) }
+        playTrackList(albumTracks, startIndex = albumTracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0))
+    }
+
+    fun playTrackFromArtist(track: Track, artistName: String) {
+        val artistTracks = allTracks.value.filter { it.artist.equals(artistName, ignoreCase = true) }
+        playTrackList(artistTracks, startIndex = artistTracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0))
+    }
+
+    fun playTrackFromPlaylist(track: Track, playlistId: String) {
+        val plTracks = selectedPlaylist.value?.tracks.orEmpty()
+        playTrackList(plTracks, startIndex = plTracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0))
     }
 
     /** Handles an engine completion only once, respecting repeat and shuffle modes. */
@@ -696,26 +717,43 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val currentId = current?.id
-        val currentIndex = list.indexOfFirst { it.id == currentId }
-        // A completion from an obsolete player must never restart playback.
-        if (currentIndex < 0) {
-            audioEngine.pause()
-            return
+        var currentIndex = list.indexOfFirst { it.id == currentId }
+        val activeList = if (currentIndex < 0) {
+            val all = allTracks.value
+            val fallbackIdx = all.indexOfFirst { it.id == currentId }
+            if (fallbackIdx >= 0) {
+                currentIndex = fallbackIdx
+                playbackQueue.value = all
+                all
+            } else {
+                list
+            }
+        } else {
+            list
         }
 
-        val next: Track? = if (_isShuffleEnabled.value && list.size > 1) {
-            val otherCandidates = list.filter { it.id != currentId }
+        if (currentIndex < 0) {
+            if (_repeatMode.value == RepeatMode.ALL && activeList.isNotEmpty()) {
+                currentIndex = -1
+            } else {
+                audioEngine.pause()
+                return
+            }
+        }
+
+        val next: Track? = if (_isShuffleEnabled.value && activeList.size > 1) {
+            val otherCandidates = activeList.filter { it.id != currentId }
             withContext(Dispatchers.IO) {
                 otherCandidates.shuffled().firstOrNull { isTrackAvailableForQueue(it) }
             }
         } else {
-            val candidates = list.drop(currentIndex + 1)
+            val candidates = activeList.drop(currentIndex + 1)
             val forwardNext = withContext(Dispatchers.IO) {
                 candidates.firstOrNull { isTrackAvailableForQueue(it) }
             }
             if (forwardNext == null && _repeatMode.value == RepeatMode.ALL) {
                 withContext(Dispatchers.IO) {
-                    list.firstOrNull { isTrackAvailableForQueue(it) }
+                    activeList.firstOrNull { isTrackAvailableForQueue(it) }
                 }
             } else {
                 forwardNext
@@ -728,7 +766,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 audioEngine.pause()
                 audioEngine.seekToSecond(0)
             } else {
-                if (queue.isNotEmpty()) queueIndex.value = list.indexOf(next)
+                val nextIdx = activeList.indexOfFirst { it.id == next.id }
+                if (nextIdx >= 0) queueIndex.value = nextIdx
                 nextTrackForCrossfade = null
                 audioEngine.loadTrack(next, autoPlay = true)
                 inspectTrackSpectrogram(next, showTab = false)
@@ -1734,20 +1773,23 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun playTrack(track: Track) {
-        if (playbackQueue.value.isEmpty()) {
-            val sourceTracks = when {
-                selectedAlbum.value != null -> selectedAlbum.value?.tracks.orEmpty()
-                selectedArtist.value != null -> selectedArtist.value?.songs.orEmpty()
-                selectedPlaylist.value != null -> selectedPlaylist.value?.tracks.orEmpty()
-                else -> filteredTracks.value.ifEmpty { allTracks.value }
-            }
-            val index = sourceTracks.indexOfFirst { it.id == track.id }
-            if (index >= 0) {
-                playbackQueue.value = sourceTracks
-                queueIndex.value = index
-            }
+        val sourceTracks = when {
+            selectedAlbum.value != null -> selectedAlbum.value?.tracks.orEmpty()
+            selectedArtist.value != null -> selectedArtist.value?.songs.orEmpty()
+            selectedPlaylist.value != null -> selectedPlaylist.value?.tracks.orEmpty()
+            else -> filteredTracks.value.ifEmpty { allTracks.value }
         }
-        playOrPreviewTrack(track, preserveQueue = playbackQueue.value.isNotEmpty())
+        val targetList = if (sourceTracks.any { it.id == track.id }) {
+            sourceTracks
+        } else {
+            val fallback = allTracks.value
+            if (fallback.any { it.id == track.id }) fallback else listOf(track)
+        }
+        val index = targetList.indexOfFirst { it.id == track.id }
+        playbackQueue.value = targetList
+        queueIndex.value = if (index >= 0) index else 0
+        nextTrackForCrossfade = null
+        playOrPreviewTrack(track, preserveQueue = true)
     }
 
     fun openTrackProperties(track: Track) {
