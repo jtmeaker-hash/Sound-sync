@@ -438,7 +438,15 @@ fun MainDjScreen(
                             onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
                             onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() },
                             themeMode = themeMode,
-                            onSetThemeMode = { viewModel.setThemeMode(it) }
+                            onSetThemeMode = { viewModel.setThemeMode(it) },
+                            metadataSettings = viewModel.metadataSettings.collectAsState().value,
+                            onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
+                            onSetMusicBrainzEnabled = viewModel::setMusicBrainzEnabled,
+                            onSetBpmAnalysisEnabled = viewModel::setBpmAnalysisEnabled,
+                            onSetKeyAnalysisEnabled = viewModel::setKeyAnalysisEnabled,
+                            onSetWriteToFileEnabled = viewModel::setWriteToFileEnabled,
+                            onSetConcurrency = viewModel::setEnrichmentConcurrency,
+                            onSetBpmRange = viewModel::setBpmRange
                         )
                     }
                 }

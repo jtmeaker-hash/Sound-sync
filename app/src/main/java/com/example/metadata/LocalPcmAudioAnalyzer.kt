@@ -114,7 +114,7 @@ class LocalPcmAudioAnalyzer(
         val second = candidates.getOrNull(1)?.score ?: 0.0
         val confidence = ((best.score - second) / 2.0).coerceIn(0.0, 1.0)
         val name = "${names[best.root]} ${if (best.isMinor) "minor" else "major"}"
-        return Triple(name, CamelotKey.fromPitchClass(best.root, best.isMinor), confidence)
+        return Triple(name, CamelotKey.fromPitchClass(best.root, best.isMinor) ?: "", confidence)
     }
 
     private fun correlation(values: DoubleArray, profile: DoubleArray, shift: Int): Double {

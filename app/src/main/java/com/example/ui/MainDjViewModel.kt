@@ -48,6 +48,7 @@ import com.example.sync.CloudSyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -122,6 +123,20 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private val prefs = getApplication<Application>().getSharedPreferences("soundsync_player_prefs", Context.MODE_PRIVATE)
 
+    val metadataSettings: StateFlow<com.example.metadata.MetadataSettings> = MutableStateFlow(
+        com.example.metadata.MetadataSettings(
+            enrichmentEnabled = prefs.getBoolean("metadata_enrichment_enabled", true),
+            musicBrainzEnabled = prefs.getBoolean("metadata_musicbrainz_enabled", true),
+            bpmAnalysisEnabled = prefs.getBoolean("metadata_bpm_enabled", true),
+            keyAnalysisEnabled = prefs.getBoolean("metadata_key_enabled", true),
+            writeToFileEnabled = prefs.getBoolean("metadata_write_file_enabled", false),
+            concurrency = prefs.getInt("metadata_concurrency", 2),
+            bpmMin = prefs.getInt("metadata_bpm_min", 60),
+            bpmMax = prefs.getInt("metadata_bpm_max", 200)
+        )
+    )
+    private val metadataSettingsState = metadataSettings as MutableStateFlow<com.example.metadata.MetadataSettings>
+
     val audioEngine = DjAudioEngine.getInstance(application)
 
     private val _themeMode = MutableStateFlow(
@@ -141,6 +156,28 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         nextTrackForCrossfade = null
         audioEngine.setCrossfadeSeconds(clamped)
     }
+
+    private fun updateMetadataSettings(update: (com.example.metadata.MetadataSettings) -> com.example.metadata.MetadataSettings) {
+        metadataSettingsState.value = update(metadataSettingsState.value)
+        prefs.edit()
+            .putBoolean("metadata_enrichment_enabled", metadataSettingsState.value.enrichmentEnabled)
+            .putBoolean("metadata_musicbrainz_enabled", metadataSettingsState.value.musicBrainzEnabled)
+            .putBoolean("metadata_bpm_enabled", metadataSettingsState.value.bpmAnalysisEnabled)
+            .putBoolean("metadata_key_enabled", metadataSettingsState.value.keyAnalysisEnabled)
+            .putBoolean("metadata_write_file_enabled", metadataSettingsState.value.writeToFileEnabled)
+            .putInt("metadata_concurrency", metadataSettingsState.value.concurrency)
+            .putInt("metadata_bpm_min", metadataSettingsState.value.bpmMin)
+            .putInt("metadata_bpm_max", metadataSettingsState.value.bpmMax)
+            .apply()
+    }
+
+    fun setEnrichmentEnabled(value: Boolean) = updateMetadataSettings { it.copy(enrichmentEnabled = value) }
+    fun setMusicBrainzEnabled(value: Boolean) = updateMetadataSettings { it.copy(musicBrainzEnabled = value) }
+    fun setBpmAnalysisEnabled(value: Boolean) = updateMetadataSettings { it.copy(bpmAnalysisEnabled = value) }
+    fun setKeyAnalysisEnabled(value: Boolean) = updateMetadataSettings { it.copy(keyAnalysisEnabled = value) }
+    fun setWriteToFileEnabled(value: Boolean) = updateMetadataSettings { it.copy(writeToFileEnabled = value) }
+    fun setEnrichmentConcurrency(value: Int) = updateMetadataSettings { it.copy(concurrency = value.coerceIn(1, com.example.metadata.MetadataSettings.MAX_CONCURRENCY)) }
+    fun setBpmRange(min: Int, max: Int) = updateMetadataSettings { it.copy(bpmMin = min, bpmMax = max.coerceAtLeast(min)) }
 
     fun setThemeMode(mode: ThemeMode) {
         _themeMode.value = mode
@@ -1669,18 +1706,24 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun resolveBpmAndKeyForTrack(track: Track) {
         if (track.hasValidBpm && track.hasValidKey) return
-        val app = getApplication<Application>()
+        val settings = metadataSettings.value
         viewModelScope.launch(Dispatchers.IO) {
-            val verified = com.example.analysis.TunebatMetadataService.resolveTrackMetadata(app, track, writeTagsToFile = true)
-            if (verified.hasBpm || verified.hasKey) {
+            val verified = musicMetadataEnrichmentService.enrich(
+                track = track,
+                musicBrainzEnabled = settings.musicBrainzEnabled,
+                bpmAnalysisEnabled = settings.bpmAnalysisEnabled,
+                keyAnalysisEnabled = settings.keyAnalysisEnabled
+            )
+            if (verified.bpm != null || verified.musicalKey != null) {
                 val updatedTrack = track.copy(
-                    bpm = if (verified.hasBpm) verified.bpm else track.bpm,
-                    musicalKey = if (verified.hasKey) verified.musicalKey else track.musicalKey
+                    bpm = verified.bpm ?: track.bpm,
+                    musicalKey = verified.musicalKey ?: track.musicalKey,
+                    camelotKey = verified.camelotKey ?: track.camelotKey
                 )
                 trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
                 if (audioEngine.currentTrack.value?.id == track.id) {
                     withContext(Dispatchers.Main) {
-                        audioEngine.updateCurrentTrackMetadata(updatedTrack)
+                        audioEngine.loadTrack(updatedTrack, autoPlay = audioEngine.isPlaying.value)
                     }
                 }
                 if (_inspectingTrackForProperties.value?.id == track.id) {
@@ -2351,7 +2394,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 if (audioEngine.currentTrack.value?.id == track.id) {
                     withContext(Dispatchers.Main) {
-                        audioEngine.updateCurrentTrackMetadata(updated)
+                        audioEngine.loadTrack(updated, autoPlay = audioEngine.isPlaying.value)
                     }
                 }
                 if (_inspectingTrackForProperties.value?.id == track.id) {
@@ -2417,7 +2460,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 if (audioEngine.currentTrack.value?.id == track.id) {
                     withContext(Dispatchers.Main) {
-                        audioEngine.updateCurrentTrackMetadata(updated)
+                        audioEngine.loadTrack(updated, autoPlay = audioEngine.isPlaying.value)
                     }
                 }
                 if (_inspectingTrackForProperties.value?.id == track.id) {

@@ -1,9 +1,12 @@
 package com.example.audio
 
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.util.Log
 import androidx.collection.LruCache
 import com.example.model.AudioQualityRating
+import com.example.model.BitrateMode
 import com.example.model.SpectrogramAnalysis
 import com.example.model.Track
 import kotlinx.coroutines.CancellationException
@@ -90,13 +93,17 @@ object SpectrogramEngine {
         analysisCache.get(cacheKey)?.let { cached ->
             Log.d(TAG, "HD Spectrogram retrieved from LRU cache in ${System.currentTimeMillis() - startTime}ms for '${track.title}'")
             onProgress(100)
-            return@withContext cached
+            return@withContext cached.copy(analyzedTrackId = track.id)
         }
 
         onProgress(15)
 
         try {
-            // 2. Decode real mono PCM samples from track source (up to 3M samples)
+            // 2. Read the ACTUAL encoded bitrate from the container/codec (primary bitrate source).
+            val bitrateInfo = BitrateProbe.probe(context, track.filePath, track.durationSeconds)
+            Log.i(TAG, "Encoded bitrate probe: ${bitrateInfo.encodedBitrateKbps} kbps (mode=${bitrateInfo.bitrateMode}, source=${bitrateInfo.source}) for '${track.title}'")
+
+            // 3. Decode real mono PCM samples from track source (up to 3M samples)
             val decodeStartTime = System.currentTimeMillis()
             val decodedAudio = AudioDecoder.decodeToMonoPcm(context, track.filePath, maxDurationSeconds = 240)
             val decodeTime = System.currentTimeMillis() - decodeStartTime
@@ -113,20 +120,34 @@ object SpectrogramEngine {
                 computeDeterministicSpectrogram(track)
             }
 
+            // Attach the REAL encoded bitrate as the primary bitrate identity. The spectral
+            // ceiling never overwrites it; it only adds a secondary transcode warning.
+            val resolvedBitrate = bitrateInfo.encodedBitrateKbps.takeIf { it > 0 }
+                ?: 0
+            val withBitrate = analysis.copy(
+                encodedBitrateKbps = resolvedBitrate,
+                bitrateKbps = resolvedBitrate,
+                bitrateMode = bitrateInfo.bitrateMode,
+                analyzedTrackId = track.id,
+                qualityRating = resolveQualityRating(analysis.qualityRating, resolvedBitrate, bitrateInfo.bitrateMode),
+                possibleLossyTranscode = isSuspiciousSpectralCeiling(analysis.cutoffKhz, resolvedBitrate, analysis.qualityRating.isLossless)
+            )
+            val finalAnalysis = withBitrate.copy(notes = buildNotes(withBitrate))
+
             onProgress(100)
 
             val spectroTime = System.currentTimeMillis() - spectrogramStartTime
-            Log.d(TAG, "HD Spectrogram finished: ${spectroTime}ms compute (decode=${decodeTime}ms, total=${System.currentTimeMillis() - startTime}ms). Ceiling: ${String.format("%.1f", analysis.cutoffKhz)} kHz")
+            Log.d(TAG, "HD Spectrogram finished: ${spectroTime}ms compute (decode=${decodeTime}ms, total=${System.currentTimeMillis() - startTime}ms). Ceiling: ${String.format("%.1f", finalAnalysis.cutoffKhz)} kHz")
 
             // Cache result under unique track-specific key
-            analysisCache.put(cacheKey, analysis)
-            analysis
+            analysisCache.put(cacheKey, finalAnalysis)
+            finalAnalysis
         } catch (e: CancellationException) {
             Log.d(TAG, "Spectrogram analysis cancelled for '${track.title}'")
             throw e
         } catch (e: Throwable) {
             Log.e(TAG, "Spectrogram analysis failed for '${track.title}': ${e.message}", e)
-            val fallback = computeDeterministicSpectrogram(track)
+            val fallback = computeDeterministicSpectrogram(track).copy(analyzedTrackId = track.id)
             analysisCache.put(cacheKey, fallback)
             fallback
         }
@@ -321,7 +342,9 @@ object SpectrogramEngine {
     }
 
     /**
-     * Classifies audio authenticity based on real spectral ceiling vs metadata bitrate claim.
+     * Classifies audio authenticity. The REAL encoded bitrate (from BitrateProbe) is the primary
+     * signal; the spectral ceiling is only a SECONDARY indicator of a possible lossy transcode and
+     * can never change the reported encoded bitrate.
      */
     private fun classifyQualityVerdict(
         track: Track,
@@ -329,7 +352,6 @@ object SpectrogramEngine {
         sampleRate: Int
     ): Pair<AudioQualityRating, String> {
         val format = track.format.uppercase()
-        val claimedBitrate = track.bitrateKbps
 
         return when {
             format == "FLAC" || format == "WAV" || format == "AIFF" -> {
@@ -345,10 +367,10 @@ object SpectrogramEngine {
                     )
                 }
             }
-            claimedBitrate >= 320 && cutoffKhz < 16.5f -> {
+            cutoffKhz < 16.5f -> {
                 Pair(
                     AudioQualityRating.SUSPICIOUS_UPSCALED,
-                    "WARNING: Brickwall cutoff detected at ${String.format("%.1f", cutoffKhz)} kHz! File claims 320 kbps MP3 but spectral density reveals a transcode from a 128 kbps source."
+                    "Possible lossy/transcoded source: spectral ceiling detected at ${String.format("%.1f", cutoffKhz)} kHz. Encoded bitrate must be read separately."
                 )
             }
             cutoffKhz >= 19.8f -> {
@@ -365,11 +387,64 @@ object SpectrogramEngine {
             }
             else -> {
                 Pair(
-                    AudioQualityRating.LOW_128,
-                    "Low bitrate cutoff at ${String.format("%.1f", cutoffKhz)} kHz. Noticeable loss in spatial high-frequency clarity."
+                    AudioQualityRating.UNKNOWN_BITRATE,
+                    "Spectral content is limited to ${String.format("%.1f", cutoffKhz)} kHz; encoded bitrate could not be determined from the file."
                 )
             }
         }
+    }
+
+    /**
+     * Overrides the spectral-only rating with the real encoded bitrate. Spectral verdicts may
+     * flag a possible transcode (secondary), but never redefine the encoded bitrate.
+     */
+    internal fun resolveQualityRating(
+        spectralRating: AudioQualityRating,
+        encodedBitrateKbps: Int,
+        bitrateMode: BitrateMode?
+    ): AudioQualityRating {
+        // Lossless formats keep their lossless verdicts.
+        if (spectralRating.isLossless) return spectralRating
+        if (encodedBitrateKbps <= 0) return AudioQualityRating.UNKNOWN_BITRATE
+        return when {
+            encodedBitrateKbps >= 310 -> AudioQualityRating.TRUE_320
+            encodedBitrateKbps >= 240 -> AudioQualityRating.TRUE_256
+            encodedBitrateKbps >= 160 -> AudioQualityRating.TRUE_256
+            else -> AudioQualityRating.LOW_128
+        }
+    }
+
+    /**
+     * Secondary indicator only: the spectral ceiling is far below what the encoded bitrate
+     * implies, suggesting a lossy/transcoded SOURCE. Never changes the encoded bitrate.
+     */
+    internal fun isSuspiciousSpectralCeiling(cutoffKhz: Float, encodedBitrateKbps: Int, isLossless: Boolean): Boolean {
+        if (isLossless || encodedBitrateKbps <= 0) return false
+        val expectedMinKhz = when {
+            encodedBitrateKbps >= 310 -> 19.0f
+            encodedBitrateKbps >= 240 -> 17.0f
+            else -> 0f
+        }
+        return expectedMinKhz > 0f && cutoffKhz in 0.1f..(expectedMinKhz - 1.0f)
+    }
+
+    /** Builds honest notes describing encoded bitrate (primary) and spectral findings (secondary). */
+    private fun buildNotes(a: SpectrogramAnalysis): String {
+        val bitrateText = when {
+            a.encodedBitrateKbps <= 0 -> "Unknown (could not be read reliably)"
+            else -> "${a.encodedBitrateKbps} kbps" + when (a.bitrateMode) {
+                BitrateMode.CBR -> " (CBR verified)"
+                BitrateMode.VBR -> " (VBR, average)"
+                null -> ""
+            }
+        }
+        val spectralText = when {
+            a.qualityRating.isLossless -> "Full spectral content to ${String.format("%.1f", a.cutoffKhz)} kHz."
+            a.possibleLossyTranscode ->
+                "High-frequency ceiling at ${String.format("%.1f", a.cutoffKhz)} kHz is lower than expected for ${a.encodedBitrateKbps} kbps — possible lossy/transcoded source. Encoded bitrate is unaffected."
+            else -> "Spectral content detected to ${String.format("%.1f", a.cutoffKhz)} kHz."
+        }
+        return "Encoded bitrate: $bitrateText. $spectralText"
     }
 
     /**
@@ -395,18 +470,8 @@ object SpectrogramEngine {
                     "WARNING: Brickwall cutoff at 15.4 kHz! File header claims 320kbps but spectral content is upscaled from a 128kbps source."
                 )
             }
-            track.bitrateKbps >= 320 -> {
-                Triple(
-                    20.5f + (random.nextFloat() * 0.4f),
-                    AudioQualityRating.TRUE_320,
-                    "Legitimate 320 kbps MP3. Smooth roll-off starting at 20.2 kHz with full low-end punch and high-frequency resolution."
-                )
-            }
-            track.bitrateKbps >= 256 -> {
-                Triple(19.2f, AudioQualityRating.TRUE_256, "Standard 256 kbps AAC/MP3. Clean cutoff at ~19.2 kHz.")
-            }
             else -> {
-                Triple(15.0f, AudioQualityRating.LOW_128, "Low Bitrate Cutoff (15.0 kHz). Noticeable loss in high-end club presence.")
+                Triple(20.0f, AudioQualityRating.UNKNOWN_BITRATE, "Encoded bitrate could not be determined from this file. Spectral view still rendered.")
             }
         }
 
@@ -461,7 +526,8 @@ object SpectrogramEngine {
             cutoffKhz = cutoffKhz,
             sampleRate = if (rating.isLossless) 48000 else 44100,
             bitDepth = if (rating == AudioQualityRating.STUDIO_LOSSLESS) 24 else 16,
-            bitrateKbps = track.bitrateKbps,
+            bitrateKbps = 0,
+            encodedBitrateKbps = 0,
             dynamicRangeDb = if (rating.isLossless) 16.8f else 12.4f,
             qualityRating = rating,
             spectralSlices = slices,
