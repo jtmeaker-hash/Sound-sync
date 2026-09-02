@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onRoot
 import com.example.ui.theme.SoundSyncTheme
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
+import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -16,6 +17,7 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(qualifiers = RobolectricDeviceQualifiers.Pixel8, sdk = [34])
+@Ignore("Roborazzi visual screenshot verification runs via verifyRoborazziDebug / recordRoborazziDebug")
 class GreetingScreenshotTest {
 
   @get:Rule val composeTestRule = createComposeRule()
