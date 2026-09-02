@@ -666,13 +666,20 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun playDriveTrackFromListing(fileItem: com.example.network.drive.DriveFileItem) {
         val listingTracks = driveListing.value.items
             .filterNot { it.isFolder }
-            .map { it.toAppTrack() }
-        val clicked = fileItem.toAppTrack()
-        playTrackList(listingTracks, startIndex = listingTracks.indexOfFirst { it.id == clicked.id }.coerceAtLeast(0))
-    }
-
-    fun playDriveTrack(fileItem: com.example.network.drive.DriveFileItem) {
-        playDriveTrackFromListing(fileItem)
+            .map { item ->
+                val itemPath = item.localFilePath
+                    ?: "https://www.googleapis.com/drive/v3/files/${item.id}?alt=media"
+                item.toAppTrack(itemPath)
+            }
+        val selectedIndex = listingTracks.indexOfFirst { it.id == "gdrive_${fileItem.id}" }
+        if (selectedIndex >= 0 && listingTracks.size > 1) {
+            playbackQueue.value = listingTracks
+            queueIndex.value = selectedIndex
+        } else {
+            playbackQueue.value = emptyList()
+            queueIndex.value = 0
+        }
+        playDriveTrack(fileItem)
     }
 
     fun playTrackFromFolder(track: Track, folderPath: String) {
