@@ -177,7 +177,10 @@ object M3uPlaylistManager {
             ""
         }
 
-        val entries = parseM3u(content, playlistDir = "Playlists")
+        val rawRelPath = if (uri.path != null) RockboxPathResolver.computeStorageRelativePath(uri.path!!) else ""
+        val playlistDir = if (rawRelPath.contains("/")) rawRelPath.substringBeforeLast("/") else "Playlists"
+
+        val entries = parseM3u(content, playlistDir = playlistDir)
         val (matchedTracks, missingCount) = matchEntriesToTracks(entries, allIndexedTracks)
 
         val playlistId = "playlist_imported_${System.currentTimeMillis()}_${(100..999).random()}"
@@ -190,7 +193,7 @@ object M3uPlaylistManager {
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis(),
             backingFileUri = uri.toString(),
-            backingRelativePath = "Playlists/$fileName",
+            backingRelativePath = "$playlistDir/$fileName",
             isRockboxCompatible = true,
             isImported = true,
             trackCount = matchedTracks.size,
@@ -210,7 +213,7 @@ object M3uPlaylistManager {
 
     /**
      * Exports a playlist to the device's storage in standard Rockbox `/Playlists/Name.m3u8` location.
-     * Uses atomic write to prevent corrupt playlist files.
+     * Uses atomic write to prevent corrupt playlist files with Scoped Storage fallbacks.
      */
     suspend fun exportPlaylistToStorage(
         context: Context,
@@ -259,9 +262,19 @@ object M3uPlaylistManager {
                 }
             }
 
-            // Default to writing to primary external storage /Playlists/ or app external files
+            // Write to primary external storage /Playlists/, falling back to app external files or internal storage on Scoped Storage restrictions
             val storageDir = Environment.getExternalStorageDirectory()
-            val playlistsDir = File(storageDir, "Playlists")
+            val primaryPlaylistsDir = File(storageDir, "Playlists")
+            val playlistsDir = try {
+                if (primaryPlaylistsDir.exists() || primaryPlaylistsDir.mkdirs()) {
+                    primaryPlaylistsDir
+                } else {
+                    context.getExternalFilesDir("Playlists") ?: File(context.filesDir, "Playlists")
+                }
+            } catch (_: Exception) {
+                context.getExternalFilesDir("Playlists") ?: File(context.filesDir, "Playlists")
+            }
+
             if (!playlistsDir.exists()) {
                 playlistsDir.mkdirs()
             }

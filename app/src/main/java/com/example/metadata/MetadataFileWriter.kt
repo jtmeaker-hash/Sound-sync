@@ -1,14 +1,13 @@
 package com.example.metadata
 
-import android.content.ContentResolver
 import android.content.Context
-import android.net.Uri
 import com.example.model.Track
+import com.example.storage.AudioTagWriter
+import kotlinx.coroutines.runBlocking
 
 /**
- * File writing boundary. Android does not provide a general-purpose, lossless tag
- * writer for every supported container, so unsupported SAF/container cases return
- * a clear failure rather than risking file corruption or dropping unrelated tags.
+ * File writing boundary. Safely writes confirmed tags to local audio files
+ * using format-preserving ID3 atomic tag writers.
  */
 sealed interface MetadataWriteResult {
     data object Written : MetadataWriteResult
@@ -17,7 +16,7 @@ sealed interface MetadataWriteResult {
 }
 
 class MetadataFileWriter(private val context: Context) {
-    fun write(track: Track): MetadataWriteResult {
+    suspend fun writeAsync(track: Track): MetadataWriteResult {
         val path = track.filePath
         if (path.startsWith("content://")) {
             return MetadataWriteResult.Unsupported(
@@ -27,8 +26,21 @@ class MetadataFileWriter(private val context: Context) {
         if (path.startsWith("demo://") || path.isBlank()) {
             return MetadataWriteResult.Unsupported("This track has no writable local file.")
         }
+        if (track.format.equals("MP3", ignoreCase = true)) {
+            val success = AudioTagWriter.writeConfirmedBpmAndKey(
+                context,
+                track.filePath,
+                track.bpm,
+                track.musicalKey
+            )
+            return if (success) MetadataWriteResult.Written else MetadataWriteResult.Failed("Could not write ID3 tags to MP3 file.")
+        }
         return MetadataWriteResult.Unsupported(
             "A format-preserving tag writer is not installed for ${track.format} files."
         )
+    }
+
+    fun write(track: Track): MetadataWriteResult {
+        return runBlocking { writeAsync(track) }
     }
 }

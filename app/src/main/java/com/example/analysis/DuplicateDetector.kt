@@ -10,25 +10,69 @@ import kotlin.math.min
 
 object DuplicateDetector {
 
+    private data class NormalizedTrack(
+        val track: Track,
+        val normTitle: String,
+        val normArtist: String,
+        val combined: String
+    )
+
     /**
      * Finds potential duplicates in the track list based on fuzzy title, artist, duration, and BPM.
+     * Uses sliding duration-window indexing and pre-computed string normalizations for high performance on large libraries.
      */
     fun findDuplicates(tracks: List<Track>): List<DuplicateMatch> {
+        if (tracks.size < 2) return emptyList()
         val matches = mutableListOf<DuplicateMatch>()
 
-        for (i in 0 until tracks.size) {
-            for (j in i + 1 until tracks.size) {
-                val t1 = tracks[i]
-                val t2 = tracks[j]
+        val normalized = tracks.map { t ->
+            val nTitle = normalizeTrackString(t.title)
+            val nArtist = normalizeTrackString(t.artist)
+            NormalizedTrack(
+                track = t,
+                normTitle = nTitle,
+                normArtist = nArtist,
+                combined = "$nArtist $nTitle"
+            )
+        }.sortedBy { it.track.durationSeconds }
+
+        for (i in 0 until normalized.size) {
+            val t1 = normalized[i]
+            val dur1 = t1.track.durationSeconds
+
+            for (j in i + 1 until normalized.size) {
+                val t2 = normalized[j]
+                val dur2 = t2.track.durationSeconds
+
+                // Early exit: duration difference exceeds threshold for valid duplicate score
+                if (dur1 > 0 && dur2 > 0 && (dur2 - dur1) > 30) {
+                    break
+                }
+
+                // Fast path for identical content fingerprints
+                val fp1 = t1.track.contentFingerprint
+                val fp2 = t2.track.contentFingerprint
+                if (fp1.isNotBlank() && fp2.isNotBlank() && fp1 == fp2) {
+                    matches.add(
+                        DuplicateMatch(
+                            trackA = t1.track,
+                            trackB = t2.track,
+                            similarityScore = 100,
+                            reason = "Exact audio fingerprint match (identical audio hash).",
+                            recommendedAction = buildRecommendation(t1.track, t2.track)
+                        )
+                    )
+                    continue
+                }
 
                 val score = calculateSimilarity(t1, t2)
                 if (score >= 68) { // Confident threshold for fuzzy duplicates
-                    val reason = buildReason(t1, t2, score)
-                    val recommendation = buildRecommendation(t1, t2)
+                    val reason = buildReason(t1.track, t2.track, score)
+                    val recommendation = buildRecommendation(t1.track, t2.track)
                     matches.add(
                         DuplicateMatch(
-                            trackA = t1,
-                            trackB = t2,
+                            trackA = t1.track,
+                            trackB = t2.track,
                             similarityScore = score,
                             reason = reason,
                             recommendedAction = recommendation
@@ -41,25 +85,16 @@ object DuplicateDetector {
         return matches.sortedByDescending { it.similarityScore }
     }
 
-    private fun calculateSimilarity(t1: Track, t2: Track): Int {
-        val normTitle1 = normalizeTrackString(t1.title)
-        val normTitle2 = normalizeTrackString(t2.title)
-
-        val normArtist1 = normalizeTrackString(t1.artist)
-        val normArtist2 = normalizeTrackString(t2.artist)
-
-        val titleSim = tokenSimilarity(normTitle1, normTitle2)
-        val artistSim = tokenSimilarity(normArtist1, normArtist2)
+    private fun calculateSimilarity(t1: NormalizedTrack, t2: NormalizedTrack): Int {
+        val titleSim = tokenSimilarity(t1.normTitle, t2.normTitle)
+        val artistSim = tokenSimilarity(t1.normArtist, t2.normArtist)
 
         // Cross check: sometimes artist is in the title e.g. "Daft Punk - One More Time"
-        val combined1 = "$normArtist1 $normTitle1"
-        val combined2 = "$normArtist2 $normTitle2"
-        val combinedSim = tokenSimilarity(combined1, combined2)
-
+        val combinedSim = tokenSimilarity(t1.combined, t2.combined)
         val effectiveTitleSim = max(titleSim, combinedSim)
 
         // Duration check: tracks with similar length are much more likely duplicates
-        val durationDiff = abs(t1.durationSeconds - t2.durationSeconds)
+        val durationDiff = abs(t1.track.durationSeconds - t2.track.durationSeconds)
         val durationFactor = when {
             durationDiff <= 3 -> 1.0f
             durationDiff <= 10 -> 0.85f
@@ -68,11 +103,10 @@ object DuplicateDetector {
         }
 
         // BPM check
-        val bpmDiff = abs(t1.bpm - t2.bpm)
+        val bpmDiff = abs(t1.track.bpm - t2.track.bpm)
         val bpmFactor = if (bpmDiff < 1.0) 1.0f else 0.85f
 
         val rawScore = (effectiveTitleSim * 0.6f + artistSim * 0.4f) * durationFactor * bpmFactor
-        return (rawScore * 100).toInt().coerceIn(0, 100)
     }
 
     /**

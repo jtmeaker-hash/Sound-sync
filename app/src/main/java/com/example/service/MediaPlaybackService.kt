@@ -130,6 +130,10 @@ class MediaPlaybackService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         MediaButtonReceiver.handleIntent(mediaSession, intent)
 
+        if (!isForegroundActive && intent?.action != ACTION_STOP) {
+            startForegroundWithNotification(buildInitialNotification())
+        }
+
         when (intent?.action) {
             ACTION_PLAY -> audioEngine.play()
             ACTION_PAUSE -> audioEngine.pause()
@@ -262,6 +266,32 @@ class MediaPlaybackService : Service() {
             .setState(state, positionMs, speed)
 
         mediaSession.setPlaybackState(stateBuilder.build())
+    }
+
+    private fun buildInitialNotification(): Notification {
+        val track = audioEngine.currentTrack.value
+        if (track != null) {
+            return buildNotification(track, audioEngine.isPlaying.value)
+        }
+        val openAppIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val contentPendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("SoundSync")
+            .setContentText("SoundSync Media Playback")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(contentPendingIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(false)
+            .build()
     }
 
     private fun buildNotification(track: Track, isPlaying: Boolean): Notification {

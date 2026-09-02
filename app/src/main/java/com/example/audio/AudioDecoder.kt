@@ -169,8 +169,10 @@ object AudioDecoder {
             var midFilterState = 0.0f
 
             val timePerSampleUs = 1_000_000.0 / sampleRate
-            val maxIterations = 20000 // generous safety threshold for full track decoding
+            val estimatedBuffers = ((totalDurationUs / 1000L) / 15L).toInt()
+            val maxIterations = max(60000, estimatedBuffers * 3)
             var iteration = 0
+            var consecutiveEmptyOutputs = 0
 
             while (!isOutputEOS && iteration++ < maxIterations) {
                 if (!isInputEOS) {
@@ -204,6 +206,7 @@ object AudioDecoder {
 
                 val outputBufIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
                 if (outputBufIndex >= 0) {
+                    consecutiveEmptyOutputs = 0
                     val outputBuffer = codec.getOutputBuffer(outputBufIndex)
                     if (outputBuffer != null && bufferInfo.size > 0) {
                         outputBuffer.position(bufferInfo.offset)
@@ -253,6 +256,10 @@ object AudioDecoder {
                     codec.releaseOutputBuffer(outputBufIndex, false)
 
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        isOutputEOS = true
+                    }
+                } else {
+                    if (isInputEOS && ++consecutiveEmptyOutputs > 500) {
                         isOutputEOS = true
                     }
                 }
@@ -441,8 +448,10 @@ object AudioDecoder {
             val bufferInfo = MediaCodec.BufferInfo()
             var isInputEOS = false
             var isOutputEOS = false
-            val maxIterations = 20000
+            val estimatedBuffers = ((maxSamplesToDecode / 1024) * 2)
+            val maxIterations = max(60000, estimatedBuffers * 3)
             var iteration = 0
+            var consecutiveEmptyOutputs = 0
 
             while (!isOutputEOS && decodedSampleCount < maxSamplesToDecode && iteration++ < maxIterations) {
                 if (!isInputEOS) {
@@ -476,6 +485,7 @@ object AudioDecoder {
 
                 val outputBufIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
                 if (outputBufIndex >= 0) {
+                    consecutiveEmptyOutputs = 0
                     val outputBuffer = codec.getOutputBuffer(outputBufIndex)
                     if (outputBuffer != null && bufferInfo.size > 0) {
                         outputBuffer.position(bufferInfo.offset)
@@ -504,6 +514,10 @@ object AudioDecoder {
                     codec.releaseOutputBuffer(outputBufIndex, false)
 
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        isOutputEOS = true
+                    }
+                } else {
+                    if (isInputEOS && ++consecutiveEmptyOutputs > 500) {
                         isOutputEOS = true
                     }
                 }

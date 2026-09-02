@@ -557,7 +557,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     // Fuzzy duplicate detector live matches
     val duplicateMatches: StateFlow<List<DuplicateMatch>> = allTracks.map { tracks ->
         DuplicateDetector.findDuplicates(tracks)
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // SoundSync In-App Update System State
     val updateState: StateFlow<UpdateState> = UpdateManager.updateState

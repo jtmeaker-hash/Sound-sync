@@ -66,7 +66,18 @@ class AudioScanService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                val uriString = intent.getStringExtra(EXTRA_TREE_URI) ?: return START_NOT_STICKY
+                val uriString = intent.getStringExtra(EXTRA_TREE_URI)
+                if (uriString == null) {
+                    val fallbackNotification = buildNotification("Idle", 0, 0, false)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(NOTIFICATION_ID, fallbackNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                    } else {
+                        startForeground(NOTIFICATION_ID, fallbackNotification)
+                    }
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 val label = intent.getStringExtra(EXTRA_SOURCE_LABEL) ?: "Audio Storage"
                 val sourceId = intent.getStringExtra(EXTRA_SOURCE_ID) ?: "saf_storage"
                 val treeUri = Uri.parse(uriString)

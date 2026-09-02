@@ -2,9 +2,12 @@ package com.example.storage
 
 import android.content.Context
 import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.example.analysis.TunebatMetadataService
 import com.example.model.AudioQualityRating
 import com.example.model.FolderItem
 import com.example.model.MusicPlatform
@@ -140,24 +143,98 @@ object SafStorageManager {
         val sizeBytes = file.length()
         val sizeMb = sizeBytes.toDouble() / (1024.0 * 1024.0)
         val format = MediaScannerHelper.resolveFormat(name, file.type ?: "")
-        val title = name.substringBeforeLast(".")
-        val id = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
+        val fallbackTitle = name.substringBeforeLast(".")
 
+        var title = fallbackTitle
+        var artist = "Unknown Artist"
+        var album = "Single"
+        var genre = "DJ Library"
+        var durationSec = 210
+        var bitrateKbps = if (format == "FLAC" || format == "WAV") 1411 else 320
+        var bpm = 0.0
+        var musicalKey = ""
+        var sampleRate = 44100
+        var bitDepth = 16
+
+        val embedded = TunebatMetadataService.extractEmbeddedTags(context, uri.toString())
+        if (embedded != null) {
+            if (embedded.hasBpm) bpm = embedded.bpm
+            if (embedded.hasKey) musicalKey = embedded.musicalKey
+        }
+
+        val retriever = MediaMetadataRetriever()
+        try {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                retriever.setDataSource(pfd.fileDescriptor)
+                val mTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+                val mArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                    ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+                val mAlbum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                val mGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
+                val mDuration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                val mBitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+                val mSampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+                } else null
+                val mBitDepth = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE)?.toIntOrNull()
+                } else null
+
+                if (!mTitle.isNullOrBlank()) title = mTitle
+                if (!mArtist.isNullOrBlank() && mArtist != "<unknown>") artist = mArtist
+                if (!mAlbum.isNullOrBlank() && mAlbum != "<unknown>") album = mAlbum
+                if (!mGenre.isNullOrBlank()) genre = mGenre
+                if (mDuration != null) {
+                    durationSec = (mDuration.toLongOrNull() ?: 0L).let { (it / 1000).toInt().coerceAtLeast(1) }
+                }
+                if (mBitrate != null) {
+                    bitrateKbps = (mBitrate.toIntOrNull() ?: (bitrateKbps * 1000)) / 1000
+                }
+                if (mSampleRate != null && mSampleRate > 0) sampleRate = mSampleRate
+                if (mBitDepth != null && mBitDepth > 0) bitDepth = mBitDepth
+            }
+        } catch (e: Exception) {
+            Log.v(TAG, "Retriever skipped or fallback for $name: ${e.message}")
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+        }
+
+        // Infer BPM and Key heuristics from filename if tagged like "128_8A_Artist_Title"
+        val cleanName = name.replace("_", " ").replace("-", " ")
+        val bpmMatch = Regex("""\b(1[1-3][0-9]|14[0-9]|9[0-9])\s*(?:bpm)?\b""", RegexOption.IGNORE_CASE).find(cleanName)
+        if (bpmMatch != null) {
+            bpmMatch.groupValues[1].toDoubleOrNull()?.let { if (bpm <= 0.0) bpm = it }
+        }
+
+        val keyMatch = Regex("""\b([1-9]|1[0-2])([A-B])\b""", RegexOption.IGNORE_CASE).find(name)
+        if (keyMatch != null) {
+            if (musicalKey.isBlank()) musicalKey = keyMatch.value.uppercase(Locale.ROOT)
+        }
+
+        val qualityRating = when {
+            format == "FLAC" && (sampleRate >= 96000 || bitDepth >= 24) -> AudioQualityRating.STUDIO_LOSSLESS
+            format == "FLAC" || format == "WAV" || format == "AIFF" -> AudioQualityRating.TRUE_LOSSLESS
+            bitrateKbps >= 310 -> AudioQualityRating.TRUE_320
+            bitrateKbps >= 240 -> AudioQualityRating.TRUE_256
+            bitrateKbps < 160 -> AudioQualityRating.LOW_128
+            else -> AudioQualityRating.TRUE_320
+        }
+
+        val id = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
         val relPath = RockboxPathResolver.computeStorageRelativePath(uri.toString(), folderPath)
-        val durationSeconds = 210
-        val fingerprint = AudioFingerprintUtil.generateDocumentFileFingerprint(context, file, durationSeconds)
+        val fingerprint = AudioFingerprintUtil.generateDocumentFileFingerprint(context, file, durationSec)
 
         return Track(
             id = id,
             title = title,
-            artist = "Local Artist",
-            album = "DJ Collection",
-            genre = "Electronic",
+            artist = artist,
+            album = album,
+            genre = genre,
             subGenre = "Club",
-            bpm = 126.0,
-            musicalKey = "8A",
-            durationSeconds = durationSeconds,
-            bitrateKbps = if (format == "FLAC" || format == "WAV") 1411 else 320,
+            bpm = bpm,
+            musicalKey = musicalKey,
+            durationSeconds = durationSec,
+            bitrateKbps = bitrateKbps,
             format = format,
             fileSizeMb = String.format(Locale.US, "%.2f", sizeMb).toDoubleOrNull() ?: sizeMb,
             filePath = uri.toString(),
@@ -166,9 +243,9 @@ object SafStorageManager {
             syncState = SyncState.SYNCED,
             platforms = listOf(MusicPlatform.LOCAL),
             energyRating = 7,
-            hotCues = listOf(0, 30, 60, 120),
+            hotCues = listOf(0, (durationSec * 0.15).toInt(), (durationSec * 0.45).toInt(), (durationSec * 0.75).toInt()),
             isAiTagged = false,
-            qualityRating = if (format == "FLAC" || format == "WAV") AudioQualityRating.TRUE_LOSSLESS else AudioQualityRating.TRUE_320,
+            qualityRating = qualityRating,
             dateAdded = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),
             crateId = "crate_all",
             sourceId = sourceId,

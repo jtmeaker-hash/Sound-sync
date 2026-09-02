@@ -35,14 +35,15 @@ abstract class AppDatabase : RoomDatabase() {
                     """
                     CREATE TABLE IF NOT EXISTS `source_folders` (
                         `id` TEXT NOT NULL PRIMARY KEY,
-                        `treeUri` TEXT NOT NULL,
-                        `displayName` TEXT NOT NULL,
-                        `customName` TEXT NOT NULL,
-                        `iconName` TEXT NOT NULL,
-                        `isScanned` INTEGER NOT NULL,
-                        `lastScannedTimestamp` INTEGER NOT NULL,
+                        `label` TEXT NOT NULL,
+                        `path` TEXT NOT NULL,
+                        `uriString` TEXT NOT NULL,
+                        `typeName` TEXT NOT NULL,
+                        `isOnline` INTEGER NOT NULL,
                         `trackCount` INTEGER NOT NULL,
-                        `isDefault` INTEGER NOT NULL
+                        `freeSpaceGb` REAL NOT NULL,
+                        `totalSpaceGb` REAL NOT NULL,
+                        `lastScanned` INTEGER NOT NULL
                     )
                     """.trimIndent()
                 )

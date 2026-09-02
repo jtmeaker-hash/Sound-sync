@@ -909,7 +909,7 @@ class DjAudioEngine(private val context: Context) {
 
                                 // ── Write PCM if still active session ──
                                 if (generationGate.isCurrent(session)) {
-                                    writePcmBlocking(at, pcmStereo, filled * 2)
+                                    writePcmBlocking(at, pcmStereo, filled * 2, session)
                                     renderedPositionUs += (filled.toLong()) * 1_000_000L / sampleRate
 
                                     // ── Pitch / playback rate ──────────
@@ -1025,12 +1025,16 @@ class DjAudioEngine(private val context: Context) {
 
     /**
      * Blocking PCM write that handles partial writes and error codes correctly.
-     * All unwritten data is retried until fully consumed or an unrecoverable error occurs.
+     * All unwritten data is retried until fully consumed, an unrecoverable error occurs,
+     * or the playback session is invalidated / paused.
      */
-    private fun writePcmBlocking(audioTrack: AudioTrack, buffer: ShortArray, shortCount: Int) {
+    private fun writePcmBlocking(audioTrack: AudioTrack, buffer: ShortArray, shortCount: Int, session: Long = -1L) {
         var offset = 0
         var remaining = shortCount
         while (remaining > 0) {
+            if (session >= 0L && (!generationGate.isCurrent(session) || isEngineReleased || decoderShouldPause)) {
+                break
+            }
             val written = audioTrack.write(buffer, offset, remaining)
             if (written > 0) {
                 offset += written
@@ -1379,7 +1383,16 @@ class DjAudioEngine(private val context: Context) {
 
         init {
             if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
-                extractor.setDataSource(context, Uri.parse(uriOrPath), null)
+                val uri = Uri.parse(uriOrPath)
+                try {
+                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                        extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    } ?: run {
+                        extractor.setDataSource(context, uri, null)
+                    }
+                } catch (_: Exception) {
+                    extractor.setDataSource(context, uri, null)
+                }
             } else {
                 extractor.setDataSource(uriOrPath)
             }
