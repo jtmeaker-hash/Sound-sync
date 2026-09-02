@@ -107,6 +107,7 @@ object DuplicateDetector {
         val bpmFactor = if (bpmDiff < 1.0) 1.0f else 0.85f
 
         val rawScore = (effectiveTitleSim * 0.6f + artistSim * 0.4f) * durationFactor * bpmFactor
+        return (rawScore * 100).toInt().coerceIn(0, 100)
     }
 
     /**
