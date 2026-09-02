@@ -25,7 +25,11 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class ExampleRobolectricTest {
 
-    private fun createSampleTrack(id: String = "test_1", path: String = "/nonexistent/test.mp3"): Track {
+    private fun createSampleTrack(
+        id: String = "test_1",
+        path: String = "/nonexistent/test.mp3",
+        durationOverride: Int? = null
+    ): Track {
         return Track(
             id = id,
             title = "Test Sound",
@@ -35,7 +39,7 @@ class ExampleRobolectricTest {
             subGenre = "Peak",
             bpm = 128.0,
             musicalKey = "8A",
-            durationSeconds = 180,
+            durationSeconds = durationOverride ?: 180,
             bitrateKbps = 320,
             format = "MP3",
             fileSizeMb = 8.5,
@@ -102,6 +106,71 @@ class ExampleRobolectricTest {
         assertTrue(engine.isPlaying.value)
         engine.pause()
         assertFalse(engine.isPlaying.value)
+        engine.release()
+    }
+
+    @Test
+    fun `rapid track switching A-B-C leaves only C as the authoritative track`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine = DjAudioEngine(context)
+
+        val trackA = createSampleTrack(id = "track_a")
+        val trackB = createSampleTrack(id = "track_b")
+        val trackC = createSampleTrack(id = "track_c")
+
+        // Simulate the user rapidly selecting tracks while playback is running.
+        engine.loadTrack(trackA, autoPlay = true)
+        engine.loadTrack(trackB, autoPlay = true)
+        engine.loadTrack(trackC, autoPlay = true)
+
+        // The engine's authoritative current track must be C, and only C.
+        assertEquals("track_c", engine.currentTrack.value?.id)
+
+        // Release synchronously so executor threads don't leak across tests.
+        engine.release()
+    }
+
+    @Test
+    fun `switching tracks while paused shows the new track without starting playback`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine = DjAudioEngine(context)
+
+        val trackA = createSampleTrack(id = "paused_a")
+        val trackB = createSampleTrack(id = "paused_b")
+
+        engine.loadTrack(trackA, autoPlay = true)
+        engine.play()
+        engine.pause()
+        assertFalse(engine.isPlaying.value)
+
+        // Select a different track while paused; UI and engine must agree,
+        // and playback must not silently start.
+        engine.loadTrack(trackB, autoPlay = false)
+        assertEquals("paused_b", engine.currentTrack.value?.id)
+        assertFalse("Loading a new track must not auto-start playback", engine.isPlaying.value)
+
+        engine.release()
+    }
+
+    @Test
+    fun `switching tracks resets playback position to the requested initial position`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine = DjAudioEngine(context)
+
+        val trackA = createSampleTrack(id = "pos_a")
+        val trackB = createSampleTrack(id = "pos_b", durationOverride = 240)
+
+        engine.loadTrack(trackA, autoPlay = true)
+        engine.seekToSecond(90)
+        assertEquals(90, engine.currentPositionSec.value)
+
+        // Switching tracks must reset position, not inherit the old one.
+        engine.loadTrack(trackB, autoPlay = false, initialPositionSec = 12)
+        assertEquals("pos_b", engine.currentTrack.value?.id)
+        assertEquals(12, engine.currentPositionSec.value)
+        // 12s into a 240s track: progress must reflect the NEW track's duration.
+        assertEquals(0.05f, engine.playbackProgress.value, 0.001f)
+
         engine.release()
     }
 

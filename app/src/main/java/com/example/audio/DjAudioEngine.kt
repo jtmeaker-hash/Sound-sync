@@ -94,6 +94,10 @@ class DjAudioEngine(private val context: Context) {
     private val pauseCondition = pauseLock.newCondition()
     @Volatile private var decoderShouldPause = true
     @Volatile private var decoderRunning = false
+    /** Monotonic owner token; loops may only write while their generation is current. */
+    private val playbackGate = PlaybackGenerationGate()
+
+
 
     // ── Reusable buffers (allocated once per track load) ───────────────────
     @Volatile private var pcmWorkBuffer: ShortArray = ShortArray(0)
@@ -208,20 +212,35 @@ class DjAudioEngine(private val context: Context) {
     fun loadTrack(track: Track?, autoPlay: Boolean = false, initialPositionSec: Int = 0) {
         if (isEngineReleased) return
 
-        // Always stop before loading a new track
+        // Atomically invalidate the previous playback session before exposing
+        // the new track. Old decoder loops will fail their generation check and
+        // exit without ever writing audio for the new request.
+        val generation = playbackGate.next()
+        Log.i(TAG, "loadTrack: requested track='${track?.title}' uri=${track?.filePath} " +
+            "autoPlay=$autoPlay generation=$generation")
         stopPlayback()
+        releasePlaybackResources()
         prepareJob?.cancel()
+        // Wake any loop parked in the pause condition so it observes the new
+        // generation and exits instead of resuming the old AudioTrack.
+        pauseLock.withLock { pauseCondition.signalAll() }
 
         if (track == null) {
             _currentTrack.value = null
             _playbackProgress.value = 0f
             _currentPositionSec.value = 0
+            _currentPositionMs.value = 0L
+            _waveformData.value = null
+            _isWaveformLoading.value = false
+            _isPlaying.value = false
             activeCueSeconds = 0
             return
         }
 
+        // Atomic switch: the UI-facing current track and position only change
+        // after the previous session's resources have been torn down.
         _currentTrack.value = track
-        val generation = ++waveformGeneration
+        val waveformGenerationForTrack = ++waveformGeneration
         val baseBpm = if (track.bpm > 0) track.bpm else 126.0
         _effectiveBpm.value = baseBpm * (1.0 + _pitchPercent.value / 100.0)
 
@@ -249,13 +268,13 @@ class DjAudioEngine(private val context: Context) {
         analysisScope.launch {
             try {
                 val fullWaveform = WaveformAnalyzer.analyze(context, track)
-                if (_currentTrack.value?.id == track.id && waveformGeneration == generation) {
+                if (_currentTrack.value?.id == track.id && waveformGeneration == waveformGenerationForTrack) {
                     _waveformData.value = fullWaveform
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Waveform analysis failed: ${e.message}")
             } finally {
-                if (_currentTrack.value?.id == track.id && waveformGeneration == generation) {
+                if (_currentTrack.value?.id == track.id && waveformGeneration == waveformGenerationForTrack) {
                     _isWaveformLoading.value = false
                 }
             }
@@ -264,7 +283,7 @@ class DjAudioEngine(private val context: Context) {
         analysisScope.launch {
             try {
                 val waveform = SpectrogramEngine.extractWaveform(context, track)
-                if (_currentTrack.value?.id == track.id && waveformGeneration == generation) {
+                if (_currentTrack.value?.id == track.id && waveformGeneration == waveformGenerationForTrack) {
                     _waveformHeights.value = waveform
                 }
             } catch (e: Exception) {
@@ -275,14 +294,34 @@ class DjAudioEngine(private val context: Context) {
         pendingSeekMs = null
 
         if (autoPlay && !isEngineReleased) {
-            play()
+            play(generation)
         }
     }
 
     // ── Playback Control ───────────────────────────────────────────────────
 
     fun play() {
-        if (isEngineReleased) return
+        // Public transport entry point: reuse the generation minted by the
+        // most recent loadTrack() so resume-after-pause stays with the same
+        // session, while a brand-new play() after completion mints a fresh
+        // one. Stale generations are rejected by the gate.
+        // If a track is already loaded, resume/restart within the generation
+        // minted by loadTrack(); otherwise mint a fresh one. Stale generations
+        // are rejected by the gate.
+        val generation = if (_currentTrack.value != null) {
+            playbackGate.latest
+        } else {
+            playbackGate.next()
+        }
+        Log.i(TAG, "play: requested track='${_currentTrack.value?.title}' generation=$generation")
+        play(generation)
+    }
+
+    private fun play(generation: Long) {
+        if (isEngineReleased || !playbackGate.isCurrent(generation)) {
+            Log.i(TAG, "play: ignored stale generation=$generation current=${playbackGate.latest}")
+            return
+        }
 
         val track = _currentTrack.value ?: return
 
@@ -296,6 +335,7 @@ class DjAudioEngine(private val context: Context) {
             pauseLock.withLock { pauseCondition.signalAll() }
             onTrackStartedCallback?.invoke(track)
             try { com.example.service.MediaPlaybackService.startService(context) } catch (_: Exception) {}
+            Log.i(TAG, "play: resumed track='${track.title}' generation=$generation")
             return
         }
 
@@ -311,10 +351,11 @@ class DjAudioEngine(private val context: Context) {
         try { com.example.service.MediaPlaybackService.startService(context) } catch (_: Exception) {}
 
         if (track.filePath.startsWith("demo://") || !isUriAccessible(track.filePath)) {
-            startAudioSynthesis()
+            startAudioSynthesis(generation)
         } else {
-            startStreamingPlayback()
+            startStreamingPlayback(generation)
         }
+        Log.i(TAG, "play: started track='${track.title}' generation=$generation")
     }
 
     fun pause() {
@@ -455,17 +496,22 @@ class DjAudioEngine(private val context: Context) {
 
     // ── Streaming Playback (Real Audio Files) ──────────────────────────────
 
-    private fun startStreamingPlayback() {
+    private fun startStreamingPlayback(generation: Long) {
         decoderShouldPause = false
         decoderRunning = true
 
         audioThreadExecutor.execute {
             android.os.Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
-            decoderLoop()
+            decoderLoop(generation)
         }
     }
 
-    private fun decoderLoop() {
+    private fun decoderLoop(generation: Long) {
+        // A newer loadTrack() request invalidates this session immediately.
+        if (!playbackGate.isCurrent(generation)) {
+            Log.i(TAG, "decoderLoop: aborting stale generation=$generation current=${playbackGate.latest}")
+            return
+        }
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
         var audioTrack: AudioTrack? = null
@@ -493,7 +539,7 @@ class DjAudioEngine(private val context: Context) {
             }
             if (audioIndex < 0 || format == null) {
                 // Fallback to synthesis
-                startAudioSynthesis()
+                startAudioSynthesis(generation)
                 return
             }
             ex.selectTrack(audioIndex)
@@ -542,7 +588,7 @@ class DjAudioEngine(private val context: Context) {
 
             if (at.state != AudioTrack.STATE_INITIALIZED) {
                 at.release()
-                startAudioSynthesis()
+                startAudioSynthesis(generation)
                 return
             }
             audioTrack = at
@@ -587,17 +633,23 @@ class DjAudioEngine(private val context: Context) {
             var iterations = 0L
 
             while (!isEngineReleased) {
+                // ── Session ownership ───────────────────────────────────
+                if (!playbackGate.isCurrent(generation)) {
+                    Log.i(TAG, "decoderLoop: exiting stale generation=$generation current=${playbackGate.latest}")
+                    break
+                }
+
                 // ── Pause synchronization ───────────────────────────────
                 if (decoderShouldPause) {
                     try {
                         if (at.playState == AudioTrack.PLAYSTATE_PLAYING) at.pause()
                     } catch (_: Exception) {}
                     pauseLock.withLock {
-                        while (decoderShouldPause && !isEngineReleased) {
+                        while (decoderShouldPause && !isEngineReleased && playbackGate.isCurrent(generation)) {
                             pauseCondition.awaitUninterruptibly()
                         }
                     }
-                    if (isEngineReleased) break
+                    if (isEngineReleased || !playbackGate.isCurrent(generation)) break
                     // Resume
                     try { at.play() } catch (_: Exception) {}
                     continue
@@ -715,10 +767,15 @@ class DjAudioEngine(private val context: Context) {
                                     if (crossfadePcm?.isNotEmpty() == true) {
                                         crossfadeStarted = true
                                         crossfadeNextTrack?.let { nextTrack ->
-                                            _currentTrack.value = nextTrack
-                                            internalPositionMs = 0L
-                                            publishThrottledPosition(0L, nextTrack.durationSeconds.coerceAtLeast(1) * 1000L, force = true)
-                                            onTrackStartedCallback?.invoke(nextTrack)
+                                            // Only publish the crossfade hand-off while this
+                                            // session still owns playback; a manual track
+                                            // selection must never be overwritten by it.
+                                            if (playbackGate.isCurrent(generation)) {
+                                                _currentTrack.value = nextTrack
+                                                internalPositionMs = 0L
+                                                publishThrottledPosition(0L, nextTrack.durationSeconds.coerceAtLeast(1) * 1000L, force = true)
+                                                onTrackStartedCallback?.invoke(nextTrack)
+                                            }
                                         }
                                     }
                                 }
@@ -846,13 +903,15 @@ class DjAudioEngine(private val context: Context) {
                     runCatching { if (at.playState == AudioTrack.PLAYSTATE_PLAYING) at.pause() }
                     // Publish final position
                     publishThrottledPosition(durationMs, durationMs, force = true)
-                    onNextTrackCallback?.invoke()
+                    if (playbackGate.isCurrent(generation)) {
+                        onNextTrackCallback?.invoke()
+                    }
                     break
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Decoder error: ${e.message}")
-            if (_isPlaying.value && !completionInFlight) {
+            if (_isPlaying.value && !completionInFlight && playbackGate.isCurrent(generation)) {
                 completionInFlight = true
                 _isPlaying.value = false
                 decoderShouldPause = true
@@ -977,16 +1036,24 @@ class DjAudioEngine(private val context: Context) {
         synthesisAudioTrack = null
     }
 
-    private fun startAudioSynthesis() {
+    private fun startAudioSynthesis(generation: Long) {
+        if (!playbackGate.isCurrent(generation)) {
+            Log.i(TAG, "startAudioSynthesis: aborting stale generation=$generation")
+            return
+        }
         decoderShouldPause = false
         decoderRunning = true
         audioThreadExecutor.execute {
             android.os.Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
-            synthesisLoop()
+            synthesisLoop(generation)
         }
     }
 
-    private fun synthesisLoop() {
+    private fun synthesisLoop(generation: Long) {
+        if (!playbackGate.isCurrent(generation)) {
+            Log.i(TAG, "synthesisLoop: aborting stale generation=$generation")
+            return
+        }
         val sampleRate = 22050
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRate,
@@ -1034,15 +1101,20 @@ class DjAudioEngine(private val context: Context) {
             val synthStartNs = System.nanoTime() - syntheticPositionMs * 1_000_000L
 
             while (!isEngineReleased) {
+                // ── Session ownership ───────────────────────────────────
+                if (!playbackGate.isCurrent(generation)) {
+                    Log.i(TAG, "synthesisLoop: exiting stale generation=$generation current=${playbackGate.latest}")
+                    break
+                }
                 // Pause synchronization
                 if (decoderShouldPause) {
                     try { if (localTrack.playState == AudioTrack.PLAYSTATE_PLAYING) localTrack.pause() } catch (_: Exception) {}
                     pauseLock.withLock {
-                        while (decoderShouldPause && !isEngineReleased) {
+                        while (decoderShouldPause && !isEngineReleased && playbackGate.isCurrent(generation)) {
                             pauseCondition.awaitUninterruptibly()
                         }
                     }
-                    if (isEngineReleased) break
+                    if (isEngineReleased || !playbackGate.isCurrent(generation)) break
                     try { localTrack.play() } catch (_: Exception) {}
                     continue
                 }
@@ -1127,7 +1199,9 @@ class DjAudioEngine(private val context: Context) {
                         _isPlaying.value = false
                         decoderShouldPause = true
                         runCatching { localTrack.pause() }
-                        onNextTrackCallback?.invoke()
+                        if (playbackGate.isCurrent(generation)) {
+                            onNextTrackCallback?.invoke()
+                        }
                     }
                     break
                 }
