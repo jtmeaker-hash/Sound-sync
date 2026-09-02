@@ -29,6 +29,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
@@ -109,6 +112,11 @@ fun NowPlayingFullScreen(
     onSetHaasEnabled: (Boolean) -> Unit = {},
     onSetHaasAmount: (Float) -> Unit = {},
     onSetHaasDelayMs: (Float) -> Unit = {},
+    // Repeat & Shuffle
+    isShuffleEnabled: Boolean = false,
+    repeatMode: com.example.ui.RepeatMode = com.example.ui.RepeatMode.OFF,
+    onToggleShuffle: () -> Unit = {},
+    onToggleRepeat: () -> Unit = {},
     // Callbacks
     onDismiss: () -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -396,12 +404,27 @@ fun NowPlayingFullScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // 4. CLEAN PLAYBACK CONTROLS (Previous, Play/Pause, Next)
+                // 4. CLEAN PLAYBACK CONTROLS (Shuffle, Previous, Play/Pause, Next, Repeat)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
+                    horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
+                    // Shuffle Button
+                    IconButton(
+                        onClick = onToggleShuffle,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .testTag("toggle_shuffle_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Shuffle,
+                            contentDescription = if (isShuffleEnabled) "Shuffle On" else "Shuffle Off",
+                            tint = if (isShuffleEnabled) DeckACyan else TextMuted,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
                     // Previous Track Button
                     Surface(
                         shape = CircleShape,
@@ -423,8 +446,6 @@ fun NowPlayingFullScreen(
                             )
                         }
                     }
-
-                    Spacer(modifier = Modifier.width(28.dp))
 
                     // Center Play/Pause Button
                     Surface(
@@ -449,8 +470,6 @@ fun NowPlayingFullScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.width(28.dp))
-
                     // Next Track Button
                     Surface(
                         shape = CircleShape,
@@ -471,6 +490,21 @@ fun NowPlayingFullScreen(
                                 modifier = Modifier.size(28.dp)
                             )
                         }
+                    }
+
+                    // Repeat Button
+                    IconButton(
+                        onClick = onToggleRepeat,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .testTag("toggle_repeat_button")
+                    ) {
+                        Icon(
+                            imageVector = if (repeatMode == com.example.ui.RepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                            contentDescription = "Repeat: $repeatMode",
+                            tint = if (repeatMode != com.example.ui.RepeatMode.OFF) DeckACyan else TextMuted,
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 }
 

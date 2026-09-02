@@ -85,6 +85,8 @@ val NeonGreen = Color(0xFF05FFA1)      // Lossless / True 320k / In Sync
 val NeonAmber = Color(0xFFFFB800)      // Warning / 192k Cutoff / Moderate
 val NeonRed = Color(0xFFFF3333)        // Fake 320k / Transcode / Duplicate
 val NeonPurple = Color(0xFF9D4EDD)     // Cloud / AI Tagged
+val SpotifyGreen = Color(0xFF1DB954)   // Spotify Brand
+val SoundCloudOrange = Color(0xFFFF5500) // SoundCloud Brand
 
 val TextPrimary: Color get() = activeAppearancePalette.primaryText
 val TextSecondary: Color get() = activeAppearancePalette.secondaryText

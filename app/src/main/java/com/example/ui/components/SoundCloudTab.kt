@@ -74,12 +74,11 @@ import com.example.ui.theme.DjSurfaceElevated
 import com.example.ui.theme.NeonAmber
 import com.example.ui.theme.NeonGreen
 import com.example.ui.theme.NeonRed
+import com.example.ui.theme.SoundCloudOrange
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import java.util.Locale
-
-val SoundCloudOrange = Color(0xFFFF5500)
 
 @Composable
 fun SoundCloudTab(

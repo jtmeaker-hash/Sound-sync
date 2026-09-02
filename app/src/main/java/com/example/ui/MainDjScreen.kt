@@ -82,16 +82,15 @@ import com.example.ui.components.SaveSongFindDialog
 import com.example.ui.components.SongFindsView
 import com.example.ui.components.UpdateDialog
 import android.app.Activity
-import com.example.ui.components.SoundCloudTab
-import com.example.ui.components.SoundCloudOrange
 import com.example.ui.components.SpectrogramAnalyzerView
-import com.example.ui.components.SpotifyGreen
-import com.example.ui.components.SpotifyTab
+import com.example.ui.components.StreamingView
 import com.example.ui.library.LocalLibraryScreen
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
+import com.example.ui.theme.SoundCloudOrange
+import com.example.ui.theme.SpotifyGreen
 import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceCard
 import com.example.ui.theme.DjSurfaceDark
@@ -139,6 +138,7 @@ fun MainDjScreen(
     val pendingShare by viewModel.pendingShare.collectAsState()
 
     // Spotify States
+    val selectedStreamingProvider by viewModel.selectedStreamingProvider.collectAsState()
     val spotifyAuthState by viewModel.spotifyAuthState.collectAsState()
     val spotifySavedTracks by viewModel.spotifySavedTracks.collectAsState()
     val spotifyPlaylists by viewModel.spotifyPlaylists.collectAsState()
@@ -178,6 +178,8 @@ fun MainDjScreen(
     val haasDelayMs by viewModel.audioEngine.haasDelayMs.collectAsState()
 
     // SoundSync In-App Update States
+    val repeatMode by viewModel.repeatMode.collectAsState()
+    val isShuffleEnabled by viewModel.isShuffleEnabled.collectAsState()
     val updateState by viewModel.updateState.collectAsState()
     val updateLastCheckedTimestamp by viewModel.updateLastCheckedTimestamp.collectAsState()
     val isAutoUpdateCheckEnabled by viewModel.isAutoUpdateCheckEnabled.collectAsState()
@@ -338,44 +340,36 @@ fun MainDjScreen(
                         }
                     )
                 }
-                DjTab.SOUNDCLOUD -> {
-                    SoundCloudTab(
-                        authState = soundCloudAuthState,
-                        likedTracks = soundCloudLikedTracks,
-                        playlists = soundCloudPlaylists,
-                        searchResults = soundCloudSearchResults,
-                        isLoading = soundCloudIsLoading,
-                        currentTrack = playingTrack,
-                        isPlaying = isPlaying,
-                        onConnectSoundCloud = { viewModel.connectSoundCloud(context) },
-                        onDisconnect = { viewModel.disconnectSoundCloud() },
-                        onOpenConfigDialog = { viewModel.openApiConfigDialog() },
-                        onSearch = { viewModel.searchSoundCloud(it) },
-                        onPlayTrack = { viewModel.playSoundCloudTrack(it) },
-                        onInspectSpectrogram = { track ->
-                            viewModel.inspectTrackSpectrogram(track, showTab = true)
-                        },
-                        onRefresh = { viewModel.refreshSoundCloud() }
-                    )
-                }
-                DjTab.SPOTIFY -> {
-                    SpotifyTab(
-                        authState = spotifyAuthState,
-                        savedTracks = spotifySavedTracks,
-                        playlists = spotifyPlaylists,
-                        searchResults = spotifySearchResults,
-                        isLoading = spotifyIsLoading,
-                        currentTrack = playingTrack,
-                        isPlaying = isPlaying,
+                DjTab.STREAMING -> {
+                    StreamingView(
+                        activeProviderId = selectedStreamingProvider,
+                        onSelectProvider = { viewModel.selectStreamingProvider(it) },
+                        spotifyAuthState = spotifyAuthState,
+                        spotifySavedTracks = spotifySavedTracks,
+                        spotifyPlaylists = spotifyPlaylists,
+                        spotifySearchResults = spotifySearchResults,
+                        spotifyIsLoading = spotifyIsLoading,
                         onConnectSpotify = { viewModel.connectSpotify(context) },
-                        onDisconnect = { viewModel.disconnectSpotify() },
-                        onOpenConfigDialog = { viewModel.openApiConfigDialog() },
-                        onSearch = { viewModel.searchSpotify(it) },
-                        onPlayTrack = { viewModel.playSpotifyTrack(it) },
+                        onDisconnectSpotify = { viewModel.disconnectSpotify() },
+                        onSearchSpotify = { viewModel.searchSpotify(it) },
+                        onPlaySpotifyTrack = { viewModel.playSpotifyTrack(it) },
+                        onRefreshSpotify = { viewModel.refreshSpotify() },
+                        soundCloudAuthState = soundCloudAuthState,
+                        soundCloudLikedTracks = soundCloudLikedTracks,
+                        soundCloudPlaylists = soundCloudPlaylists,
+                        soundCloudSearchResults = soundCloudSearchResults,
+                        soundCloudIsLoading = soundCloudIsLoading,
+                        onConnectSoundCloud = { viewModel.connectSoundCloud(context) },
+                        onDisconnectSoundCloud = { viewModel.disconnectSoundCloud() },
+                        onSearchSoundCloud = { viewModel.searchSoundCloud(it) },
+                        onPlaySoundCloudTrack = { viewModel.playSoundCloudTrack(it) },
+                        onRefreshSoundCloud = { viewModel.refreshSoundCloud() },
+                        currentTrack = playingTrack,
+                        isPlaying = isPlaying,
                         onInspectSpectrogram = { track ->
                             viewModel.inspectTrackSpectrogram(track, showTab = true)
                         },
-                        onRefresh = { viewModel.refreshSpotify() }
+                        onOpenConfigDialog = { viewModel.openApiConfigDialog() }
                     )
                 }
                 DjTab.SPECTROGRAM -> {
@@ -535,6 +529,10 @@ fun MainDjScreen(
                         onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
                         onPreviousTrack = { viewModel.previousTrack() },
                         onNextTrack = { viewModel.nextTrack() },
+                        isShuffleEnabled = isShuffleEnabled,
+                        repeatMode = repeatMode,
+                        onToggleShuffle = { viewModel.toggleShuffle() },
+                        onToggleRepeat = { viewModel.toggleRepeatMode() },
                         onSeekToMs = { ms -> viewModel.seekToMs(ms) },
                         onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
                         onSetDisplayMode = { mode -> viewModel.setNowPlayingDisplayMode(mode) },
@@ -718,8 +716,7 @@ private fun DjTopAppBar(
                             color = when (currentTab) {
                                 DjTab.LOCAL -> DeckACyan.copy(alpha = 0.2f)
                                 DjTab.FINDS -> NeonAmber.copy(alpha = 0.2f)
-                                DjTab.SOUNDCLOUD -> SoundCloudOrange.copy(alpha = 0.2f)
-                                DjTab.SPOTIFY -> SpotifyGreen.copy(alpha = 0.2f)
+                                DjTab.STREAMING -> SpotifyGreen.copy(alpha = 0.2f)
                                 DjTab.SPECTROGRAM -> NeonPurple.copy(alpha = 0.2f)
                                 DjTab.OPERATIONS -> TextMuted.copy(alpha = 0.2f)
                             }
@@ -729,8 +726,7 @@ private fun DjTopAppBar(
                                 color = when (currentTab) {
                                     DjTab.LOCAL -> DeckACyan
                                     DjTab.FINDS -> NeonAmber
-                                    DjTab.SOUNDCLOUD -> SoundCloudOrange
-                                    DjTab.SPOTIFY -> SpotifyGreen
+                                    DjTab.STREAMING -> SpotifyGreen
                                     DjTab.SPECTROGRAM -> NeonPurple
                                     DjTab.OPERATIONS -> TextPrimary
                                 },
@@ -802,8 +798,7 @@ private fun DjBottomNavigationBar(
         val tabs = listOf(
             Triple(DjTab.LOCAL, "Local", Icons.Default.FolderOpen),
             Triple(DjTab.FINDS, "Finds", Icons.Default.Bookmark),
-            Triple(DjTab.SOUNDCLOUD, "SoundCloud", Icons.Default.Cloud),
-            Triple(DjTab.SPOTIFY, "Spotify", Icons.Default.LibraryMusic),
+            Triple(DjTab.STREAMING, "Streaming", Icons.Default.Cloud),
             Triple(DjTab.SPECTROGRAM, "Spectrum", Icons.Default.GraphicEq),
             Triple(DjTab.OPERATIONS, "Settings", Icons.Default.Settings)
         )
@@ -813,8 +808,7 @@ private fun DjBottomNavigationBar(
             val tabColor = when (tab) {
                 DjTab.LOCAL -> DeckACyan
                 DjTab.FINDS -> NeonAmber
-                DjTab.SOUNDCLOUD -> SoundCloudOrange
-                DjTab.SPOTIFY -> SpotifyGreen
+                DjTab.STREAMING -> SpotifyGreen
                 DjTab.SPECTROGRAM -> DeckACyan
                 DjTab.OPERATIONS -> DeckACyan
             }
@@ -894,6 +888,10 @@ private fun PositionAwareNowPlaying(
     onSetHaasDelayMs: (Float) -> Unit,
     onDismiss: () -> Unit, onTogglePlayPause: () -> Unit,
     onPreviousTrack: () -> Unit, onNextTrack: () -> Unit,
+    isShuffleEnabled: Boolean = false,
+    repeatMode: com.example.ui.RepeatMode = com.example.ui.RepeatMode.OFF,
+    onToggleShuffle: () -> Unit = {},
+    onToggleRepeat: () -> Unit = {},
     onSeekToMs: (Long) -> Unit, onToggleDisplayMode: () -> Unit,
     onSetDisplayMode: (com.example.model.NowPlayingDisplayMode) -> Unit,
     onOpenSettings: () -> Unit, onOpenProperties: (com.example.model.Track) -> Unit
@@ -913,6 +911,10 @@ private fun PositionAwareNowPlaying(
         haasEnabled = haasEnabled, haasAmount = haasAmount, haasDelayMs = haasDelayMs,
         onSetHaasEnabled = onSetHaasEnabled, onSetHaasAmount = onSetHaasAmount,
         onSetHaasDelayMs = onSetHaasDelayMs,
+        isShuffleEnabled = isShuffleEnabled,
+        repeatMode = repeatMode,
+        onToggleShuffle = onToggleShuffle,
+        onToggleRepeat = onToggleRepeat,
         onDismiss = onDismiss, onTogglePlayPause = onTogglePlayPause,
         onPreviousTrack = onPreviousTrack, onNextTrack = onNextTrack,
         onSeekToMs = onSeekToMs, onToggleDisplayMode = onToggleDisplayMode,

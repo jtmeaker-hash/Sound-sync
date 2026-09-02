@@ -71,12 +71,11 @@ import com.example.ui.theme.DjSurfaceCard
 import com.example.ui.theme.DjSurfaceDark
 import com.example.ui.theme.DjSurfaceElevated
 import com.example.ui.theme.NeonGreen
+import com.example.ui.theme.SpotifyGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import java.util.Locale
-
-val SpotifyGreen = Color(0xFF1DB954)
 
 @Composable
 fun SpotifyTab(

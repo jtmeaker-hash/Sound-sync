@@ -63,10 +63,15 @@ import java.util.UUID
 enum class DjTab(val title: String, val iconName: String) {
     LOCAL("Local", "folder"),
     FINDS("Finds", "bookmark"),
-    SOUNDCLOUD("SoundCloud", "cloud"),
-    SPOTIFY("Spotify", "library_music"),
+    STREAMING("Streaming", "cloud"),
     SPECTROGRAM("Spectrogram", "graphic_eq"),
     OPERATIONS("Settings", "settings")
+}
+
+enum class RepeatMode {
+    OFF,
+    ALL,
+    ONE
 }
 
 enum class LocalCategory(val label: String, val iconName: String) {
@@ -144,6 +149,55 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _selectedTab = MutableStateFlow(DjTab.LOCAL)
     val selectedTab = _selectedTab.asStateFlow()
+
+    // Streaming Provider Sub-Navigation State
+    private val _selectedStreamingProvider = MutableStateFlow<com.example.streaming.StreamingServiceId?>(null)
+    val selectedStreamingProvider = _selectedStreamingProvider.asStateFlow()
+
+    fun selectStreamingProvider(providerId: com.example.streaming.StreamingServiceId?) {
+        _selectedStreamingProvider.value = providerId
+    }
+
+    // Repeat and Shuffle Playback State
+    private val _repeatMode = MutableStateFlow(
+        try {
+            RepeatMode.valueOf(prefs.getString("repeat_mode", RepeatMode.OFF.name) ?: RepeatMode.OFF.name)
+        } catch (_: Exception) {
+            RepeatMode.OFF
+        }
+    )
+    val repeatMode = _repeatMode.asStateFlow()
+
+    private val _isShuffleEnabled = MutableStateFlow(prefs.getBoolean("is_shuffle_enabled", false))
+    val isShuffleEnabled = _isShuffleEnabled.asStateFlow()
+
+    fun toggleRepeatMode() {
+        val next = when (_repeatMode.value) {
+            RepeatMode.OFF -> RepeatMode.ALL
+            RepeatMode.ALL -> RepeatMode.ONE
+            RepeatMode.ONE -> RepeatMode.OFF
+        }
+        _repeatMode.value = next
+        prefs.edit().putString("repeat_mode", next.name).apply()
+        showSnackbar("Repeat: ${when (next) { RepeatMode.OFF -> "Off"; RepeatMode.ALL -> "All"; RepeatMode.ONE -> "Current Track" }}")
+    }
+
+    fun setRepeatMode(mode: RepeatMode) {
+        _repeatMode.value = mode
+        prefs.edit().putString("repeat_mode", mode.name).apply()
+    }
+
+    fun toggleShuffle() {
+        val next = !_isShuffleEnabled.value
+        _isShuffleEnabled.value = next
+        prefs.edit().putBoolean("is_shuffle_enabled", next).apply()
+        showSnackbar("Shuffle: ${if (next) "On" else "Off"}")
+    }
+
+    fun setShuffleEnabled(enabled: Boolean) {
+        _isShuffleEnabled.value = enabled
+        prefs.edit().putBoolean("is_shuffle_enabled", enabled).apply()
+    }
 
     // Local Library Sub-Navigation State
     private val _selectedLocalCategory = MutableStateFlow(LocalCategory.SONGS)
@@ -583,8 +637,17 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         playDriveTrack(fileItem)
     }
 
-    /** Handles an engine completion only once, without wrapping to the first item. */
+    /** Handles an engine completion only once, respecting repeat and shuffle modes. */
     private suspend fun advanceAfterNaturalEnd() {
+        val current = audioEngine.currentTrack.value
+        if (current != null && _repeatMode.value == RepeatMode.ONE) {
+            withContext(Dispatchers.Main) {
+                audioEngine.seekToSecond(0)
+                audioEngine.play()
+            }
+            return
+        }
+
         val queue = playbackQueue.value
         val list = if (queue.isNotEmpty()) queue else {
             val library = filteredTracks.value
@@ -595,23 +658,36 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        val currentId = audioEngine.currentTrack.value?.id
+        val currentId = current?.id
         val currentIndex = list.indexOfFirst { it.id == currentId }
-        // A completion from an obsolete player must never restart the first library item.
+        // A completion from an obsolete player must never restart playback.
         if (currentIndex < 0) {
             audioEngine.pause()
             return
         }
 
-        // Continue only forward through the list that initiated playback.
-        val candidates = list.drop(currentIndex + 1)
-        val next = withContext(Dispatchers.IO) {
-            candidates.firstOrNull { isTrackAvailableForQueue(it) }
+        val next: Track? = if (_isShuffleEnabled.value && list.size > 1) {
+            val otherCandidates = list.filter { it.id != currentId }
+            withContext(Dispatchers.IO) {
+                otherCandidates.shuffled().firstOrNull { isTrackAvailableForQueue(it) }
+            }
+        } else {
+            val candidates = list.drop(currentIndex + 1)
+            val forwardNext = withContext(Dispatchers.IO) {
+                candidates.firstOrNull { isTrackAvailableForQueue(it) }
+            }
+            if (forwardNext == null && _repeatMode.value == RepeatMode.ALL) {
+                withContext(Dispatchers.IO) {
+                    list.firstOrNull { isTrackAvailableForQueue(it) }
+                }
+            } else {
+                forwardNext
+            }
         }
 
         withContext(Dispatchers.Main) {
             if (next == null) {
-                // End of the started list: do not wrap and unexpectedly replay track one.
+                // End of the list without repeat: stop cleanly at end.
                 audioEngine.pause()
                 audioEngine.seekToSecond(0)
             } else {
@@ -1528,15 +1604,27 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 if (filtered.isNotEmpty()) filtered else allTracks.value
             }
             val currentIndex = list.indexOfFirst { it.id == current.id }
-            if (currentIndex < 0) return@launch
-            val next = list.drop(currentIndex + 1)
-                .firstOrNull { isTrackAvailableForQueue(it) }
-                ?: return@launch
+            if (currentIndex < 0 && list.isEmpty()) return@launch
 
-            withContext(Dispatchers.Main) {
-                if (queue.isNotEmpty()) queueIndex.value = list.indexOf(next)
-                nextTrackForCrossfade = null
-                playOrPreviewTrack(next, preserveQueue = queue.isNotEmpty())
+            val next: Track? = if (_isShuffleEnabled.value && list.size > 1) {
+                val otherCandidates = list.filter { it.id != current.id }
+                otherCandidates.shuffled().firstOrNull { isTrackAvailableForQueue(it) }
+            } else {
+                val candidates = list.drop(currentIndex + 1)
+                val forwardNext = candidates.firstOrNull { isTrackAvailableForQueue(it) }
+                if (forwardNext == null && _repeatMode.value == RepeatMode.ALL) {
+                    list.firstOrNull { isTrackAvailableForQueue(it) }
+                } else {
+                    forwardNext
+                }
+            }
+
+            if (next != null) {
+                withContext(Dispatchers.Main) {
+                    if (queue.isNotEmpty()) queueIndex.value = list.indexOf(next)
+                    nextTrackForCrossfade = null
+                    playOrPreviewTrack(next, preserveQueue = queue.isNotEmpty())
+                }
             }
         }
     }
@@ -1553,7 +1641,13 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
         if (list.isEmpty()) return
         val currentIndex = list.indexOfFirst { it.id == current.id }
-        val prevIndex = currentIndex - 1
+        val prevIndex = if (currentIndex - 1 in list.indices) {
+            currentIndex - 1
+        } else if (_repeatMode.value == RepeatMode.ALL && list.isNotEmpty()) {
+            list.lastIndex
+        } else {
+            -1
+        }
         if (prevIndex !in list.indices) return
         if (playbackQueue.value.isNotEmpty()) queueIndex.value = prevIndex
         playOrPreviewTrack(list[prevIndex], preserveQueue = playbackQueue.value.isNotEmpty())
@@ -1585,10 +1679,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
                 if (audioEngine.currentTrack.value?.id == track.id) {
-                    val wasPlaying = audioEngine.isPlaying.value
-                    val currentSec = audioEngine.currentPositionSec.value
                     withContext(Dispatchers.Main) {
-                        audioEngine.loadTrack(updatedTrack, autoPlay = wasPlaying, initialPositionSec = currentSec)
+                        audioEngine.updateCurrentTrackMetadata(updatedTrack)
                     }
                 }
                 if (_inspectingTrackForProperties.value?.id == track.id) {
@@ -1814,7 +1906,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 val result = spotifyRepository.exchangeCodeForToken(code)
                 if (result.isSuccess) {
                     showSnackbar("Successfully connected Spotify account!")
-                    _selectedTab.value = DjTab.SPOTIFY
+                    _selectedTab.value = DjTab.STREAMING
+                    _selectedStreamingProvider.value = com.example.streaming.StreamingServiceId.SPOTIFY
                 } else {
                     showSnackbar("Spotify connection failed: ${result.exceptionOrNull()?.message}")
                 }
@@ -1825,7 +1918,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 val result = soundCloudRepository.exchangeCodeForToken(code)
                 if (result.isSuccess) {
                     showSnackbar("Successfully connected SoundCloud account!")
-                    _selectedTab.value = DjTab.SOUNDCLOUD
+                    _selectedTab.value = DjTab.STREAMING
+                    _selectedStreamingProvider.value = com.example.streaming.StreamingServiceId.SOUNDCLOUD
                 } else {
                     showSnackbar("SoundCloud connection failed: ${result.exceptionOrNull()?.message}")
                 }
@@ -2256,10 +2350,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     trackDao.updateTrack(TrackEntity.fromTrack(updated))
                 }
                 if (audioEngine.currentTrack.value?.id == track.id) {
-                    val wasPlaying = audioEngine.isPlaying.value
-                    val currentSec = audioEngine.currentPositionSec.value
                     withContext(Dispatchers.Main) {
-                        audioEngine.loadTrack(updated, autoPlay = wasPlaying, initialPositionSec = currentSec)
+                        audioEngine.updateCurrentTrackMetadata(updated)
                     }
                 }
                 if (_inspectingTrackForProperties.value?.id == track.id) {
@@ -2324,10 +2416,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     trackDao.updateTrack(TrackEntity.fromTrack(updated))
                 }
                 if (audioEngine.currentTrack.value?.id == track.id) {
-                    val wasPlaying = audioEngine.isPlaying.value
-                    val currentSec = audioEngine.currentPositionSec.value
                     withContext(Dispatchers.Main) {
-                        audioEngine.loadTrack(updated, autoPlay = wasPlaying, initialPositionSec = currentSec)
+                        audioEngine.updateCurrentTrackMetadata(updated)
                     }
                 }
                 if (_inspectingTrackForProperties.value?.id == track.id) {
