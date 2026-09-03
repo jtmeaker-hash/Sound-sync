@@ -48,6 +48,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,6 +73,26 @@ import com.example.model.UpdateState
 import com.example.ui.components.ApiConfigDialog
 import com.example.ui.components.DjMiniPlayer
 import com.example.ui.components.GoogleDriveBrowserView
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.rememberCoroutineScope
+import com.example.ui.components.AudioEffectsPanel
+import com.example.ui.djtools.ClippingDetectorTool
+import com.example.ui.djtools.DynamicRangeMeterTool
+import com.example.ui.djtools.KeyConverterTool
+import com.example.ui.djtools.MetronomeTool
+import com.example.ui.djtools.RmsMeterTool
+import com.example.ui.djtools.TapBpmTool
+import com.example.ui.settings.AppearanceSettingsScreen
+import com.example.ui.settings.GitHubSettingsScreen
+import com.example.ui.settings.LibrarySettingsScreen
+import com.example.ui.settings.PlaybackSettingsScreen
+import com.example.ui.sidemenu.SideMenuDestination
+import com.example.ui.sidemenu.SideNavigationDrawerContent
 import com.example.ui.components.LocalMusicView
 import com.example.ui.components.FilePropertiesDialog
 import com.example.ui.components.NowPlayingFullScreen
@@ -202,19 +223,45 @@ fun MainDjScreen(
         }
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize().background(DjObsidian),
-        containerColor = DjObsidian,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                DjTopAppBar(
-                    totalTracks = allTracks.size,
-                    currentTab = selectedTab,
-                    isScanning = isScanning,
-                    onOpenConfig = { viewModel.openApiConfigDialog() },
-                    onRescan = { viewModel.scanDeviceMediaStore() }
-                )
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val coroutineScope = rememberCoroutineScope()
+    var activeSideDestination by remember { mutableStateOf<SideMenuDestination?>(null) }
+
+    BackHandler(enabled = drawerState.isOpen) {
+        coroutineScope.launch { drawerState.close() }
+    }
+    BackHandler(enabled = activeSideDestination != null) {
+        activeSideDestination = null
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            SideNavigationDrawerContent(
+                onSelectDestination = { dest ->
+                    coroutineScope.launch { drawerState.close() }
+                    activeSideDestination = dest
+                },
+                onCloseDrawer = {
+                    coroutineScope.launch { drawerState.close() }
+                }
+            )
+        }
+    ) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize().background(DjObsidian),
+            containerColor = DjObsidian,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    DjTopAppBar(
+                        totalTracks = allTracks.size,
+                        currentTab = selectedTab,
+                        isScanning = isScanning,
+                        onOpenMenu = { coroutineScope.launch { drawerState.open() } },
+                        onOpenConfig = { viewModel.openApiConfigDialog() },
+                        onRescan = { viewModel.scanDeviceMediaStore() }
+                    )
 
                 // Storage Permission Request Banner (if not granted)
                 if (!hasStoragePermission) {
@@ -241,21 +288,23 @@ fun MainDjScreen(
         },
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                // Docked Mini-Player Bar (position collected locally to avoid root recomposition)
-                playingTrack?.let { track ->
-                    PositionAwareMiniPlayer(
-                        track = track,
-                        displayMode = nowPlayingDisplayMode,
-                        waveformData = waveformData,
-                        isPlaying = isPlaying,
-                        audioEngine = viewModel.audioEngine,
-                        onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
-                        onPreviousTrack = { viewModel.previousTrack() },
-                        onNextTrack = { viewModel.nextTrack() },
-                        onSeekToMs = { ms -> viewModel.seekToMs(ms) },
-                        onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
-                        onOpenNowPlaying = { viewModel.openNowPlaying() }
-                    )
+                // Docked Mini-Player Bar (only displayed when full player is NOT expanded)
+                if (!isNowPlayingExpanded) {
+                    playingTrack?.let { track ->
+                        PositionAwareMiniPlayer(
+                            track = track,
+                            displayMode = nowPlayingDisplayMode,
+                            waveformData = waveformData,
+                            isPlaying = isPlaying,
+                            audioEngine = viewModel.audioEngine,
+                            onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
+                            onPreviousTrack = { viewModel.previousTrack() },
+                            onNextTrack = { viewModel.nextTrack() },
+                            onSeekToMs = { ms -> viewModel.seekToMs(ms) },
+                            onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
+                            onOpenNowPlaying = { viewModel.openNowPlaying() }
+                        )
+                    }
                 }
 
                 // Bottom Navigation (Local, SoundCloud, Spotify, Spectrogram, Settings)
@@ -272,198 +321,193 @@ fun MainDjScreen(
                 .padding(innerPadding)
                 .background(DjObsidian)
         ) {
-            when (selectedTab) {
-                DjTab.LOCAL -> {
-                    if (isFolderExplorerOpen) {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            Surface(
-                                color = DjSurfaceDark,
-                                border = androidx.compose.foundation.BorderStroke(0.5.dp, DjSurfaceBorder),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    IconButton(
-                                        onClick = { viewModel.toggleFolderExplorer(false) },
-                                        modifier = Modifier.size(36.dp)
+            when {
+                isDriveBrowserOpen -> {
+                    GoogleDriveBrowserView(
+                        authState = driveAuthState,
+                        listing = driveListing,
+                        breadcrumbs = driveBreadcrumbs,
+                        syncStatusMap = driveSyncStatusMap,
+                        downloadProgressMap = driveDownloadProgressMap,
+                        isLoading = driveIsLoading,
+                        currentPlayingTrack = playingTrack,
+                        isPlaying = isPlaying,
+                        onBack = { viewModel.closeGoogleDriveBrowser() },
+                        onNavigateBreadcrumb = { viewModel.navigateDriveBreadcrumb(it) },
+                        onOpenFolder = { id, name -> viewModel.openDriveFolder(id, name) },
+                        onPlayTrack = { viewModel.playDriveTrackFromListing(it) },
+                        onDownloadTrack = { viewModel.downloadDriveTrack(it) },
+                        onCancelDownload = { viewModel.cancelDriveDownload(it) },
+                        onSyncEntireFolder = { viewModel.syncEntireDriveFolder() },
+                        onConnectAccount = { viewModel.connectGoogleDrive(context as? Activity) },
+                        onDisconnectAccount = { viewModel.disconnectGoogleDrive() },
+                        onRefresh = { viewModel.refreshDriveFolder() }
+                    )
+                }
+                activeSideDestination != null -> {
+                    SideDestinationScreen(
+                        destination = activeSideDestination!!,
+                        viewModel = viewModel,
+                        allTracks = allTracks,
+                        playingTrack = playingTrack,
+                        isPlaying = isPlaying,
+                        scanServiceState = scanServiceState,
+                        storageSources = storageSources,
+                        operationJournal = operationJournal,
+                        updateState = updateState,
+                        updateLastCheckedTimestamp = updateLastCheckedTimestamp,
+                        isAutoUpdateCheckEnabled = isAutoUpdateCheckEnabled,
+                        themeMode = themeMode,
+                        crossfadeSeconds = crossfadeSeconds,
+                        repeatMode = repeatMode,
+                        isShuffleEnabled = isShuffleEnabled,
+                        eqEnabled = eqEnabled,
+                        eqLow = eqLow,
+                        eqMid = eqMid,
+                        eqHigh = eqHigh,
+                        haasEnabled = haasEnabled,
+                        haasAmount = haasAmount,
+                        haasDelayMs = haasDelayMs,
+                        onPickSafFolder = onPickSafFolder,
+                        onPickAudioFiles = onPickAudioFiles,
+                        onClose = { activeSideDestination = null }
+                    )
+                }
+                else -> {
+                    when (selectedTab) {
+                        DjTab.LOCAL -> {
+                            if (isFolderExplorerOpen) {
+                                Column(modifier = Modifier.fillMaxSize()) {
+                                    Surface(
+                                        color = DjSurfaceDark,
+                                        border = androidx.compose.foundation.BorderStroke(0.5.dp, DjSurfaceBorder),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                            contentDescription = "Back to Library",
-                                            tint = DeckACyan
-                                        )
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            IconButton(
+                                                onClick = { viewModel.toggleFolderExplorer(false) },
+                                                modifier = Modifier.size(36.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                                    contentDescription = "Back to Library",
+                                                    tint = DeckACyan
+                                                )
+                                            }
+                                            Text(
+                                                text = "Folder & Storage Explorer",
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextPrimary
+                                            )
+                                        }
                                     }
-                                    Text(
-                                        text = "Folder & Storage Explorer",
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
+
+                                    LocalMusicView(
+                                        tracks = allTracks,
+                                        currentTrack = playingTrack,
+                                        isPlaying = isPlaying,
+                                        isScanning = isScanning,
+                                        scanProgressText = scanProgressMessage,
+                                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
+                                        onPickSafFolder = onPickSafFolder,
+                                        onPickAudioFiles = onPickAudioFiles,
+                                        onLoadTrack = { viewModel.playTrack(it) },
+                                        onInspectSpectrogram = { track ->
+                                            viewModel.inspectTrackSpectrogram(track, showTab = true)
+                                        }
                                     )
                                 }
+                            } else {
+                                LocalLibraryScreen(
+                                    viewModel = viewModel,
+                                    onOpenFolderExplorer = { viewModel.toggleFolderExplorer(true) }
+                                )
                             }
-
-                            LocalMusicView(
-                                tracks = allTracks,
-                                currentTrack = playingTrack,
-                                isPlaying = isPlaying,
-                                isScanning = isScanning,
-                                scanProgressText = scanProgressMessage,
-                                onScanMediaStore = { viewModel.scanDeviceMediaStore() },
-                                onPickSafFolder = onPickSafFolder,
-                                onPickAudioFiles = onPickAudioFiles,
-                                onLoadTrack = { viewModel.playTrack(it) },
-                                onInspectSpectrogram = { track ->
-                                    viewModel.inspectTrackSpectrogram(track, showTab = true)
+                        }
+                        DjTab.FINDS -> {
+                            SongFindsView(
+                                songFinds = songFinds,
+                                onAddNewFind = { viewModel.openCreateSongFindDialog() },
+                                onToggleCompleted = { id, completed -> viewModel.toggleSongFindCompleted(id, completed) },
+                                onDeleteFind = { id -> viewModel.deleteSongFind(id) },
+                                onClearCompleted = { viewModel.clearCompletedSongFinds() },
+                                onSearchInLibrary = { query ->
+                                    viewModel.selectTab(DjTab.LOCAL)
                                 }
                             )
                         }
-                    } else {
-                        LocalLibraryScreen(
-                            viewModel = viewModel,
-                            onOpenFolderExplorer = { viewModel.toggleFolderExplorer(true) }
-                        )
-                    }
-                }
-                DjTab.FINDS -> {
-                    SongFindsView(
-                        songFinds = songFinds,
-                        onAddNewFind = { viewModel.openCreateSongFindDialog() },
-                        onToggleCompleted = { id, completed -> viewModel.toggleSongFindCompleted(id, completed) },
-                        onDeleteFind = { id -> viewModel.deleteSongFind(id) },
-                        onClearCompleted = { viewModel.clearCompletedSongFinds() },
-                        onSearchInLibrary = { query ->
-                            viewModel.selectTab(DjTab.LOCAL)
+                        DjTab.STREAMING -> {
+                            StreamingView(
+                                activeProviderId = selectedStreamingProvider,
+                                onSelectProvider = { viewModel.selectStreamingProvider(it) },
+                                spotifyAuthState = spotifyAuthState,
+                                spotifySavedTracks = spotifySavedTracks,
+                                spotifyPlaylists = spotifyPlaylists,
+                                spotifySearchResults = spotifySearchResults,
+                                spotifyIsLoading = spotifyIsLoading,
+                                onConnectSpotify = { viewModel.connectSpotify(context) },
+                                onDisconnectSpotify = { viewModel.disconnectSpotify() },
+                                onSearchSpotify = { viewModel.searchSpotify(it) },
+                                onPlaySpotifyTrack = { viewModel.playSpotifyTrack(it) },
+                                onRefreshSpotify = { viewModel.refreshSpotify() },
+                                soundCloudAuthState = soundCloudAuthState,
+                                soundCloudLikedTracks = soundCloudLikedTracks,
+                                soundCloudPlaylists = soundCloudPlaylists,
+                                soundCloudSearchResults = soundCloudSearchResults,
+                                soundCloudIsLoading = soundCloudIsLoading,
+                                onConnectSoundCloud = { viewModel.connectSoundCloud(context) },
+                                onDisconnectSoundCloud = { viewModel.disconnectSoundCloud() },
+                                onSearchSoundCloud = { viewModel.searchSoundCloud(it) },
+                                onPlaySoundCloudTrack = { viewModel.playSoundCloudTrack(it) },
+                                onRefreshSoundCloud = { viewModel.refreshSoundCloud() },
+                                currentTrack = playingTrack,
+                                isPlaying = isPlaying,
+                                onInspectSpectrogram = { track ->
+                                    viewModel.inspectTrackSpectrogram(track, showTab = true)
+                                },
+                                onOpenConfigDialog = { viewModel.openApiConfigDialog() }
+                            )
                         }
-                    )
-                }
-                DjTab.STREAMING -> {
-                    StreamingView(
-                        activeProviderId = selectedStreamingProvider,
-                        onSelectProvider = { viewModel.selectStreamingProvider(it) },
-                        spotifyAuthState = spotifyAuthState,
-                        spotifySavedTracks = spotifySavedTracks,
-                        spotifyPlaylists = spotifyPlaylists,
-                        spotifySearchResults = spotifySearchResults,
-                        spotifyIsLoading = spotifyIsLoading,
-                        onConnectSpotify = { viewModel.connectSpotify(context) },
-                        onDisconnectSpotify = { viewModel.disconnectSpotify() },
-                        onSearchSpotify = { viewModel.searchSpotify(it) },
-                        onPlaySpotifyTrack = { viewModel.playSpotifyTrack(it) },
-                        onRefreshSpotify = { viewModel.refreshSpotify() },
-                        soundCloudAuthState = soundCloudAuthState,
-                        soundCloudLikedTracks = soundCloudLikedTracks,
-                        soundCloudPlaylists = soundCloudPlaylists,
-                        soundCloudSearchResults = soundCloudSearchResults,
-                        soundCloudIsLoading = soundCloudIsLoading,
-                        onConnectSoundCloud = { viewModel.connectSoundCloud(context) },
-                        onDisconnectSoundCloud = { viewModel.disconnectSoundCloud() },
-                        onSearchSoundCloud = { viewModel.searchSoundCloud(it) },
-                        onPlaySoundCloudTrack = { viewModel.playSoundCloudTrack(it) },
-                        onRefreshSoundCloud = { viewModel.refreshSoundCloud() },
-                        currentTrack = playingTrack,
-                        isPlaying = isPlaying,
-                        onInspectSpectrogram = { track ->
-                            viewModel.inspectTrackSpectrogram(track, showTab = true)
-                        },
-                        onOpenConfigDialog = { viewModel.openApiConfigDialog() }
-                    )
-                }
-                DjTab.SPECTROGRAM -> {
-                    PositionAwareSpectrogramTab(
-                        analyzedTrack = analyzedTrack ?: playingTrack ?: allTracks.firstOrNull(),
-                        spectrogramData = spectrogramData,
-                        allTracks = allTracks,
-                        isPlaying = isPlaying,
-                        audioEngine = viewModel.audioEngine,
-                        onSelectTrack = { viewModel.inspectTrackSpectrogram(it, showTab = false) },
-                        onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
-                        onSeekToRatio = { ratio ->
-                            viewModel.audioEngine.seekToFraction(ratio)
-                        },
-                        onLoadToDeck = { viewModel.playTrack(it) },
-                        isLoading = isSpectrogramLoading,
-                        analysisProgressPercent = analysisProgressPercent,
-                        errorMessage = spectrogramErrorMessage,
-                        onRetryAnalysis = { viewModel.retrySpectrogramAnalysis() }
-                    )
-                }
-                DjTab.OPERATIONS -> {
-                    if (isDriveBrowserOpen) {
-                        GoogleDriveBrowserView(
-                            authState = driveAuthState,
-                            listing = driveListing,
-                            breadcrumbs = driveBreadcrumbs,
-                            syncStatusMap = driveSyncStatusMap,
-                            downloadProgressMap = driveDownloadProgressMap,
-                            isLoading = driveIsLoading,
-                            currentPlayingTrack = playingTrack,
-                            isPlaying = isPlaying,
-                            onBack = { viewModel.closeGoogleDriveBrowser() },
-                            onNavigateBreadcrumb = { viewModel.navigateDriveBreadcrumb(it) },
-                            onOpenFolder = { id, name -> viewModel.openDriveFolder(id, name) },
-                            onPlayTrack = { viewModel.playDriveTrackFromListing(it) },
-                            onDownloadTrack = { viewModel.downloadDriveTrack(it) },
-                            onCancelDownload = { viewModel.cancelDriveDownload(it) },
-                            onSyncEntireFolder = { viewModel.syncEntireDriveFolder() },
-                            onConnectAccount = { viewModel.connectGoogleDrive(context as? Activity) },
-                            onDisconnectAccount = { viewModel.disconnectGoogleDrive() },
-                            onRefresh = { viewModel.refreshDriveFolder() }
-                        )
-                    } else {
-                        OperationsAndCloudView(
-                            storageSources = storageSources,
-                            operationJournal = operationJournal,
-                            scanServiceState = scanServiceState,
-                            updateState = updateState,
-                            lastCheckedTimestamp = updateLastCheckedTimestamp,
-                            isAutoCheckEnabled = isAutoUpdateCheckEnabled,
-                            onCheckForUpdates = { viewModel.checkForUpdates(isManual = true) },
-                            onToggleAutoCheck = { viewModel.setAutoUpdateCheckEnabled(it) },
-                            onTriggerSync = { viewModel.triggerCloudSync() },
-                            onUndoOperation = { viewModel.undoJournalOperation(it) },
-                            onMountSaf = onPickSafFolder,
-                            onPickAudioFiles = onPickAudioFiles,
-                            onScanMediaStore = { viewModel.scanDeviceMediaStore() },
-                            onCleanMissingFiles = { viewModel.cleanMissingFiles() },
-                            onLoadDemoTracks = { viewModel.loadDemoTracks() },
-                            onClearLibrary = { viewModel.clearLibrary() },
-                            onPauseScan = { viewModel.pauseScanService() },
-                            onResumeScan = { viewModel.resumeScanService() },
-                            onCancelScan = { viewModel.cancelScanService() },
-                            onOpenGoogleDrive = { viewModel.openGoogleDriveBrowser() },
-                            onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
-                            onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() },
-                            themeMode = themeMode,
-                            onSetThemeMode = { viewModel.setThemeMode(it) },
-                            metadataSettings = viewModel.metadataSettings.collectAsState().value,
-                            onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
-                            onSetMusicBrainzEnabled = viewModel::setMusicBrainzEnabled,
-                            onSetBpmAnalysisEnabled = viewModel::setBpmAnalysisEnabled,
-                            onSetKeyAnalysisEnabled = viewModel::setKeyAnalysisEnabled,
-                            onSetWriteToFileEnabled = viewModel::setWriteToFileEnabled,
-                            onSetShowProvenanceBadges = viewModel::setShowProvenanceBadges,
-                            onSetConcurrency = viewModel::setEnrichmentConcurrency,
-                            onSetBpmRange = viewModel::setBpmRange
-                        )
+                        DjTab.SPECTROGRAM -> {
+                            PositionAwareSpectrogramTab(
+                                analyzedTrack = analyzedTrack ?: playingTrack ?: allTracks.firstOrNull(),
+                                spectrogramData = spectrogramData,
+                                allTracks = allTracks,
+                                isPlaying = isPlaying,
+                                audioEngine = viewModel.audioEngine,
+                                onSelectTrack = { viewModel.inspectTrackSpectrogram(it, showTab = false) },
+                                onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
+                                onSeekToRatio = { ratio ->
+                                    viewModel.audioEngine.seekToFraction(ratio)
+                                },
+                                onLoadToDeck = { viewModel.playTrack(it) },
+                                isLoading = isSpectrogramLoading,
+                                analysisProgressPercent = analysisProgressPercent,
+                                errorMessage = spectrogramErrorMessage,
+                                onRetryAnalysis = { viewModel.retrySpectrogramAnalysis() }
+                            )
+                        }
                     }
                 }
             }
 
-            // In-App Update Dialog / Progress / Install Sheet
-            val activity = context as? Activity
+            // In-App Update Dialog / Prepare Update Confirmation
             UpdateDialog(
                 updateState = updateState,
-                onStartDownload = { info -> viewModel.startUpdateDownload(info) },
-                onCancelDownload = { viewModel.cancelUpdateDownload() },
-                onInstallApk = { apkFile, info ->
-                    activity?.let { act -> viewModel.installUpdateApk(act, apkFile, info) }
+                onPrepareUpdate = { info -> viewModel.prepareUpdate(info) },
+                onCancelPrepare = { viewModel.cancelPrepareUpdate() },
+                onConfirmUpdateAndUninstall = {
+                    viewModel.openReleaseAndUninstall(context)
                 },
                 onDismiss = {
                     val tagName = (updateState as? UpdateState.UpdateAvailable)?.info?.tagName
+                        ?: (updateState as? UpdateState.PrepareUpdate)?.info?.tagName
                     viewModel.dismissUpdateDialog(tagName)
                 },
                 onRetry = { viewModel.checkForUpdates(isManual = true) }
@@ -574,6 +618,7 @@ fun MainDjScreen(
             }
         }
     }
+}
 }
 
 @Composable
@@ -694,6 +739,7 @@ private fun DjTopAppBar(
     totalTracks: Int,
     currentTab: DjTab,
     isScanning: Boolean,
+    onOpenMenu: () -> Unit,
     onOpenConfig: () -> Unit,
     onRescan: () -> Unit
 ) {
@@ -704,15 +750,27 @@ private fun DjTopAppBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // App Branding & Active Tab Indicator
+            // Hamburger Menu + App Branding & Active Tab Indicator
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                IconButton(
+                    onClick = onOpenMenu,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Menu,
+                        contentDescription = "Open Navigation Menu",
+                        tint = DeckACyan,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = DeckACyan.copy(alpha = 0.2f),
@@ -741,7 +799,6 @@ private fun DjTopAppBar(
                                 DjTab.FINDS -> NeonAmber.copy(alpha = 0.2f)
                                 DjTab.STREAMING -> SpotifyGreen.copy(alpha = 0.2f)
                                 DjTab.SPECTROGRAM -> NeonPurple.copy(alpha = 0.2f)
-                                DjTab.OPERATIONS -> TextMuted.copy(alpha = 0.2f)
                             }
                         ) {
                             Text(
@@ -751,7 +808,6 @@ private fun DjTopAppBar(
                                     DjTab.FINDS -> NeonAmber
                                     DjTab.STREAMING -> SpotifyGreen
                                     DjTab.SPECTROGRAM -> NeonPurple
-                                    DjTab.OPERATIONS -> TextPrimary
                                 },
                                 fontSize = 8.sp,
                                 fontWeight = FontWeight.Black,
@@ -822,8 +878,7 @@ private fun DjBottomNavigationBar(
             Triple(DjTab.LOCAL, "Local", Icons.Default.FolderOpen),
             Triple(DjTab.FINDS, "Finds", Icons.Default.Bookmark),
             Triple(DjTab.STREAMING, "Streaming", Icons.Default.Cloud),
-            Triple(DjTab.SPECTROGRAM, "Spectrum", Icons.Default.GraphicEq),
-            Triple(DjTab.OPERATIONS, "Settings", Icons.Default.Settings)
+            Triple(DjTab.SPECTROGRAM, "Spectrum", Icons.Default.GraphicEq)
         )
 
         tabs.forEach { (tab, title, icon) ->
@@ -833,7 +888,6 @@ private fun DjBottomNavigationBar(
                 DjTab.FINDS -> NeonAmber
                 DjTab.STREAMING -> SpotifyGreen
                 DjTab.SPECTROGRAM -> DeckACyan
-                DjTab.OPERATIONS -> DeckACyan
             }
 
             NavigationBarItem(
@@ -981,3 +1035,234 @@ private fun PositionAwareSpectrogramTab(
         onRetryAnalysis = onRetryAnalysis
     )
 }
+
+@Composable
+private fun SideDestinationScreen(
+    destination: SideMenuDestination,
+    viewModel: MainDjViewModel,
+    allTracks: List<com.example.model.Track>,
+    playingTrack: com.example.model.Track?,
+    isPlaying: Boolean,
+    scanServiceState: com.example.service.AudioScanState,
+    storageSources: List<com.example.model.StorageSource>,
+    operationJournal: List<com.example.model.OperationJournalItem>,
+    updateState: UpdateState,
+    updateLastCheckedTimestamp: Long,
+    isAutoUpdateCheckEnabled: Boolean,
+    themeMode: com.example.ui.theme.ThemeMode,
+    crossfadeSeconds: Int,
+    repeatMode: RepeatMode,
+    isShuffleEnabled: Boolean,
+    eqEnabled: Boolean,
+    eqLow: Float,
+    eqMid: Float,
+    eqHigh: Float,
+    haasEnabled: Boolean,
+    haasAmount: Float,
+    haasDelayMs: Float,
+    onPickSafFolder: () -> Unit,
+    onPickAudioFiles: () -> Unit,
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DjObsidian)
+    ) {
+        // Top Bar for destination
+        Surface(
+            color = DjSurfaceDark,
+            border = androidx.compose.foundation.BorderStroke(0.5.dp, DjSurfaceBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = DeckACyan
+                        )
+                    }
+                    Text(
+                        text = destination.title,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                }
+
+                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            when (destination) {
+                SideMenuDestination.Metronome -> {
+                    MetronomeTool(modifier = Modifier.fillMaxSize().padding(14.dp))
+                }
+                SideMenuDestination.TapBpm -> {
+                    TapBpmTool(modifier = Modifier.fillMaxSize().padding(14.dp))
+                }
+                SideMenuDestination.KeyConverter -> {
+                    KeyConverterTool(modifier = Modifier.fillMaxSize().padding(14.dp))
+                }
+                SideMenuDestination.RmsMeter -> {
+                    RmsMeterTool(
+                        audioEngine = viewModel.audioEngine,
+                        selectedTrack = playingTrack,
+                        allTracks = allTracks,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                SideMenuDestination.ClippingDetector -> {
+                    ClippingDetectorTool(
+                        audioEngine = viewModel.audioEngine,
+                        selectedTrack = playingTrack,
+                        allTracks = allTracks,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                SideMenuDestination.DynamicRangeMeter -> {
+                    DynamicRangeMeterTool(
+                        selectedTrack = playingTrack,
+                        allTracks = allTracks,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                SideMenuDestination.Eq, SideMenuDestination.HaasSurround -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(14.dp)
+                    ) {
+                        AudioEffectsPanel(
+                            eqEnabled = eqEnabled,
+                            eqLow = eqLow,
+                            eqMid = eqMid,
+                            eqHigh = eqHigh,
+                            onSetEqEnabled = { viewModel.audioEngine.setEqEnabled(it) },
+                            onSetEqLow = { viewModel.audioEngine.setEq(it, eqMid, eqHigh) },
+                            onSetEqMid = { viewModel.audioEngine.setEq(eqLow, it, eqHigh) },
+                            onSetEqHigh = { viewModel.audioEngine.setEq(eqLow, eqMid, it) },
+                            haasEnabled = haasEnabled,
+                            haasAmount = haasAmount,
+                            haasDelayMs = haasDelayMs,
+                            onSetHaasEnabled = { viewModel.audioEngine.setHaasEnabled(it) },
+                            onSetHaasAmount = { viewModel.audioEngine.setHaasAmount(it) },
+                            onSetHaasDelayMs = { viewModel.audioEngine.setHaasDelayMs(it) }
+                        )
+                    }
+                }
+                SideMenuDestination.PlaybackSettings -> {
+                    PlaybackSettingsScreen(
+                        crossfadeSeconds = crossfadeSeconds,
+                        onCrossfadeSecondsChange = { viewModel.setCrossfadeSeconds(it) },
+                        repeatMode = repeatMode,
+                        onToggleRepeat = { viewModel.toggleRepeatMode() },
+                        isShuffleEnabled = isShuffleEnabled,
+                        onToggleShuffle = { viewModel.toggleShuffle() }
+                    )
+                }
+                SideMenuDestination.LibrarySettings -> {
+                    LibrarySettingsScreen(
+                        storageSources = storageSources,
+                        operationJournal = operationJournal,
+                        scanServiceState = scanServiceState,
+                        metadataSettings = viewModel.metadataSettings.collectAsState().value,
+                        focusMusicBrainz = false,
+                        onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
+                        onSetMusicBrainzEnabled = viewModel::setMusicBrainzEnabled,
+                        onSetBpmAnalysisEnabled = viewModel::setBpmAnalysisEnabled,
+                        onSetKeyAnalysisEnabled = viewModel::setKeyAnalysisEnabled,
+                        onSetWriteToFileEnabled = viewModel::setWriteToFileEnabled,
+                        onSetShowProvenanceBadges = viewModel::setShowProvenanceBadges,
+                        onSetConcurrency = viewModel::setEnrichmentConcurrency,
+                        onSetBpmRange = viewModel::setBpmRange,
+                        onTriggerSync = { viewModel.triggerCloudSync() },
+                        onUndoOperation = { viewModel.undoJournalOperation(it) },
+                        onMountSaf = onPickSafFolder,
+                        onPickAudioFiles = onPickAudioFiles,
+                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
+                        onCleanMissingFiles = { viewModel.cleanMissingFiles() },
+                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
+                        onClearLibrary = { viewModel.clearLibrary() },
+                        onPauseScan = { viewModel.pauseScanService() },
+                        onResumeScan = { viewModel.resumeScanService() },
+                        onCancelScan = { viewModel.cancelScanService() },
+                        onOpenGoogleDrive = { viewModel.openGoogleDriveBrowser() },
+                        onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
+                        onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() }
+                    )
+                }
+                SideMenuDestination.MusicBrainzSettings -> {
+                    LibrarySettingsScreen(
+                        storageSources = storageSources,
+                        operationJournal = operationJournal,
+                        scanServiceState = scanServiceState,
+                        metadataSettings = viewModel.metadataSettings.collectAsState().value,
+                        focusMusicBrainz = true,
+                        onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
+                        onSetMusicBrainzEnabled = viewModel::setMusicBrainzEnabled,
+                        onSetBpmAnalysisEnabled = viewModel::setBpmAnalysisEnabled,
+                        onSetKeyAnalysisEnabled = viewModel::setKeyAnalysisEnabled,
+                        onSetWriteToFileEnabled = viewModel::setWriteToFileEnabled,
+                        onSetShowProvenanceBadges = viewModel::setShowProvenanceBadges,
+                        onSetConcurrency = viewModel::setEnrichmentConcurrency,
+                        onSetBpmRange = viewModel::setBpmRange,
+                        onTriggerSync = { viewModel.triggerCloudSync() },
+                        onUndoOperation = { viewModel.undoJournalOperation(it) },
+                        onMountSaf = onPickSafFolder,
+                        onPickAudioFiles = onPickAudioFiles,
+                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
+                        onCleanMissingFiles = { viewModel.cleanMissingFiles() },
+                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
+                        onClearLibrary = { viewModel.clearLibrary() },
+                        onPauseScan = { viewModel.pauseScanService() },
+                        onResumeScan = { viewModel.resumeScanService() },
+                        onCancelScan = { viewModel.cancelScanService() },
+                        onOpenGoogleDrive = { viewModel.openGoogleDriveBrowser() },
+                        onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
+                        onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() }
+                    )
+                }
+                SideMenuDestination.AppearanceSettings -> {
+                    AppearanceSettingsScreen(
+                        themeMode = themeMode,
+                        onSetThemeMode = { viewModel.setThemeMode(it) }
+                    )
+                }
+                SideMenuDestination.GitHubUpdates -> {
+                    GitHubSettingsScreen(
+                        updateState = updateState,
+                        lastCheckedTimestamp = updateLastCheckedTimestamp,
+                        isAutoCheckEnabled = isAutoUpdateCheckEnabled,
+                        onCheckForUpdates = { viewModel.checkForUpdates(isManual = true) },
+                        onToggleAutoCheck = { viewModel.setAutoUpdateCheckEnabled(it) }
+                    )
+                }
+            }
+        }
+    }
+}
+

@@ -71,63 +71,68 @@ Metadata enrichment can include:
 
 BPM and musical key are intentionally handled through local audio analysis or existing persisted values rather than being blindly replaced by remote catalogue data.
 
-Audio effects
+### DJ Tools & Real-Time Audio Processing
 
-SoundSync includes real audio-processing components for:
+SoundSync provides fully functional DJ audio tools with real DSP and live PCM analysis:
 
-- Parametric / multi-point EQ
-- Haas-style stereo widening / surround effect
+- **Metronome**: Standalone high-precision monotonic audio clock with audible PCM click, user-selectable BPM (30–300 BPM), manual tap tempo sync, and drift-free operation.
+- **Tap BPM / Tap Tempo**: Accurate tempo calculation from real-time taps using rolling interval averaging, outlier smoothing, and inactivity reset.
+- **Key Converter**: Harmonic mixing tool translating standard musical keys (e.g., C Major, A Minor) to Camelot wheel notation and Open Key codes, with compatible key recommendations for harmonic DJ transitions.
+- **RMS Meter**: Real decibel RMS loudness meter analyzing actual PCM audio frames, showing average dB, peak levels, and live visual meter indicators.
+- **Clipping Detector**: PCM peak amplitude monitoring with configurable ceiling threshold (-0.1 dBFS), clipped sample counters, and true headroom calculation.
+- **Dynamic Range Meter**: Audio dynamics analyzer calculating crest factor (peak-to-RMS ratio) and official DR dynamic range ratings.
+- **Multipoint Parametric EQ**: Real Android platform audio effects equalizer with live low/mid/high frequency gain sliders (-12 dB to +12 dB) persisting across playback state changes and track transitions.
+- **Haas Surround**: Controlled inter-channel micro-delay (1–30 ms) stereo widening effect with mono-safe phase control and zero playback glitches.
 
-These are connected to the playback engine rather than being UI-only controls.
-
-Song Finds
+### Song Finds
 
 Hear something good in a Reel, TikTok, YouTube video, Spotify link, SoundCloud link, or another app?
 
-SoundSync can appear in Android's Share menu and save a shared link as a Song Find so you can come back to it later, give it a useful name, and keep a simple list of tracks you still want to identify or add to your library.
+SoundSync appears in Android's system Share sheet to capture incoming links as Song Finds, allowing you to organize, tag, and locate tracks to add to your local library.
 
-Streaming
+### Streaming Integrations
 
-The app contains a unified Streaming area with integrations for:
+The app contains unified streaming browsing and playback with integrations for:
 
-- Spotify
-- SoundCloud
+- **Spotify**: OAuth/PKCE authentication, saved library browsing, playlists, and track search.
+- **SoundCloud**: Client ID API integration, stream URL resolution, and search.
 
-Authentication uses OAuth/PKCE-style flows and the app supports configurable client IDs for supported services.
+> [!NOTE]
+> Streaming features depend on third-party service APIs and user account credentials. SoundSync does not bypass service restrictions or DRM.
 
-«[!NOTE]
-Streaming features depend on the permissions, account access, API availability, and platform rules provided by Spotify and SoundCloud. SoundSync does not bypass service restrictions or DRM.»
+### AI Generation Tools
 
-Google Drive
+Quickly launch external AI music creation suites with track context copied to clipboard:
+- **Suno**: Deep link opener with browser fallback.
+- **ACE Studio**: Direct package opener with browser fallback.
 
-- Google Drive OAuth flow.
-- Browse supported Drive content from inside SoundSync.
-- Cloud/local sync infrastructure for music workflows.
+### GitHub Releases & Update System
 
-Updates and releases
+SoundSync connects directly to GitHub Releases for app version discovery and clean updates:
 
-SoundSync includes GitHub release/update infrastructure tied to this repository.
+- **Automatic & Manual Checks**: Periodically queries GitHub Releases in the background (or on demand) and performs strict semantic version comparison (e.g., `1.10.0` > `1.9.0`).
+- **Two-Step Update Flow**:
+  1. *Update Notification*: Displays installed vs. available version, download size, and full release notes.
+  2. *Prepare Update & Data Notice*: Explains the update procedure and explicitly warns that internal application data (settings, local database cache, internal playlists) will be reset upon uninstallation, while external audio files stored on device storage remain safe.
+- **Clean Uninstall/Reinstall Sequence**: Verifies browser availability, launches the [Latest GitHub Release Page](https://github.com/jtmeaker-hash/Sound-sync/releases/latest) in an independent browser task, and immediately prompts Android's system package uninstall (`Intent.ACTION_DELETE`). No background APK downloading, package installer permissions, or in-app overwrites are performed.
 
-The GitHub Actions workflow can:
+### Navigation Architecture
 
-- Run unit tests.
-- Build a debug APK.
-- Build a signed release APK.
-- Generate semantic-style release versions.
-- Publish GitHub Releases when configured to do so.
+SoundSync features a streamlined dual navigation architecture:
 
-The Android app also contains update-checking and APK installation support for GitHub-hosted releases.
+1. **Bottom Navigation Bar**:
+   - **Local**: Songs, Albums, Artists, Playlists, and direct Folder file browsing.
+   - **Finds**: Saved song links captured from external apps.
+   - **Streaming**: Spotify and SoundCloud catalog integration.
+   - **Spectrogram**: Real-time STFT frequency heatmap and cutoff inspection.
 
-App sections
-
-The current main navigation is organised around:
-
-Section| Purpose
-Local| Songs, albums, artists, playlists, folders, and local file browsing
-Finds| Saved Song Find links shared from other apps
-Streaming| Spotify and SoundCloud access
-Spectrogram| Audio inspection and spectrogram tools
-Settings| App, metadata, cloud, API, playback, and audio-effect configuration
+2. **Side Navigation Drawer (☰)**:
+   - **AI Generation**: Suno & ACE Studio integrations.
+   - **DJ Tools**: Metronome, Tap BPM, Key Converter, RMS Meter, Clipping Detector, Dynamic Range Meter, Multipoint EQ, Haas Surround.
+   - **Streaming**: Spotify & SoundCloud configuration.
+   - **Playback & Audio**: Adjustable crossfade, repeat modes, and shuffle controls.
+   - **Library & Storage**: Storage sources, MusicBrainz metadata enrichment settings, MediaStore scanner, and cache cleanup.
+   - **App & Interface**: Theme selection (Obsidian DJ Dark / Light / System) and GitHub Updates manager.
 
 Requirements
 
@@ -168,17 +173,37 @@ Do not commit real API keys or secrets to the repository.
 
 Run unit tests:
 
+```bash
 ./gradlew testDebugUnitTest
+```
 
 Build a debug APK:
 
+```bash
 ./gradlew assembleDebug
+```
 
-The APK will normally be written to:
+The debug APK will be located at:
+`app/build/outputs/apk/debug/app-debug.apk`
 
-app/build/outputs/apk/debug/app-debug.apk
+Build a signed release APK:
 
-On Windows, use "gradlew.bat" instead of "./gradlew".
+```bash
+./gradlew assembleRelease
+```
+
+The release APK will be located at:
+`app/build/outputs/apk/release/app-release.apk`
+
+On Windows, use `gradlew.bat` instead of `./gradlew`.
+
+### Installing from GitHub Releases
+
+Ready-to-install APK packages are published directly on GitHub:
+
+1. Visit the [SoundSync GitHub Releases](https://github.com/jtmeaker-hash/Sound-sync/releases/latest) page.
+2. Download the latest `.apk` asset.
+3. If upgrading an existing installation, uninstall the current version first to ensure a clean database migration, then tap the downloaded APK to install.
 
 Service configuration
 
@@ -188,7 +213,7 @@ SoundSync supports a configurable Spotify Client ID from the app's API configura
 
 OAuth redirect URI:
 
-soundsync://spotify-callback
+`soundsync://spotify-callback`
 
 Add the same redirect URI to the Spotify developer application used with SoundSync.
 
@@ -198,7 +223,7 @@ SoundCloud also uses a configurable Client ID.
 
 OAuth redirect URI:
 
-soundsync://soundcloud-callback
+`soundsync://soundcloud-callback`
 
 Your SoundCloud application must allow the matching redirect URI.
 
@@ -206,7 +231,7 @@ Google Drive
 
 Google Drive authentication returns through:
 
-soundsync://gdrive-callback
+`soundsync://gdrive-callback`
 
 Google OAuth configuration must match the credentials and redirect behaviour expected by the app.
 
@@ -214,15 +239,14 @@ Permissions
 
 Depending on Android version and enabled features, SoundSync may request permissions for:
 
-- Internet access
-- Audio/media library access
-- Legacy external storage access on older Android versions
-- Foreground media playback
-- Foreground data-sync work
-- Notifications
-- APK installation for in-app updates
+- Internet access (`android.permission.INTERNET`)
+- Audio/media library access (`READ_MEDIA_AUDIO` on Android 13+, `READ_EXTERNAL_STORAGE` on older versions)
+- Legacy storage access (`WRITE_EXTERNAL_STORAGE` on Android 12 and below)
+- Foreground media playback (`FOREGROUND_SERVICE_MEDIA_PLAYBACK`)
+- Foreground data-sync work (`FOREGROUND_SERVICE_DATA_SYNC`)
+- Media control and update notifications (`POST_NOTIFICATIONS`)
 
-Permissions should only be granted when you intend to use the related feature.
+Permissions are requested on demand only when you use the related feature.
 
 Technology
 

@@ -28,8 +28,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.math.PI
+import kotlin.math.log10
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * Single authoritative DJ Audio Engine managing playback state, real-time DSP decoding
@@ -270,6 +272,26 @@ class DjAudioEngine(private val context: Context) {
     private val _waveformHeights = MutableStateFlow(FloatArray(60) { 0.3f })
     val waveformHeights = _waveformHeights.asStateFlow()
 
+    // Real PCM Audio Live Metrics (for RMS Meter and Clipping Detector)
+    private val _liveRmsDb = MutableStateFlow(-60f)
+    val liveRmsDb = _liveRmsDb.asStateFlow()
+
+    private val _livePeakDb = MutableStateFlow(-60f)
+    val livePeakDb = _livePeakDb.asStateFlow()
+
+    private val _liveClippingDetected = MutableStateFlow(false)
+    val liveClippingDetected = _liveClippingDetected.asStateFlow()
+
+    private val _liveClippedSampleCount = MutableStateFlow(0L)
+    val liveClippedSampleCount = _liveClippedSampleCount.asStateFlow()
+
+    @Volatile private var lastMetricsPublishTimeMs: Long = 0L
+
+    fun resetClippingDetector() {
+        _liveClippingDetected.value = false
+        _liveClippedSampleCount.value = 0L
+    }
+
     private var activeCueSeconds: Int = 0
 
     // Haas Surround Effect
@@ -479,6 +501,8 @@ class DjAudioEngine(private val context: Context) {
         activeAudioTrack?.let { t ->
             runCatching { if (t.playState == AudioTrack.PLAYSTATE_PLAYING) t.pause() }
         }
+        _liveRmsDb.value = -60f
+        _livePeakDb.value = -60f
     }
 
     fun togglePlayPause() {
@@ -929,6 +953,32 @@ class DjAudioEngine(private val context: Context) {
                                 }
                                 if (haasEffect.isActive) {
                                     haasEffect.process(pcmStereo, 0, filled, sampleRate)
+                                }
+
+                                // ── Live RMS & Clipping Metrics ────────
+                                val nowMs = System.currentTimeMillis()
+                                if (nowMs - lastMetricsPublishTimeMs >= 40L && filled > 0) {
+                                    lastMetricsPublishTimeMs = nowMs
+                                    var sumSq = 0.0
+                                    var maxVal = 0
+                                    var clips = 0L
+                                    val count = filled * 2
+                                    for (si in 0 until count) {
+                                        val s = pcmStereo[si].toInt()
+                                        val absS = if (s < 0) -s else s
+                                        if (absS > maxVal) maxVal = absS
+                                        if (absS >= 32760) clips++
+                                        sumSq += s * s
+                                    }
+                                    val r = sqrt(sumSq / count)
+                                    val rDb = if (r > 0.0) (20.0 * log10(r / 32767.0)).toFloat().coerceIn(-60f, 0f) else -60f
+                                    val pDb = if (maxVal > 0) (20.0 * log10(maxVal.toDouble() / 32767.0)).toFloat().coerceIn(-60f, 0f) else -60f
+                                    _liveRmsDb.value = rDb
+                                    _livePeakDb.value = pDb
+                                    if (clips > 0L) {
+                                        _liveClippingDetected.value = true
+                                        _liveClippedSampleCount.value += clips
+                                    }
                                 }
 
                                 // ── Write PCM if still active session ──

@@ -89,6 +89,7 @@ sealed interface UpdateState {
     data object Idle : UpdateState
     data class Checking(val isManual: Boolean) : UpdateState
     data class UpdateAvailable(val info: UpdateInfo, val isManual: Boolean = false) : UpdateState
+    data class PrepareUpdate(val info: UpdateInfo) : UpdateState
     data class UpToDate(val checkedAt: Long = System.currentTimeMillis(), val isManual: Boolean = false) : UpdateState
     data class Downloading(val info: UpdateInfo, val progress: DownloadProgress) : UpdateState
     data class Downloaded(
@@ -110,5 +111,6 @@ enum class UpdateErrorType {
     DOWNLOAD_FAILED,
     CHECKSUM_MISMATCH,
     INSTALLATION_FAILED,
+    BROWSER_NOT_FOUND,
     GENERAL
 }

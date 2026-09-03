@@ -55,10 +55,10 @@ object UpdateManager {
 
     const val DEFAULT_REPO_OWNER = "jtmeaker-hash"
     const val DEFAULT_REPO_NAME = "Sound-sync"
+    const val LATEST_RELEASE_URL = "https://github.com/jtmeaker-hash/Sound-sync/releases/latest"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var checkJob: Job? = null
-    private var downloadJob: Job? = null
 
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
@@ -71,12 +71,6 @@ object UpdateManager {
 
     private var apiService: GitHubReleaseApiService? = null
     private var preferences: SharedPreferences? = null
-
-    /**
-     * Pending install file when user is redirected to grant Unknown Sources permission.
-     */
-    var pendingInstallApk: File? = null
-        private set
 
     /**
      * Initializes preferences and loads persisted state.
@@ -131,13 +125,6 @@ object UpdateManager {
         repo: String = DEFAULT_REPO_NAME
     ): Job {
         init(context)
-
-        // Don't interrupt an active download
-        val currentState = _updateState.value
-        if (currentState is UpdateState.Downloading || currentState is UpdateState.Installing) {
-            Log.d(TAG, "Skipping update check because download/install is active.")
-            return Job().apply { complete() }
-        }
 
         checkJob?.cancel()
         checkJob = scope.launch {
@@ -198,7 +185,7 @@ object UpdateManager {
                 Log.e(TAG, "Error checking for updates: ${e.message}", e)
                 if (isManual) {
                     _updateState.value = UpdateState.Error(
-                        message = "Unable to connect to GitHub.",
+                        message = "Unable to connect to GitHub: ${e.localizedMessage}",
                         isManual = true,
                         errorType = UpdateErrorType.NETWORK_ERROR
                     )
@@ -229,23 +216,7 @@ object UpdateManager {
             return
         }
 
-        // Look for APK asset in release
         val apkAsset = findApkAsset(release.assets)
-        if (apkAsset == null) {
-            Log.w(TAG, "Release $releaseTag does not have an attached .apk asset.")
-            if (isManual) {
-                _updateState.value = UpdateState.Error(
-                    message = "Latest release does not contain an APK.",
-                    isManual = true,
-                    errorType = UpdateErrorType.NO_RELEASE_ASSETS
-                )
-            } else {
-                _updateState.value = UpdateState.Idle
-            }
-            return
-        }
-
-        // Look for companion .sha256 asset if present
         val sha256Asset = release.assets.firstOrNull {
             it.name.endsWith(".sha256", ignoreCase = true) || it.name.endsWith(".sha256sum", ignoreCase = true)
         }
@@ -257,12 +228,12 @@ object UpdateManager {
             releaseTitle = release.name ?: release.tagName,
             releaseNotes = release.body ?: "Bug fixes and performance improvements.",
             publishedAt = release.publishedAt ?: "",
-            apkDownloadUrl = apkAsset.browserDownloadUrl,
-            apkFileName = apkAsset.name,
-            apkSizeBytes = apkAsset.size,
+            apkDownloadUrl = apkAsset?.browserDownloadUrl ?: "",
+            apkFileName = apkAsset?.name ?: "",
+            apkSizeBytes = apkAsset?.size ?: 0L,
             sha256ChecksumUrl = sha256Asset?.browserDownloadUrl,
             isPrerelease = release.prerelease,
-            githubReleaseUrl = release.htmlUrl
+            githubReleaseUrl = if (!release.htmlUrl.isNullOrBlank()) release.htmlUrl else LATEST_RELEASE_URL
         )
 
         // Check if user previously dismissed this exact version (only suppress on auto-checks)
@@ -277,250 +248,97 @@ object UpdateManager {
     }
 
     /**
-     * Finds the most appropriate .apk asset from the release assets list.
+     * Advances to the second confirmation dialog ("Prepare update?") with data warnings.
      */
-    fun findApkAsset(assets: List<GitHubReleaseAsset>): GitHubReleaseAsset? {
-        if (assets.isEmpty()) return null
-        // 1. Exact match for soundsync release apk
-        val exactMatch = assets.firstOrNull {
-            it.name.contains("SoundSync", ignoreCase = true) && it.name.endsWith(".apk", ignoreCase = true)
-        }
-        if (exactMatch != null) return exactMatch
-
-        // 2. Any .apk file
-        return assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
+    fun prepareUpdate(info: UpdateInfo) {
+        _updateState.value = UpdateState.PrepareUpdate(info)
     }
 
     /**
-     * Starts downloading the update APK with real-time progress tracking.
+     * Cancels the prepare update dialog and returns to UpdateAvailable or Idle.
      */
-    fun startDownload(context: Context, info: UpdateInfo) {
-        init(context)
-
-        downloadJob?.cancel()
-        downloadJob = scope.launch {
-            val updateDir = getUpdatesDirectory(context)
-            if (!updateDir.exists()) {
-                updateDir.mkdirs()
-            }
-
-            val sanitizedFileName = info.apkFileName.ifBlank { "SoundSync-${info.tagName}.apk" }
-            val tempFile = File(updateDir, "$sanitizedFileName.download")
-            val targetFile = File(updateDir, sanitizedFileName)
-
-            // If file already completely downloaded and matches size, check verification
-            if (targetFile.exists() && targetFile.length() == info.apkSizeBytes && info.apkSizeBytes > 0) {
-                Log.i(TAG, "Found existing completed APK download at ${targetFile.absolutePath}")
-                _updateState.value = UpdateState.Downloaded(info, targetFile, isVerified = true)
-                return@launch
-            }
-
-            _updateState.value = UpdateState.Downloading(
-                info = info,
-                progress = DownloadProgress(
-                    progressFraction = 0f,
-                    bytesDownloaded = 0L,
-                    totalBytes = info.apkSizeBytes
-                )
-            )
-
-            Log.i(TAG, "Starting APK download from: ${info.apkDownloadUrl} -> ${targetFile.absolutePath}")
-
-            try {
-                val service = apiService ?: GitHubReleaseApiService.create()
-                val response = service.downloadFile(info.apkDownloadUrl)
-
-                if (!response.isSuccessful) {
-                    throw IllegalStateException("Download HTTP failed with status ${response.code()}")
-                }
-
-                val body = response.body() ?: throw IllegalStateException("Download response body was empty")
-                val totalBytes = if (body.contentLength() > 0) body.contentLength() else info.apkSizeBytes
-
-                var downloadedBytes = 0L
-                var lastProgressUpdate = 0L
-                val buffer = ByteArray(32 * 1024) // 32KB buffer
-
-                body.byteStream().use { input: InputStream ->
-                    FileOutputStream(tempFile).use { output: FileOutputStream ->
-                        var read: Int
-                        while (input.read(buffer).also { read = it } != -1) {
-                            ensureActive()
-                            output.write(buffer, 0, read)
-                            downloadedBytes += read
-
-                            val now = System.currentTimeMillis()
-                            if (now - lastProgressUpdate > 100 || downloadedBytes == totalBytes) {
-                                lastProgressUpdate = now
-                                val fraction = if (totalBytes > 0) {
-                                    (downloadedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
-                                } else 0f
-
-                                _updateState.value = UpdateState.Downloading(
-                                    info = info,
-                                    progress = DownloadProgress(
-                                        progressFraction = fraction,
-                                        bytesDownloaded = downloadedBytes,
-                                        totalBytes = totalBytes
-                                    )
-                                )
-                            }
-                        }
-                        output.flush()
-                    }
-                }
-
-                // Verify file is non-empty
-                if (!tempFile.exists() || tempFile.length() == 0L) {
-                    throw IllegalStateException("Downloaded APK file is empty or missing")
-                }
-
-                // Verify expected SHA-256 if checksum URL is provided.
-                // Fail hard on mismatch: never mark an unverified APK as verified.
-                var sha256Matches: Boolean? = null
-                if (!info.sha256ChecksumUrl.isNullOrBlank()) {
-                    val shaResponse = service.downloadFile(info.sha256ChecksumUrl)
-                    if (!shaResponse.isSuccessful) {
-                        tempFile.delete()
-                        throw IllegalStateException("Could not download SHA-256 checksum (HTTP ${shaResponse.code()}). Download aborted.")
-                    }
-                    val shaText = shaResponse.body()?.string()?.trim() ?: ""
-                    val expectedHash = extractSha256Hex(shaText)
-                    if (expectedHash.isBlank()) {
-                        tempFile.delete()
-                        throw IllegalStateException("SHA-256 checksum file has no valid hash. Download aborted.")
-                    }
-                    val actualHash = calculateSha256(tempFile)
-                    sha256Matches = actualHash.equals(expectedHash, ignoreCase = true)
-                    Log.i(TAG, "SHA-256 Checksum: expected=$expectedHash, actual=$actualHash, matches=$sha256Matches")
-                    if (sha256Matches != true) {
-                        tempFile.delete()
-                        throw IllegalStateException("SHA-256 checksum mismatch! Expected: $expectedHash, got: $actualHash")
-                    }
-                }
-
-                // Atomic rename temp -> target (only reached when verification passed)
-                if (targetFile.exists()) {
-                    targetFile.delete()
-                }
-                if (!tempFile.renameTo(targetFile)) {
-                    tempFile.delete()
-                    throw IllegalStateException("Failed to move downloaded APK into place: ${targetFile.absolutePath}")
-                }
-
-                Log.i(TAG, "APK download completed successfully: ${targetFile.length()} bytes")
-                _updateState.value = UpdateState.Downloaded(
-                    info = info,
-                    apkFile = targetFile,
-                    isVerified = true,
-                    sha256Verified = sha256Matches
-                )
-
-            } catch (e: CancellationException) {
-                Log.d(TAG, "APK download was cancelled by user.")
-                if (tempFile.exists()) tempFile.delete()
-                _updateState.value = UpdateState.UpdateAvailable(info)
-            } catch (e: Exception) {
-                Log.e(TAG, "APK download failed: ${e.message}", e)
-                if (tempFile.exists()) tempFile.delete()
-                _updateState.value = UpdateState.Error(
-                    message = "Download failed: ${e.localizedMessage ?: "Unknown error"}",
-                    isManual = true,
-                    errorType = UpdateErrorType.DOWNLOAD_FAILED
-                )
-            }
-        }
-    }
-
-    /**
-     * Cancels active download.
-     */
-    fun cancelDownload() {
-        downloadJob?.cancel()
-        val current = _updateState.value
-        if (current is UpdateState.Downloading) {
-            _updateState.value = UpdateState.UpdateAvailable(current.info)
+    fun cancelPrepareUpdate(info: UpdateInfo? = null) {
+        _updateState.value = if (info != null) {
+            UpdateState.UpdateAvailable(info)
         } else {
-            _updateState.value = UpdateState.Idle
+            UpdateState.Idle
         }
     }
 
     /**
-     * Requests installation of the downloaded APK using Android PackageInstaller.
+     * Executes the clean uninstall/reinstall update flow:
+     * 1. Verifies a web browser / activity can handle ACTION_VIEW for the GitHub Releases URL.
+     *    If no browser is available: DO NOT uninstall, display an error, leave SoundSync installed.
+     * 2. Opens https://github.com/jtmeaker-hash/Sound-sync/releases/latest in external browser task.
+     * 3. Immediately launches Android's system package uninstall prompt for SoundSync.
      */
-    fun installApk(activity: Activity, apkFile: File, info: UpdateInfo? = null) {
-        if (!apkFile.exists() || apkFile.length() == 0L) {
-            Log.e(TAG, "Cannot install: APK file does not exist or is 0 bytes at ${apkFile.absolutePath}")
-            _updateState.value = UpdateState.Error("APK file not found on device", isManual = true)
-            return
+    fun openReleaseAndUninstall(context: Context, releaseUrl: String = LATEST_RELEASE_URL): Boolean {
+        val uri = Uri.parse(releaseUrl)
+        val browserIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
-        // On Android 8.0+ (Oreo, API 26+), verify Unknown Sources permission
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val packageManager = activity.packageManager
-            if (!packageManager.canRequestPackageInstalls()) {
-                Log.i(TAG, "Unknown apps installation permission not granted. Prompting user to Settings.")
-                pendingInstallApk = apkFile
-                try {
-                    val settingsIntent = Intent(
-                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${activity.packageName}")
-                    )
-                    activity.startActivity(settingsIntent)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to open UNKNOWN_APP_SOURCES settings: ${e.message}")
-                    // Fallback to generic security settings
-                    try {
-                        activity.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
-                    } catch (e2: Exception) {
-                        Log.e(TAG, "Failed to open SECURITY_SETTINGS: ${e2.message}")
-                    }
-                }
-                return
+        val packageManager = context.packageManager
+        val canOpenBrowser = try {
+            val resolved = browserIntent.resolveActivity(packageManager)
+            if (resolved != null) {
+                true
+            } else {
+                val activities = packageManager.queryIntentActivities(browserIntent, 0)
+                activities.isNotEmpty()
             }
+        } catch (e: Exception) {
+            false
+        }
+
+        if (!canOpenBrowser) {
+            Log.e(TAG, "No web browser activity found to handle release URL: $releaseUrl")
+            _updateState.value = UpdateState.Error(
+                message = "Could not find a web browser to open the release page ($releaseUrl). Update aborted; SoundSync remains installed.",
+                isManual = true,
+                errorType = UpdateErrorType.BROWSER_NOT_FOUND
+            )
+            return false
         }
 
         try {
-            Log.i(TAG, "Launching Android PackageInstaller for: ${apkFile.absolutePath}")
-            val authority = "${activity.packageName}.fileprovider"
-            val apkUri = FileProvider.getUriForFile(activity, authority, apkFile)
+            Log.i(TAG, "Opening GitHub Releases in external browser: $releaseUrl")
+            context.startActivity(browserIntent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch browser intent: ${e.message}", e)
+            _updateState.value = UpdateState.Error(
+                message = "Failed to launch web browser: ${e.localizedMessage}. SoundSync remains installed.",
+                isManual = true,
+                errorType = UpdateErrorType.BROWSER_NOT_FOUND
+            )
+            return false
+        }
 
-            val installIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(apkUri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        // Launch Android's system package uninstall prompt for SoundSync
+        try {
+            Log.i(TAG, "Launching system package uninstall for: ${context.packageName}")
+            val uninstallIntent = Intent(Intent.ACTION_DELETE).apply {
+                data = Uri.parse("package:${context.packageName}")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-
-            if (info != null) {
-                _updateState.value = UpdateState.Installing(info, apkFile)
-            }
-
-            pendingInstallApk = null
-            activity.startActivity(installIntent)
-
+            context.startActivity(uninstallIntent)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch package installer: ${e.message}", e)
-            _updateState.value = UpdateState.Error(
-                message = "Failed to launch installer: ${e.localizedMessage}",
-                isManual = true,
-                errorType = UpdateErrorType.INSTALLATION_FAILED
-            )
-        }
-    }
-
-    /**
-     * Resumes install if returning from Android Settings with granted permission.
-     */
-    fun resumePendingInstall(activity: Activity) {
-        val apk = pendingInstallApk ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (activity.packageManager.canRequestPackageInstalls()) {
-                Log.i(TAG, "User returned from Settings with granted install permissions. Resuming install.")
-                installApk(activity, apk)
+            Log.e(TAG, "Failed to launch ACTION_DELETE uninstall intent: ${e.message}", e)
+            try {
+                @Suppress("DEPRECATION")
+                val fallbackIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    putExtra(Intent.EXTRA_RETURN_RESULT, true)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(fallbackIntent)
+            } catch (e2: Exception) {
+                Log.e(TAG, "Failed fallback uninstall intent: ${e2.message}", e2)
             }
-        } else {
-            installApk(activity, apk)
         }
+
+        _updateState.value = UpdateState.Idle
+        return true
     }
 
     /**
@@ -534,18 +352,15 @@ object UpdateManager {
     }
 
     /**
-     * Calculates SHA-256 hash of a file.
+     * Finds the most appropriate .apk asset from the release assets list.
      */
-    fun calculateSha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { stream ->
-            val buffer = ByteArray(16 * 1024)
-            var bytesRead: Int
-            while (stream.read(buffer).also { bytesRead = it } != -1) {
-                digest.update(buffer, 0, bytesRead)
-            }
+    fun findApkAsset(assets: List<GitHubReleaseAsset>): GitHubReleaseAsset? {
+        if (assets.isEmpty()) return null
+        val exactMatch = assets.firstOrNull {
+            it.name.contains("SoundSync", ignoreCase = true) && it.name.endsWith(".apk", ignoreCase = true)
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        if (exactMatch != null) return exactMatch
+        return assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
     }
 
     /**
@@ -554,13 +369,5 @@ object UpdateManager {
     fun extractSha256Hex(text: String): String {
         val match = Regex("""([a-fA-F0-9]{64})""").find(text)
         return match?.value?.lowercase(Locale.US) ?: ""
-    }
-
-    private fun getUpdatesDirectory(context: Context): File {
-        val dir = File(context.filesDir, "updates")
-        if (!dir.exists()) {
-            dir.mkdirs()
-        }
-        return dir
     }
 }

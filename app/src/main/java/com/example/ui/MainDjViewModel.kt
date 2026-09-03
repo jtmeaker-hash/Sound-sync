@@ -66,8 +66,7 @@ enum class DjTab(val title: String, val iconName: String) {
     LOCAL("Local", "folder"),
     FINDS("Finds", "bookmark"),
     STREAMING("Streaming", "cloud"),
-    SPECTROGRAM("Spectrogram", "graphic_eq"),
-    OPERATIONS("Settings", "settings")
+    SPECTROGRAM("Spectrogram", "graphic_eq")
 }
 
 enum class RepeatMode {
@@ -960,17 +959,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         UpdateManager.checkForUpdates(app, isManual = isManual)
     }
 
-    fun startUpdateDownload(info: UpdateInfo) {
-        val app = getApplication<Application>()
-        UpdateManager.startDownload(app, info)
+    fun prepareUpdate(info: UpdateInfo) {
+        UpdateManager.prepareUpdate(info)
     }
 
-    fun cancelUpdateDownload() {
-        UpdateManager.cancelDownload()
+    fun cancelPrepareUpdate(info: UpdateInfo? = null) {
+        UpdateManager.cancelPrepareUpdate(info)
     }
 
-    fun installUpdateApk(activity: Activity, apkFile: java.io.File, info: UpdateInfo?) {
-        UpdateManager.installApk(activity, apkFile, info)
+    fun openReleaseAndUninstall(context: Context): Boolean {
+        return UpdateManager.openReleaseAndUninstall(context)
     }
 
     fun dismissUpdateDialog(tagName: String? = null) {
@@ -980,10 +978,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun setAutoUpdateCheckEnabled(enabled: Boolean) {
         val app = getApplication<Application>()
         UpdateManager.setAutoCheckEnabled(app, enabled)
-    }
-
-    fun resumePendingUpdateInstall(activity: Activity) {
-        UpdateManager.resumePendingInstall(activity)
     }
 
     private fun observeBackgroundScanner() {

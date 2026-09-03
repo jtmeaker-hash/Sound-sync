@@ -45,6 +45,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.audio.WaveformData
@@ -104,6 +105,7 @@ fun DjMiniPlayer(
     Card(
         modifier = modifier
             .fillMaxWidth()
+            .height(72.dp)
             .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
             .clickable { onOpenNowPlaying() }
             .testTag("dj_mini_player"),
@@ -111,7 +113,11 @@ fun DjMiniPlayer(
         colors = CardDefaults.cardColors(containerColor = DjSurfaceElevated),
         border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
     ) {
-        Column {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(72.dp)
+        ) {
             // Live Mini Waveform / Progress Strip
             MiniWaveformProgressStrip(
                 waveformData = waveformData,
@@ -122,15 +128,16 @@ fun DjMiniPlayer(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(18.dp)
+                    .height(16.dp)
             )
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .height(56.dp)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 // Visual Thumbnail (Waveform Icon vs Album Art Icon)
                 Surface(
@@ -138,7 +145,7 @@ fun DjMiniPlayer(
                     color = if (displayMode == NowPlayingDisplayMode.WAVEFORM) DeckACyan.copy(alpha = 0.2f) else DeckBPink.copy(alpha = 0.2f),
                     border = androidx.compose.foundation.BorderStroke(1.dp, if (displayMode == NowPlayingDisplayMode.WAVEFORM) DeckACyan else DeckBPink),
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(38.dp)
                         .clickable { onToggleDisplayMode() }
                         .testTag("mini_player_toggle_mode")
                 ) {
@@ -149,14 +156,14 @@ fun DjMiniPlayer(
                                     imageVector = Icons.Default.GraphicEq,
                                     contentDescription = "Waveform Mode Active (Tap to toggle)",
                                     tint = DeckACyan,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.Album,
                                     contentDescription = "Artwork Mode Active (Tap to toggle)",
                                     tint = DeckBPink,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
@@ -167,46 +174,55 @@ fun DjMiniPlayer(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { onOpenNowPlaying() }
+                        .clickable { onOpenNowPlaying() },
+                    verticalArrangement = Arrangement.Center
                 ) {
                     Text(
-                        text = track.title,
+                        text = track.title.ifBlank { "Unknown Title" },
                         color = TextPrimary,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
-                        maxLines = 1
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.height(1.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = track.artist,
+                            text = track.artist.ifBlank { "Unknown Artist" },
                             color = TextSecondary,
                             fontSize = 11.sp,
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
-                        Text("•", color = TextMuted, fontSize = 10.sp)
+                        Text("•", color = TextMuted, fontSize = 9.sp)
                         Text(
                             text = String.format(Locale.US, "%d:%02d / %d:%02d", curM, curS, durM, durS),
                             color = DeckACyan,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
-                        Surface(
-                            shape = RoundedCornerShape(3.dp),
-                            color = DeckBPink.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                text = if (track.hasValidKey) track.musicalKey else "—",
-                                color = DeckBPink,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
-                            )
+                        if (track.hasValidKey) {
+                            Surface(
+                                shape = RoundedCornerShape(3.dp),
+                                color = DeckBPink.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = track.camelotKey.ifBlank { track.musicalKey },
+                                    color = DeckBPink,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                                )
+                            }
                         }
                     }
                 }

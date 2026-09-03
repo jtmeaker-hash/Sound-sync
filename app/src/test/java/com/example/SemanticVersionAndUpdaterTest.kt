@@ -50,6 +50,19 @@ class SemanticVersionAndUpdaterTest {
         // Pre-release comparison (1.0.0 is newer than 1.0.0-rc1)
         val vRc = SemanticVersion.parse("1.0.0-rc.1")
         assertTrue(v100.isNewerThan(vRc))
+
+        // Multi-digit semantic version comparison (1.10.0 is newer than 1.9.0)
+        val v190 = SemanticVersion.parse("1.9.0")
+        val v1100 = SemanticVersion.parse("v1.10.0")
+        assertTrue(v1100.isNewerThan(v190))
+        assertFalse(v190.isNewerThan(v1100))
+    }
+
+    @Test
+    fun testLatestReleaseUrl() {
+        assertEquals("https://github.com/jtmeaker-hash/Sound-sync/releases/latest", UpdateManager.LATEST_RELEASE_URL)
+        assertEquals("jtmeaker-hash", UpdateManager.DEFAULT_REPO_OWNER)
+        assertEquals("Sound-sync", UpdateManager.DEFAULT_REPO_NAME)
     }
 
     @Test

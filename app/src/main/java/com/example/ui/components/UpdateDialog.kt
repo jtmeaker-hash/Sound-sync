@@ -24,8 +24,10 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.InstallMobile
 import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -69,9 +71,9 @@ import com.example.ui.theme.TextSecondary
 @Composable
 fun UpdateDialog(
     updateState: UpdateState,
-    onStartDownload: (UpdateInfo) -> Unit,
-    onCancelDownload: () -> Unit,
-    onInstallApk: (java.io.File, UpdateInfo) -> Unit,
+    onPrepareUpdate: (UpdateInfo) -> Unit,
+    onCancelPrepare: () -> Unit,
+    onConfirmUpdateAndUninstall: () -> Unit,
     onDismiss: () -> Unit,
     onRetry: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -80,35 +82,17 @@ fun UpdateDialog(
         is UpdateState.UpdateAvailable -> {
             UpdateAvailableContent(
                 info = updateState.info,
-                onUpdate = { onStartDownload(updateState.info) },
+                onUpdate = { onPrepareUpdate(updateState.info) },
                 onDismiss = onDismiss,
                 modifier = modifier
             )
         }
 
-        is UpdateState.Downloading -> {
-            UpdateDownloadingContent(
+        is UpdateState.PrepareUpdate -> {
+            PrepareUpdateConfirmationDialog(
                 info = updateState.info,
-                progress = updateState.progress,
-                onCancel = onCancelDownload,
-                modifier = modifier
-            )
-        }
-
-        is UpdateState.Downloaded -> {
-            UpdateDownloadedContent(
-                info = updateState.info,
-                apkFile = updateState.apkFile,
-                sha256Verified = updateState.sha256Verified,
-                onInstall = { onInstallApk(updateState.apkFile, updateState.info) },
-                onDismiss = onDismiss,
-                modifier = modifier
-            )
-        }
-
-        is UpdateState.Installing -> {
-            UpdateInstallingContent(
-                info = updateState.info,
+                onConfirm = onConfirmUpdateAndUninstall,
+                onCancel = onCancelPrepare,
                 modifier = modifier
             )
         }
@@ -262,12 +246,20 @@ private fun UpdateAvailableContent(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Updating preserves your local music library, database, playlists, and settings.",
-                    fontSize = 11.sp,
-                    color = NeonGreen.copy(alpha = 0.9f)
-                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    color = DjSurfaceElevated,
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                ) {
+                    Text(
+                        text = "Updating requires opening GitHub Releases in your browser and uninstalling the current version so you can cleanly install the new release.",
+                        fontSize = 11.sp,
+                        color = TextSecondary,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
             }
         },
         confirmButton = {
@@ -278,14 +270,14 @@ private fun UpdateAvailableContent(
                 modifier = Modifier.testTag("update_now_button")
             ) {
                 Icon(
-                    imageVector = Icons.Default.Download,
+                    imageVector = Icons.Default.OpenInBrowser,
                     contentDescription = null,
                     tint = DjObsidian,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Update",
+                    text = "Update SoundSync",
                     color = DjObsidian,
                     fontWeight = FontWeight.Bold
                 )
@@ -304,138 +296,43 @@ private fun UpdateAvailableContent(
     )
 }
 
+/**
+ * Step 2: Final confirmation dialog explaining procedure and explicitly warning about internal data loss.
+ */
 @Composable
-private fun UpdateDownloadingContent(
+private fun PrepareUpdateConfirmationDialog(
     info: UpdateInfo,
-    progress: com.example.model.DownloadProgress,
+    onConfirm: () -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     AlertDialog(
-        onDismissRequest = { /* Prevent dismiss during download */ },
-        properties = DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = false),
-        modifier = modifier.testTag("downloading_dialog"),
+        onDismissRequest = onCancel,
+        properties = DialogProperties(dismissOnClickOutside = false),
+        modifier = modifier.testTag("prepare_update_dialog"),
         shape = RoundedCornerShape(16.dp),
         containerColor = DjSurfaceCard,
         titleContentColor = TextPrimary,
+        textContentColor = TextSecondary,
         icon = {
             Box(
                 modifier = Modifier
                     .size(52.dp)
-                    .background(DeckACyan.copy(alpha = 0.15f), CircleShape)
-                    .border(1.5.dp, DeckACyan, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    progress = { progress.progressFraction },
-                    color = DeckACyan,
-                    trackColor = DjSurfaceBorder,
-                    modifier = Modifier.size(34.dp),
-                    strokeWidth = 3.dp
-                )
-            }
-        },
-        title = {
-            Text(
-                text = "Downloading SoundSync v${info.versionName}",
-                fontWeight = FontWeight.Bold,
-                fontSize = 17.sp,
-                color = TextPrimary,
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp)
-            ) {
-                LinearProgressIndicator(
-                    progress = { progress.progressFraction },
-                    color = DeckACyan,
-                    trackColor = DjSurfaceDark,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = progress.formattedProgress,
-                        fontSize = 12.sp,
-                        color = TextSecondary,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        text = "${progress.progressPercent}%",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = DeckACyan,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            OutlinedButton(
-                onClick = onCancel,
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonRed),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.testTag("cancel_download_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Cancel,
-                    contentDescription = null,
-                    tint = NeonRed,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Cancel")
-            }
-        }
-    )
-}
-
-@Composable
-private fun UpdateDownloadedContent(
-    info: UpdateInfo,
-    apkFile: java.io.File,
-    sha256Verified: Boolean?,
-    onInstall: () -> Unit,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(16.dp),
-        containerColor = DjSurfaceCard,
-        titleContentColor = TextPrimary,
-        modifier = modifier.testTag("downloaded_dialog"),
-        icon = {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .background(NeonGreen.copy(alpha = 0.15f), CircleShape)
-                    .border(1.5.dp, NeonGreen, CircleShape),
+                    .background(DeckBPink.copy(alpha = 0.15f), CircleShape)
+                    .border(1.5.dp, DeckBPink, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.CheckCircle,
+                    imageVector = Icons.Default.Warning,
                     contentDescription = null,
-                    tint = NeonGreen,
+                    tint = DeckBPink,
                     modifier = Modifier.size(28.dp)
                 )
             }
         },
         title = {
             Text(
-                text = "Update Ready to Install",
+                text = "Prepare update?",
                 fontWeight = FontWeight.Bold,
                 fontSize = 18.sp,
                 color = TextPrimary
@@ -445,104 +342,98 @@ private fun UpdateDownloadedContent(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 4.dp)
+                    .padding(top = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "SoundSync v${info.versionName} has been downloaded and verified.",
+                    text = "Please review the update workflow:",
                     fontSize = 13.sp,
-                    color = TextSecondary
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
                 )
 
-                if (sha256Verified == true) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Surface(
-                        color = NeonGreen.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(4.dp)
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(start = 4.dp)
+                ) {
+                    Text(
+                        text = "1. SoundSync will open the latest GitHub release page in your browser to download the new APK.",
+                        fontSize = 12.sp,
+                        color = TextSecondary,
+                        lineHeight = 16.sp
+                    )
+                    Text(
+                        text = "2. SoundSync will then ask Android to uninstall the current app installation.",
+                        fontSize = 12.sp,
+                        color = TextSecondary,
+                        lineHeight = 16.sp
+                    )
+                    Text(
+                        text = "3. Once uninstallation completes, install the downloaded APK file from your browser downloads.",
+                        fontSize = 12.sp,
+                        color = TextSecondary,
+                        lineHeight = 16.sp
+                    )
+                }
+
+                // Explicit Data Warning Box
+                Surface(
+                    color = NeonAmber.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, NeonAmber.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
-                            text = "✓ SHA-256 Checksum Verified",
+                            text = "DATA IMPACT WARNING",
+                            color = NeonAmber,
+                            fontWeight = FontWeight.Bold,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = NeonGreen,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "• Audio files on device storage (/storage/emulated/0/Music) remain completely safe.",
+                            fontSize = 11.sp,
+                            color = TextPrimary,
+                            lineHeight = 15.sp
+                        )
+                        Text(
+                            text = "• Internal app data—including app settings, local database cache, and non-exported playlists—will be cleared upon uninstall.",
+                            fontSize = 11.sp,
+                            color = NeonRed,
+                            lineHeight = 15.sp
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = "Tap Install to upgrade SoundSync. Android may ask for permission to install apps from this source.",
-                    fontSize = 12.sp,
-                    color = TextMuted
-                )
             }
         },
         confirmButton = {
             Button(
-                onClick = onInstall,
-                colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = DeckBPink),
                 shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.testTag("install_update_button")
+                modifier = Modifier.testTag("confirm_open_release_uninstall_button")
             ) {
-                Icon(
-                    imageVector = Icons.Default.InstallMobile,
-                    contentDescription = null,
-                    tint = DjObsidian,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Install Now",
+                    text = "Open Release & Uninstall",
                     color = DjObsidian,
                     fontWeight = FontWeight.Bold
                 )
             }
         },
         dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                colors = ButtonDefaults.textButtonColors(contentColor = TextSecondary)
+            OutlinedButton(
+                onClick = onCancel,
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                modifier = Modifier.testTag("cancel_prepare_update_button")
             ) {
-                Text(text = "Later")
+                Text(text = "Cancel")
             }
         }
-    )
-}
-
-@Composable
-private fun UpdateInstallingContent(
-    info: UpdateInfo,
-    modifier: Modifier = Modifier
-) {
-    AlertDialog(
-        onDismissRequest = { },
-        shape = RoundedCornerShape(16.dp),
-        containerColor = DjSurfaceCard,
-        titleContentColor = TextPrimary,
-        modifier = modifier,
-        icon = {
-            CircularProgressIndicator(
-                color = DeckACyan,
-                modifier = Modifier.size(36.dp),
-                strokeWidth = 3.dp
-            )
-        },
-        title = {
-            Text(
-                text = "Launching Installer...",
-                fontWeight = FontWeight.Bold,
-                fontSize = 17.sp,
-                color = TextPrimary
-            )
-        },
-        text = {
-            Text(
-                text = "Handing over to Android Package Installer for v${info.versionName}. Follow system prompts to complete installation.",
-                fontSize = 13.sp,
-                color = TextSecondary
-            )
-        },
-        confirmButton = { }
     )
 }
 
