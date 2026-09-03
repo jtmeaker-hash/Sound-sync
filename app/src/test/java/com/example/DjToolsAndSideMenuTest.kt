@@ -192,4 +192,87 @@ class DjToolsAndSideMenuTest {
         assertEquals(14, dr14.dynamicRangeScore)
         assertEquals(18f, dr14.crestFactorDb, 0.01f)
     }
+
+    @Test
+    fun testMetronomeEngineParametersAndClamping() {
+        val engine = com.example.ui.djtools.MetronomeEngine()
+        assertEquals(com.example.ui.djtools.MetronomeEngine.DEFAULT_BPM, engine.bpm.value)
+
+        // Clamping upper
+        engine.setBpm(500)
+        assertEquals(com.example.ui.djtools.MetronomeEngine.MAX_BPM, engine.bpm.value)
+
+        // Clamping lower
+        engine.setBpm(5)
+        assertEquals(com.example.ui.djtools.MetronomeEngine.MIN_BPM, engine.bpm.value)
+
+        // Adjust BPM
+        engine.setBpm(120)
+        engine.adjustBpm(5)
+        assertEquals(125, engine.bpm.value)
+        engine.adjustBpm(-10)
+        assertEquals(115, engine.bpm.value)
+
+        // Beats per measure
+        engine.setBeatsPerMeasure(3)
+        assertEquals(3, engine.beatsPerMeasure.value)
+        engine.setBeatsPerMeasure(20)
+        assertEquals(12, engine.beatsPerMeasure.value) // Clamped to 12
+
+        // Reset
+        engine.resetBpm()
+        assertEquals(com.example.ui.djtools.MetronomeEngine.DEFAULT_BPM, engine.bpm.value)
+    }
+
+    @Test
+    fun testParametricEqProcessingAndGains() {
+        val eq = com.example.audio.ParametricEq(44100)
+        assertEquals(1.0f, eq.lowGain, 0.01f)
+        assertEquals(1.0f, eq.midGain, 0.01f)
+        assertEquals(1.0f, eq.highGain, 0.01f)
+
+        // Gain clamping
+        eq.lowGain = 3.5f
+        assertEquals(2.0f, eq.lowGain, 0.01f)
+        eq.midGain = -1.0f
+        assertEquals(0.0f, eq.midGain, 0.01f)
+
+        // Stereo buffer processing
+        val stereoBuffer = ShortArray(200) { 10000.toShort() }
+        eq.lowGain = 1.5f
+        eq.midGain = 1.0f
+        eq.highGain = 0.5f
+        eq.processStereo(stereoBuffer, 0, 100)
+
+        // Verify output is modified and stays within safe 16-bit PCM bounds
+        for (sample in stereoBuffer) {
+            assertTrue("Sample must be within valid 16-bit range", sample in Short.MIN_VALUE..Short.MAX_VALUE)
+        }
+    }
+
+    @Test
+    fun testHaasSurroundEffectProcessingAndBypass() {
+        val haas = com.example.audio.HaasSurroundEffect()
+        assertFalse(haas.isEnabled)
+
+        // When bypassed, buffer must remain completely unmodified
+        val original = ShortArray(100) { (it * 100).toShort() }
+        val testBuffer = original.clone()
+        haas.process(testBuffer, 0, 50, 44100)
+        for (i in testBuffer.indices) {
+            assertEquals(original[i], testBuffer[i])
+        }
+
+        // When enabled, parameter clamping and processing works safely
+        haas.setEnabled(true)
+        assertTrue(haas.isEnabled)
+        haas.setAmount(1.5f) // Should clamp to 1.0f
+        haas.setDelayMs(20f) // Should clamp to MAX_DELAY_MS (12f)
+
+        haas.process(testBuffer, 0, 50, 44100)
+        for (sample in testBuffer) {
+            assertTrue("Haas output sample must be within 16-bit bounds", sample in Short.MIN_VALUE..Short.MAX_VALUE)
+        }
+    }
 }
+

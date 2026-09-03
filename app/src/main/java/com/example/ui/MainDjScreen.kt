@@ -1065,6 +1065,7 @@ private fun SideDestinationScreen(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
+    val metronomeEngine = remember { com.example.ui.djtools.MetronomeEngine() }
 
     Column(
         modifier = Modifier
@@ -1119,10 +1120,19 @@ private fun SideDestinationScreen(
         ) {
             when (destination) {
                 SideMenuDestination.Metronome -> {
-                    MetronomeTool(modifier = Modifier.fillMaxSize().padding(14.dp))
+                    MetronomeTool(
+                        engine = metronomeEngine,
+                        modifier = Modifier.fillMaxSize().padding(14.dp)
+                    )
                 }
                 SideMenuDestination.TapBpm -> {
-                    TapBpmTool(modifier = Modifier.fillMaxSize().padding(14.dp))
+                    TapBpmTool(
+                        onSyncBpm = { bpm ->
+                            metronomeEngine.setBpm(bpm.toInt())
+                            viewModel.showSnackbar("Metronome synced to ${bpm.toInt()} BPM")
+                        },
+                        modifier = Modifier.fillMaxSize().padding(14.dp)
+                    )
                 }
                 SideMenuDestination.KeyConverter -> {
                     KeyConverterTool(modifier = Modifier.fillMaxSize().padding(14.dp))

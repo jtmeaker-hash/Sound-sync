@@ -196,6 +196,11 @@ class MetronomeEngine {
     fun stop() {
         if (!isRunning.getAndSet(false)) return
         _isPlaying.value = false
+        val track = audioTrack
+        runCatching {
+            track?.pause()
+            track?.flush()
+        }
         audioThread?.interrupt()
         audioThread = null
         audioTrack = null
@@ -239,9 +244,9 @@ fun MetronomeTool(
     val currentBeat by engine.currentBeat.collectAsState()
     val beatsPerMeasure by engine.beatsPerMeasure.collectAsState()
 
-    DisposableEffect(Unit) {
+    DisposableEffect(engine) {
         onDispose {
-            // Keep running or release if dialog is dismissed
+            engine.stop()
         }
     }
 
