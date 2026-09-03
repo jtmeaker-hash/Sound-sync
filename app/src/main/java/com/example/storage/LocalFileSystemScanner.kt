@@ -294,8 +294,12 @@ object LocalFileSystemScanner {
             AudioQualityRating.TRUE_LOSSLESS
         } else if (bitrateKbps >= 320) {
             AudioQualityRating.TRUE_320
+        } else if (bitrateKbps >= 256) {
+            AudioQualityRating.TRUE_256
+        } else if (bitrateKbps > 0) {
+            AudioQualityRating.LOW_128
         } else {
-            AudioQualityRating.NEAR_320
+            AudioQualityRating.UNKNOWN_BITRATE
         }
 
         val trackId = "usb_" + java.util.UUID.nameUUIDFromBytes(path.toByteArray()).toString()

@@ -277,6 +277,8 @@ private fun AlbumTrackRow(
         val min = track.durationSeconds / 60
         val sec = track.durationSeconds % 60
         String.format("%d:%02d", min, sec)
+    }
+
     val isAvailable = track.isAvailable
 
     Surface(
