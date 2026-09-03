@@ -141,8 +141,10 @@ class MusicBrainzClient(
 
             // Priority 3: Title & Artist Lucene search
             if (recording == null) {
-                val cleanTitle = cleanSearchTerm(identity.title)
-                val cleanArtist = cleanSearchTerm(identity.artist)
+                val (extractedTitle, extractedArtist) = extractTitleAndArtist(identity.title, identity.artist)
+                val cleanTitle = cleanSearchTerm(extractedTitle)
+                val cleanArtist = cleanSearchTerm(extractedArtist)
+                val searchIdentity = identity.copy(title = cleanTitle, artist = cleanArtist)
                 var searchCandidates = if (cleanTitle.isNotBlank()) {
                     val strictQuery = buildQuery(cleanTitle, cleanArtist)
                     searchRecordings(strictQuery, 25)
@@ -158,7 +160,7 @@ class MusicBrainzClient(
                     searchCandidates = searchRecordings(fallbackQuery, 25)
                 }
 
-                recording = selectBestCandidate(identity, searchCandidates)
+                recording = selectBestCandidate(searchIdentity, searchCandidates)
             }
 
             if (recording != null) cache.put(cacheKey, recording)
@@ -200,9 +202,11 @@ class MusicBrainzClient(
     }
 
     private fun buildQuery(title: String, artist: String): String = buildString {
-        append("recording:\"").append(escape(title)).append("\"")
+        val sanitizedTitle = sanitizeLuceneQuery(title)
+        append("recording:\"").append(escape(sanitizedTitle)).append("\"")
         if (artist.isNotBlank() && !artist.equals("Unknown Artist", ignoreCase = true) && !artist.equals("Various Artists", ignoreCase = true)) {
-            append(" AND artist:\"").append(escape(artist)).append("\"")
+            val sanitizedArtist = sanitizeLuceneQuery(artist)
+            append(" AND artist:\"").append(escape(sanitizedArtist)).append("\"")
         }
     }
 
@@ -214,49 +218,109 @@ class MusicBrainzClient(
     }
 
     private fun matchesIdentity(identity: LocalTrackIdentity, candidate: MusicBrainzRecording, requireStrongIdentity: Boolean): Boolean {
+        if (!identity.recordingId.isNullOrBlank() && identity.recordingId == candidate.id) return true
         if (identity.isrc != null && candidate.isrcs.any { it.equals(identity.isrc, true) }) return true
+        val titleSim = textSimilarity(identity.title, candidate.title)
+        if (titleSim < 0.65) return false
         val score = score(identity, candidate)
-        return if (requireStrongIdentity) score >= 0.9 else score >= 0.62
+        return if (requireStrongIdentity) score >= 0.85 else score >= MIN_MATCH_SCORE
     }
 
     private fun score(identity: LocalTrackIdentity, candidate: MusicBrainzRecording): Double {
-        var score = 0.0
-        if (identity.recordingId == candidate.id) score += 1.0
-        if (identity.isrc != null && candidate.isrcs.any { it.equals(identity.isrc, true) }) score += 1.0
-        score += textSimilarity(identity.title, candidate.title) * 0.35
-        score += textSimilarity(identity.artist, candidate.artistCredits.joinToString(" ") { it.name }) * 0.25
+        val isExactMbid = !identity.recordingId.isNullOrBlank() && identity.recordingId == candidate.id
+        val isExactIsrc = !identity.isrc.isNullOrBlank() && candidate.isrcs.any { it.equals(identity.isrc, true) }
+
+        if (isExactMbid) return 1.0
+        if (isExactIsrc) return 0.98
+
+        val titleSim = textSimilarity(identity.title, candidate.title)
+        // Hard disqualification: Songs with different titles are NEVER a match
+        if (titleSim < 0.65) {
+            return -1.0
+        }
+
+        var score = titleSim * 0.50
+
+        val hasIdentityArtist = identity.artist.isNotBlank() && !identity.artist.equals("Unknown Artist", ignoreCase = true)
+        if (hasIdentityArtist) {
+            val candidateArtist = candidate.artistCredits.joinToString(" ") { it.name }
+            val artistSim = textSimilarity(identity.artist, candidateArtist)
+            if (artistSim < 0.35) {
+                // Different artist - reject candidate
+                return -1.0
+            }
+            score += artistSim * 0.30
+        }
+
         val duration = candidate.lengthMs?.let { it / 1000.0 }
         if (duration != null && identity.durationSeconds > 0) {
             val difference = abs(identity.durationSeconds - duration)
             score += when {
-                difference <= 1 -> 0.30
-                difference <= 3 -> 0.20
-                difference <= 8 -> 0.08
-                else -> -0.30
+                difference <= 1 -> 0.20
+                difference <= 3 -> 0.15
+                difference <= 8 -> 0.05
+                difference <= 15 -> -0.10
+                else -> -0.35
             }
         }
+
         val requestedVersion = versionTokens(identity.title)
         val candidateVersion = versionTokens("${candidate.title} ${candidate.disambiguation.orEmpty()}")
-        if (requestedVersion == candidateVersion) score += 0.20
-        else if (requestedVersion.isNotEmpty() || candidateVersion.isNotEmpty()) score -= 0.35
+        if (requestedVersion.isNotEmpty() && requestedVersion == candidateVersion) {
+            score += 0.15
+        } else if (requestedVersion != candidateVersion && (requestedVersion.isNotEmpty() || candidateVersion.isNotEmpty())) {
+            // Version mismatch (e.g. remix vs original)
+            score -= 0.40
+        }
+
         return score
     }
 
     companion object {
-        private const val MIN_MATCH_SCORE = 0.62
+        private const val MIN_MATCH_SCORE = 0.70
+        private val LUCENE_SPECIAL = Regex("[+\\-&|!(){}\\[\\]^\"~*?:\\\\/]")
         private fun searchKey(identity: LocalTrackIdentity) = listOf(identity.artist, identity.title, identity.album, identity.durationSeconds).joinToString("|").lowercase(Locale.ROOT)
         private fun escape(value: String?) = value.orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")
         private fun urlEncode(value: String) = URLEncoder.encode(value, StandardCharsets.UTF_8.name())
-        private fun textSimilarity(a: String, b: String): Double {
+        
+        fun sanitizeLuceneQuery(value: String): String {
+            return value.replace(LUCENE_SPECIAL, " ").replace(Regex("\\s+"), " ").trim()
+        }
+
+        fun textSimilarity(a: String, b: String): Double {
             val left = normalize(a)
             val right = normalize(b)
             if (left.isBlank() || right.isBlank()) return 0.0
             if (left == right) return 1.0
-            val leftTokens = left.split(' ').toSet()
-            val rightTokens = right.split(' ').toSet()
-            return leftTokens.intersect(rightTokens).size.toDouble() / max(leftTokens.size, rightTokens.size)
+
+            val leftCore = stripFeaturingAndVersion(left)
+            val rightCore = stripFeaturingAndVersion(right)
+            if (leftCore == rightCore && leftCore.isNotBlank()) return 0.95
+
+            val leftTokens = left.split(' ').filter { it.isNotBlank() }.toSet()
+            val rightTokens = right.split(' ').filter { it.isNotBlank() }.toSet()
+            if (leftTokens.isEmpty() || rightTokens.isEmpty()) return 0.0
+
+            val intersect = leftTokens.intersect(rightTokens).size
+            val jaccard = intersect.toDouble() / (leftTokens.size + rightTokens.size - intersect)
+            val overlap = intersect.toDouble() / min(leftTokens.size, rightTokens.size)
+
+            if (overlap >= 1.0) {
+                return (0.75 + 0.25 * jaccard).coerceAtMost(0.95)
+            }
+            return (jaccard + overlap) / 2.0
         }
+
         private fun normalize(value: String) = value.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+
+        private fun stripFeaturingAndVersion(value: String): String {
+            return value
+                .replace(Regex("(?i)\\s*[\\[(](feat\\.?|featuring).*?[\\])]"), "")
+                .replace(Regex("(?i)\\s+(feat\\.?|ft\\.?)\\s+.*"), "")
+                .replace(Regex("(?i)\\s*[\\[(](original mix|radio edit|extended mix|club mix|remix|vip|dub|instrumental|live|acoustic|remaster).*?[\\])]"), "")
+                .trim()
+        }
+
         private fun versionTokens(value: String): Set<String> = Regex("(?i)original mix|radio edit|extended mix|club mix|remix|vip|dub|instrumental|live|acoustic|remaster")
             .findAll(value).map { it.value.lowercase(Locale.ROOT) }.toSet()
 
@@ -266,6 +330,20 @@ class MusicBrainzClient(
                 .replace(Regex("^\\[?[0-9]+\\]?[.\\-\\s]+"), "")
                 .replace(Regex("\\[(320k|FLAC|HQ|Official|HD|HQ Rip)\\]", RegexOption.IGNORE_CASE), "")
                 .trim()
+        }
+
+        fun extractTitleAndArtist(rawTitle: String, rawArtist: String): Pair<String, String> {
+            val cleanT = cleanSearchTerm(rawTitle)
+            val cleanA = cleanSearchTerm(rawArtist)
+            if (cleanT.contains(" - ")) {
+                val parts = cleanT.split(" - ", limit = 2)
+                val pArtist = parts[0].trim()
+                val pTitle = parts[1].trim()
+                if (cleanA.isBlank() || cleanA.equals("Unknown Artist", ignoreCase = true) || cleanA.equals(pArtist, ignoreCase = true)) {
+                    return Pair(pTitle, pArtist)
+                }
+            }
+            return Pair(cleanT, cleanA)
         }
 
         fun parseRecordings(json: String): List<MusicBrainzRecording> {

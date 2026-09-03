@@ -2402,10 +2402,32 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun applyEnrichedMetadata(track: Track, enriched: com.example.metadata.EnrichedTrackMetadata): Track {
+        val effectiveTitle = if (com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle(track.title)) {
+            if (track.title.equals(enriched.title, ignoreCase = true) && enriched.title.isNotBlank()) {
+                enriched.title
+            } else {
+                track.title
+            }
+        } else {
+            enriched.title.ifBlank { track.title }
+        }
+
+        val effectiveArtist = if (com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalArtist(track.artist)) {
+            track.artist
+        } else {
+            enriched.artist.ifBlank { track.artist }
+        }
+
+        val effectiveAlbum = if (com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalAlbum(track.album)) {
+            track.album
+        } else {
+            enriched.album.ifBlank { track.album }
+        }
+
         return track.copy(
-            title = enriched.title.ifBlank { track.title },
-            artist = enriched.artist.ifBlank { track.artist },
-            album = enriched.album.ifBlank { track.album },
+            title = effectiveTitle,
+            artist = effectiveArtist,
+            album = effectiveAlbum,
             albumArtist = enriched.albumArtist.ifBlank { track.albumArtist },
             genre = enriched.genre ?: track.genre,
             releaseDate = enriched.releaseDate ?: track.releaseDate,

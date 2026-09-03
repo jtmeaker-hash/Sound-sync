@@ -176,4 +176,51 @@ class MusicBrainzClientTest {
         assertEquals("Technologic", MusicBrainzClient.cleanSearchTerm("Technologic [320k].mp3"))
         assertEquals("Aerodynamic", MusicBrainzClient.cleanSearchTerm("[02] - Aerodynamic.wav"))
     }
+
+    @Test
+    fun `rejects candidate when title does not match even if artist and duration match`() = runTest {
+        val transport = object : MusicBrainzTransport {
+            override suspend fun get(pathAndQuery: String): String {
+                // Return a completely different song by the same artist with matching duration
+                return """
+                    {
+                      "recordings": [{
+                        "id": "wrong-rec-id",
+                        "title": "Aerodynamic",
+                        "length": 320000,
+                        "artist-credit": [{"name": "Daft Punk", "artist": {"id": "dp-id", "name": "Daft Punk"}}]
+                      }]
+                    }
+                """.trimIndent()
+            }
+        }
+        val client = MusicBrainzClient(transport, InMemoryMusicBrainzCache())
+        val identity = LocalTrackIdentity(title = "One More Time", artist = "Daft Punk", album = "Discovery", durationSeconds = 320)
+        val result = client.findRecording(identity)
+        // Aerodynamic must NEVER match One More Time
+        assertNull(result)
+    }
+
+    @Test
+    fun `extractTitleAndArtist properly extracts artist from hyphenated title`() {
+        val (title, artist) = MusicBrainzClient.extractTitleAndArtist("Daft Punk - One More Time", "")
+        assertEquals("One More Time", title)
+        assertEquals("Daft Punk", artist)
+
+        val (title2, artist2) = MusicBrainzClient.extractTitleAndArtist("One More Time", "Daft Punk")
+        assertEquals("One More Time", title2)
+        assertEquals("Daft Punk", artist2)
+    }
+
+    @Test
+    fun `shouldRetainOriginalTitle protects user titles from being overwritten`() {
+        assertTrue(com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle("One More Time"))
+        assertTrue(com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle("My Custom DJ Edit"))
+        assertFalse(com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle("Unknown"))
+        assertFalse(com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle("Unknown Title"))
+        assertFalse(com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle("Track 01"))
+        assertFalse(com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle("media_12345"))
+        assertFalse(com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle("saf_99999"))
+        assertFalse(com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle(""))
+    }
 }

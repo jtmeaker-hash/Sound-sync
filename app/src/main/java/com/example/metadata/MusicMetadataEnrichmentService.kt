@@ -48,7 +48,29 @@ class MusicMetadataEnrichmentService(
                     .thenBy { it.date.orEmpty() }
                     .thenBy { it.title }
             ).firstOrNull()
-        val artist = recording?.artistCredits?.joinToString(", ") { it.name }.orEmpty().ifBlank { track.artist }
+        val artistCreditsStr = recording?.artistCredits?.joinToString(", ") { it.name }.orEmpty()
+
+        val resolvedTitle = if (shouldRetainOriginalTitle(track.title)) {
+            if (recording != null && track.title.equals(recording.title, ignoreCase = true) && recording.title.isNotBlank()) {
+                recording.title
+            } else {
+                track.title
+            }
+        } else {
+            recording?.title?.takeIf(String::isNotBlank) ?: track.title
+        }
+
+        val resolvedArtist = if (shouldRetainOriginalArtist(track.artist)) {
+            track.artist
+        } else {
+            artistCreditsStr.ifBlank { track.artist }
+        }
+
+        val resolvedAlbum = if (shouldRetainOriginalAlbum(track.album)) {
+            track.album
+        } else {
+            selectedRelease?.title?.ifBlank { track.album } ?: track.album
+        }
 
         val artworkUrl = selectedRelease?.id?.let { "https://coverartarchive.org/release/$it/front-500" }
             ?: selectedRelease?.releaseGroupId?.let { "https://coverartarchive.org/release-group/$it/front-500" }
@@ -60,11 +82,11 @@ class MusicMetadataEnrichmentService(
             musicBrainzReleaseId = selectedRelease?.id ?: track.musicBrainzReleaseId,
             musicBrainzReleaseGroupId = selectedRelease?.releaseGroupId ?: track.musicBrainzReleaseGroupId,
             isrc = recording?.isrcs?.firstOrNull() ?: track.isrc,
-            title = recording?.title?.ifBlank { track.title } ?: track.title,
-            artist = artist,
-            artistCredits = artist,
-            album = selectedRelease?.title?.ifBlank { track.album } ?: track.album,
-            albumArtist = artist,
+            title = resolvedTitle,
+            artist = resolvedArtist,
+            artistCredits = artistCreditsStr.ifBlank { resolvedArtist },
+            album = resolvedAlbum,
+            albumArtist = resolvedArtist,
             genre = recording?.tags?.firstOrNull() ?: track.genre.takeIf { it.isNotBlank() },
             tags = recording?.tags.orEmpty(),
             releaseDate = selectedRelease?.date ?: track.releaseDate,
@@ -76,7 +98,7 @@ class MusicMetadataEnrichmentService(
             releaseCountry = selectedRelease?.country,
             releaseStatus = selectedRelease?.status,
             disambiguation = recording?.disambiguation,
-            artworkUrl = selectedRelease?.id?.let { "https://coverartarchive.org/release/$it/front-500" } ?: track.artworkUrl,
+            artworkUrl = artworkUrl,
             // BPM/key are deliberately sourced only from local analysis or existing persisted values.
             bpm = audioBpm ?: track.bpm.takeIf { it in 30.0..300.0 },
             bpmConfidence = if (audioBpm != null) audio.bpmConfidence else track.bpmConfidence,
@@ -90,5 +112,31 @@ class MusicMetadataEnrichmentService(
             musicBrainzConfidence = if (recording != null) 1.0 else track.musicBrainzMatchConfidence,
             musicBrainzLastChecked = if (recording != null) System.currentTimeMillis() else track.musicBrainzLastChecked
         )
+    }
+
+    companion object {
+        fun shouldRetainOriginalTitle(title: String): Boolean {
+            val trimmed = title.trim()
+            if (trimmed.isBlank()) return false
+            val lower = trimmed.lowercase(java.util.Locale.ROOT)
+            if (lower == "unknown" || lower == "unknown title" || lower == "untitled" || lower == "<unknown>") return false
+            if (lower.startsWith("media_") || lower.startsWith("saf_")) return false
+            if (lower.matches(Regex("""^(track\s*)?\d+$"""))) return false
+            return true
+        }
+
+        fun shouldRetainOriginalArtist(artist: String): Boolean {
+            val trimmed = artist.trim()
+            if (trimmed.isBlank()) return false
+            val lower = trimmed.lowercase(java.util.Locale.ROOT)
+            return lower != "unknown" && lower != "unknown artist" && lower != "<unknown>" && lower != "various artists"
+        }
+
+        fun shouldRetainOriginalAlbum(album: String): Boolean {
+            val trimmed = album.trim()
+            if (trimmed.isBlank()) return false
+            val lower = trimmed.lowercase(java.util.Locale.ROOT)
+            return lower != "single" && lower != "unknown" && lower != "unknown album" && lower != "<unknown>"
+        }
     }
 }
