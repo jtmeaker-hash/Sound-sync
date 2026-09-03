@@ -14,9 +14,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SourceFolderEntity::class,
         PlaylistEntity::class,
         PlaylistTrackEntity::class,
-        SongFindEntity::class
+        SongFindEntity::class,
+        PlaybackSessionEntity::class,
+        BulkOperationHistoryEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -24,6 +26,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sourceFolderDao(): SourceFolderDao
     abstract fun playlistDao(): PlaylistDao
     abstract fun songFindDao(): SongFindDao
+    abstract fun playbackSessionDao(): PlaybackSessionDao
+    abstract fun bulkOperationHistoryDao(): BulkOperationHistoryDao
 
     companion object {
         @Volatile
@@ -159,6 +163,62 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. Create playback_sessions table
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `playback_sessions` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `trackId` TEXT NOT NULL,
+                        `startedAt` INTEGER NOT NULL,
+                        `endedAt` INTEGER NOT NULL,
+                        `listenedDurationMs` INTEGER NOT NULL,
+                        `trackDurationMs` INTEGER NOT NULL,
+                        `completed` INTEGER NOT NULL,
+                        `skipped` INTEGER NOT NULL,
+                        `playbackContext` TEXT NOT NULL,
+                        `playlistId` TEXT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playback_sessions_trackId` ON `playback_sessions` (`trackId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playback_sessions_startedAt` ON `playback_sessions` (`startedAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playback_sessions_completed` ON `playback_sessions` (`completed`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playback_sessions_skipped` ON `playback_sessions` (`skipped`)")
+
+                // 2. Create bulk_operation_history table
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `bulk_operation_history` (
+                        `id` TEXT PRIMARY KEY NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        `operationType` TEXT NOT NULL,
+                        `summary` TEXT NOT NULL,
+                        `affectedTracksCount` INTEGER NOT NULL,
+                        `undoPayloadJson` TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
+
+                // 3. Add rating, customTags, notes, composer, isManualBpm, isManualKey columns to tracks table
+                val newTrackColumns = listOf(
+                    "rating INTEGER NOT NULL DEFAULT 0",
+                    "customTags TEXT NOT NULL DEFAULT ''",
+                    "notes TEXT NOT NULL DEFAULT ''",
+                    "composer TEXT NOT NULL DEFAULT ''",
+                    "isManualBpm INTEGER NOT NULL DEFAULT 0",
+                    "isManualKey INTEGER NOT NULL DEFAULT 0"
+                )
+                newTrackColumns.forEach { definition ->
+                    val colName = definition.substringBefore(' ')
+                    try {
+                        db.execSQL("ALTER TABLE tracks ADD COLUMN $colName $definition")
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -166,7 +226,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "soundsync_dj_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance

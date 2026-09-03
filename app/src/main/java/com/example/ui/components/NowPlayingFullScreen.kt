@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
@@ -199,18 +200,33 @@ fun NowPlayingFullScreen(
                         modifier = Modifier.testTag("now_playing_header_title")
                     )
 
-                    IconButton(
-                        onClick = onOpenSettings,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .testTag("now_playing_settings_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = "Now Playing Settings",
-                            tint = TextSecondary,
-                            modifier = Modifier.size(22.dp)
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { onOpenProperties(track) },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .testTag("now_playing_inspector_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Track Inspector",
+                                tint = DeckACyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onOpenSettings,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .testTag("now_playing_settings_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = "Now Playing Settings",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
                 }
             }

@@ -203,7 +203,8 @@ fun LocalLibraryScreen(
                             onQueueTrack = { track, playNext -> viewModel.queueTrack(track, playNext) },
                             onInspectProperties = { track -> viewModel.openTrackProperties(track) },
                             onInspectSpectrogram = { track -> viewModel.inspectTrackSpectrogram(track, showTab = true) },
-                            onStartScan = { viewModel.scanDeviceMediaStore() }
+                            onStartScan = { viewModel.scanDeviceMediaStore() },
+                            onBulkEditTracks = { tracks -> viewModel.openBulkEditor(tracks) }
                         )
                     }
                     LocalCategory.ALBUMS -> {

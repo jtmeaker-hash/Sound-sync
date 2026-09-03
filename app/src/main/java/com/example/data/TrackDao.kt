@@ -31,11 +31,20 @@ interface TrackDao {
     @Update
     suspend fun updateTrack(track: TrackEntity)
 
+    @Update
+    suspend fun updateTracks(tracks: List<TrackEntity>)
+
     @Delete
     suspend fun deleteTrack(track: TrackEntity)
 
     @Query("DELETE FROM tracks WHERE id = :id")
     suspend fun deleteTrackById(id: String)
+
+    @Query("DELETE FROM tracks WHERE id IN (:ids)")
+    suspend fun deleteTracksByIds(ids: List<String>)
+
+    @Query("SELECT * FROM tracks WHERE id IN (:ids)")
+    suspend fun getTracksByIds(ids: List<String>): List<TrackEntity>
 
     @Query("DELETE FROM tracks")
     suspend fun deleteAllTracks()

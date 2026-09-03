@@ -43,6 +43,7 @@ class MediaPlaybackService : Service() {
     private lateinit var mediaSession: MediaSessionCompat
     private lateinit var notificationManager: NotificationManager
     private lateinit var audioEngine: DjAudioEngine
+    private lateinit var statsTracker: PlaybackStatsTracker
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
     private var progressJob: Job? = null
@@ -71,6 +72,7 @@ class MediaPlaybackService : Service() {
         createNotificationChannel()
 
         audioEngine = DjAudioEngine.getInstance(applicationContext)
+        statsTracker = PlaybackStatsTracker.getInstance(applicationContext)
 
         val mediaButtonReceiver = ComponentName(this, MediaButtonReceiver::class.java)
         mediaSession = MediaSessionCompat(this, TAG, mediaButtonReceiver, null).apply {
@@ -154,8 +156,10 @@ class MediaPlaybackService : Service() {
         serviceScope.launch {
             audioEngine.currentTrack.collectLatest { track ->
                 if (track != null) {
+                    statsTracker.onTrackStarted(track)
                     updateTrackMetadata(track)
                 } else {
+                    statsTracker.onPlaybackStopped()
                     mediaSession.setMetadata(null)
                     if (!audioEngine.isPlaying.value) {
                         stopForegroundService()
@@ -168,6 +172,7 @@ class MediaPlaybackService : Service() {
         // transport state changes; position updates are kept in MediaSession only.
         serviceScope.launch {
             audioEngine.isPlaying.collectLatest { isPlaying ->
+                statsTracker.onPlaybackStateChanged(isPlaying, audioEngine.currentPositionMs.value)
                 updatePlaybackState(isPlaying, audioEngine.currentPositionMs.value)
                 val track = audioEngine.currentTrack.value
                 if (track != null && lastNotifiedPlaying != isPlaying) {
@@ -194,6 +199,7 @@ class MediaPlaybackService : Service() {
         // 3. Observe playback position for lock screen / system media scrubber
         serviceScope.launch {
             audioEngine.currentPositionMs.collectLatest { positionMs ->
+                statsTracker.onTrackPositionTick(positionMs)
                 updatePlaybackState(audioEngine.isPlaying.value, positionMs)
             }
         }
@@ -432,6 +438,9 @@ class MediaPlaybackService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "MediaPlaybackService onDestroy")
+        try {
+            statsTracker.onPlaybackStopped()
+        } catch (_: Exception) {}
         try {
             unregisterReceiver(noisyReceiver)
         } catch (ignored: Exception) {}

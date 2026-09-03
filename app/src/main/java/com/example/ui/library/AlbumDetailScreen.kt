@@ -435,8 +435,8 @@ private fun AlbumTrackRow(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Track Details", color = TextPrimary) },
-                        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary) },
+                        text = { Text("Track Inspector", color = DeckACyan, fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = DeckACyan) },
                         onClick = {
                             showMenu = false
                             onInspectProperties()

@@ -146,8 +146,20 @@ data class Track(
     val musicBrainzLastChecked: Long? = null,
     val artworkUrl: String? = null,
     val storageRelativePath: String = "",
-    val contentFingerprint: String = ""
+    val contentFingerprint: String = "",
+    val rating: Int = 0, // 0 = unrated, 1..5 stars
+    val customTags: String = "", // Comma-separated DJ tags (Peak Time, Vocal, Weapon, etc.)
+    val notes: String = "", // DJ performance & mixing notes
+    val composer: String = "",
+    val isManualBpm: Boolean = false,
+    val isManualKey: Boolean = false
 ) {
+    val tagsList: List<String>
+        get() = customTags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+
+    val isLossless: Boolean
+        get() = qualityRating.isLossless || format.equals("FLAC", true) || format.equals("WAV", true) || format.equals("AIFF", true)
+
     val hasValidBpm: Boolean
         get() = bpm > 30.0 && bpm < 300.0
 

@@ -12,6 +12,7 @@ sealed class SideMenuDestination(val title: String) {
     object HaasSurround : SideMenuDestination("Haas Surround")
 
     // Settings
+    object ListeningStats : SideMenuDestination("Listening Statistics")
     object PlaybackSettings : SideMenuDestination("Playback & Audio")
     object LibrarySettings : SideMenuDestination("Library & Storage")
     object MusicBrainzSettings : SideMenuDestination("MusicBrainz & Metadata")

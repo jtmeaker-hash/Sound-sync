@@ -1059,6 +1059,7 @@ class DjAudioEngine(private val context: Context) {
                     decoderShouldPause = true
                     runCatching { if (at.playState == AudioTrack.PLAYSTATE_PLAYING) at.pause() }
                     publishThrottledPosition(durationMs, durationMs, force = true)
+                    runCatching { com.example.service.PlaybackStatsTracker.getInstance(context).onTrackCompletedNormally() }
                     onNextTrackCallback?.invoke()
                     break
                 }

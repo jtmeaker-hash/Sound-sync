@@ -62,7 +62,13 @@ data class TrackEntity(
     val musicBrainzLastChecked: Long? = null,
     val artworkUrl: String? = null,
     val storageRelativePath: String = "",
-    val contentFingerprint: String = ""
+    val contentFingerprint: String = "",
+    val rating: Int = 0,
+    val customTags: String = "",
+    val notes: String = "",
+    val composer: String = "",
+    val isManualBpm: Boolean = false,
+    val isManualKey: Boolean = false
 ) {
     fun toTrack(): Track {
         val syncEnum = try { SyncState.valueOf(syncState) } catch (e: Exception) { SyncState.LOCAL_ONLY }
@@ -137,7 +143,13 @@ data class TrackEntity(
             musicBrainzLastChecked = musicBrainzLastChecked,
             artworkUrl = artworkUrl,
             storageRelativePath = resolvedStoragePath,
-            contentFingerprint = contentFingerprint
+            contentFingerprint = contentFingerprint,
+            rating = rating,
+            customTags = customTags,
+            notes = notes,
+            composer = composer,
+            isManualBpm = isManualBpm,
+            isManualKey = isManualKey
         )
     }
 
@@ -189,7 +201,13 @@ data class TrackEntity(
                 musicBrainzLastChecked = track.musicBrainzLastChecked,
                 artworkUrl = track.artworkUrl,
                 storageRelativePath = track.storageRelativePath,
-                contentFingerprint = track.contentFingerprint
+                contentFingerprint = track.contentFingerprint,
+                rating = track.rating,
+                customTags = track.customTags,
+                notes = track.notes,
+                composer = track.composer,
+                isManualBpm = track.isManualBpm,
+                isManualKey = track.isManualKey
             )
         }
     }

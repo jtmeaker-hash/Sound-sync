@@ -22,7 +22,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GraphicEq
@@ -38,6 +40,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -49,6 +53,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -101,11 +106,13 @@ fun SongsScreen(
     onQueueTrack: (Track, Boolean) -> Unit,
     onInspectProperties: (Track) -> Unit,
     onInspectSpectrogram: (Track) -> Unit,
-    onStartScan: () -> Unit
+    onStartScan: () -> Unit,
+    onBulkEditTracks: ((List<Track>) -> Unit)? = null
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SongSortMode.TITLE_ASC) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var selectedTrackIds by remember { mutableStateOf(setOf<String>()) }
 
     val filteredTracks = remember(tracks, searchQuery, sortMode, hideUnavailableTracks) {
         val q = searchQuery.trim().lowercase()
@@ -133,6 +140,71 @@ fun SongsScreen(
             .fillMaxSize()
             .testTag("songs_screen")
     ) {
+        // Multi-Select Header Toolbar
+        if (selectedTrackIds.isNotEmpty()) {
+            Surface(
+                color = DjSurfaceElevated,
+                border = androidx.compose.foundation.BorderStroke(1.dp, DeckACyan),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        IconButton(onClick = { selectedTrackIds = emptySet() }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear Selection", tint = TextPrimary, modifier = Modifier.size(18.dp))
+                        }
+                        Text(
+                            text = "${selectedTrackIds.size} selected",
+                            color = DeckACyan,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(
+                            onClick = {
+                                if (selectedTrackIds.size == filteredTracks.size) {
+                                    selectedTrackIds = emptySet()
+                                } else {
+                                    selectedTrackIds = filteredTracks.map { it.id }.toSet()
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = if (selectedTrackIds.size == filteredTracks.size) "Deselect All" else "Select All",
+                                fontSize = 11.sp,
+                                color = TextPrimary
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                val selectedList = filteredTracks.filter { it.id in selectedTrackIds }
+                                onBulkEditTracks?.invoke(selectedList)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bulk Edit", color = DjObsidian, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
         // Search & Filter Header
         Row(
             modifier = Modifier
@@ -363,11 +435,27 @@ fun SongsScreen(
                 contentPadding = PaddingValues(bottom = 96.dp)
             ) {
                 items(filteredTracks, key = { it.id }) { track ->
+                    val isSelected = selectedTrackIds.contains(track.id)
                     SongTrackRow(
                         track = track,
                         isCurrent = currentPlayingTrack?.id == track.id,
                         isPlaying = isPlaying && currentPlayingTrack?.id == track.id,
-                        onClick = { onPlayTrack(track) },
+                        isSelectionMode = selectedTrackIds.isNotEmpty(),
+                        isSelected = isSelected,
+                        onToggleSelection = {
+                            selectedTrackIds = if (isSelected) {
+                                selectedTrackIds - track.id
+                            } else {
+                                selectedTrackIds + track.id
+                            }
+                        },
+                        onClick = {
+                            if (selectedTrackIds.isNotEmpty()) {
+                                selectedTrackIds = if (isSelected) selectedTrackIds - track.id else selectedTrackIds + track.id
+                            } else {
+                                onPlayTrack(track)
+                            }
+                        },
                         onAddToPlaylist = { onAddToPlaylist(track) },
                         onQueueTrack = { playNext -> onQueueTrack(track, playNext) },
                         onInspectProperties = { onInspectProperties(track) },
@@ -385,6 +473,9 @@ fun SongTrackRow(
     track: Track,
     isCurrent: Boolean,
     isPlaying: Boolean,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelection: () -> Unit = {},
     onClick: () -> Unit,
     onAddToPlaylist: () -> Unit,
     onQueueTrack: (playNext: Boolean) -> Unit,
@@ -403,16 +494,26 @@ fun SongTrackRow(
 
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = if (isCurrent) DeckACyan.copy(alpha = 0.08f) else DjSurfaceDark.copy(alpha = if (isAvailable) 1f else 0.45f),
+        color = if (isSelected) DeckACyan.copy(alpha = 0.15f)
+                else if (isCurrent) DeckACyan.copy(alpha = 0.08f)
+                else DjSurfaceDark.copy(alpha = if (isAvailable) 1f else 0.45f),
         border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (isCurrent) DeckACyan.copy(alpha = 0.5f) else DjSurfaceBorder.copy(alpha = if (isAvailable) 0.5f else 0.25f)
+            if (isSelected) 1.5.dp else 1.dp,
+            if (isSelected) DeckACyan
+            else if (isCurrent) DeckACyan.copy(alpha = 0.5f)
+            else DjSurfaceBorder.copy(alpha = if (isAvailable) 0.5f else 0.25f)
         ),
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = { showMenu = true }
+                onLongClick = {
+                    if (isSelectionMode) {
+                        onToggleSelection()
+                    } else {
+                        onToggleSelection()
+                    }
+                }
             )
             .testTag("song_track_row_${track.id}")
     ) {
@@ -422,6 +523,19 @@ fun SongTrackRow(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Multi-select Checkbox
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelection() },
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = DeckACyan,
+                        checkmarkColor = DjObsidian,
+                        uncheckedColor = TextMuted
+                    ),
+                    modifier = Modifier.padding(end = 6.dp)
+                )
+            }
             // Artwork / Format Icon
             Box(
                 modifier = Modifier
@@ -657,8 +771,8 @@ fun SongTrackRow(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Track Details", color = TextPrimary) },
-                        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary) },
+                        text = { Text("Track Inspector", color = DeckACyan, fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = DeckACyan) },
                         onClick = {
                             showMenu = false
                             onInspectProperties()

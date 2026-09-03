@@ -347,6 +347,17 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _inspectingTrackForProperties = MutableStateFlow<Track?>(null)
     val inspectingTrackForProperties = _inspectingTrackForProperties.asStateFlow()
 
+    private val _bulkEditingTracks = MutableStateFlow<List<Track>?>(null)
+    val bulkEditingTracks = _bulkEditingTracks.asStateFlow()
+
+    fun openBulkEditor(tracks: List<Track>) {
+        _bulkEditingTracks.value = tracks
+    }
+
+    fun closeBulkEditor() {
+        _bulkEditingTracks.value = null
+    }
+
     private val _spectrogramData = MutableStateFlow<SpectrogramAnalysis?>(null)
     val spectrogramData = _spectrogramData.asStateFlow()
 

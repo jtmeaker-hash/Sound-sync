@@ -212,6 +212,7 @@ fun MainDjScreen(
     val isWaveformLoading by viewModel.isWaveformLoading.collectAsState()
     val themeMode by viewModel.themeMode.collectAsState()
     val crossfadeSeconds by viewModel.crossfadeSeconds.collectAsState()
+    val bulkEditingTracks by viewModel.bulkEditingTracks.collectAsState()
     var showNowPlayingSettings by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -537,16 +538,28 @@ fun MainDjScreen(
 
             // Track metadata inspector
             inspectingTrackForProperties?.let { inspectedTrack ->
-                FilePropertiesDialog(
-                    track = inspectedTrack,
-                    onDismiss = { viewModel.closeTrackProperties() },
-                    onSave = { viewModel.saveTrackProperties(it) },
-                    onAutoTag = { viewModel.autoTagSingleTrack(it) },
-                    onInspectSpectrogram = {
-                        viewModel.closeTrackProperties()
-                        viewModel.inspectTrackSpectrogram(it, showTab = true)
-                    },
-                    onDelete = { viewModel.deleteTrack(it) }
+                com.example.ui.inspector.TrackInspectorScreen(
+                    initialTrack = inspectedTrack,
+                    viewModel = viewModel,
+                    audioEngine = viewModel.audioEngine,
+                    onClose = { viewModel.closeTrackProperties() }
+                )
+            }
+
+            // Bulk Track Editor Dialog
+            bulkEditingTracks?.let { selectedTracks ->
+                val playlistEntities = viewModel.allPlaylists.collectAsState().value.map {
+                    com.example.data.PlaylistEntity.fromPlaylist(it)
+                }
+                com.example.ui.bulk.BulkTrackEditorDialog(
+                    selectedTracks = selectedTracks,
+                    allPlaylists = playlistEntities,
+                    viewModel = viewModel,
+                    onDismiss = { viewModel.closeBulkEditor() },
+                    onTracksUpdated = {
+                        viewModel.closeBulkEditor()
+                        viewModel.scanDeviceMediaStore()
+                    }
                 )
             }
 
@@ -1269,6 +1282,17 @@ private fun SideDestinationScreen(
                         isAutoCheckEnabled = isAutoUpdateCheckEnabled,
                         onCheckForUpdates = { viewModel.checkForUpdates(isManual = true) },
                         onToggleAutoCheck = { viewModel.setAutoUpdateCheckEnabled(it) }
+                    )
+                }
+                SideMenuDestination.ListeningStats -> {
+                    com.example.ui.stats.ListeningStatisticsScreen(
+                        allTracks = allTracks,
+                        viewModel = viewModel,
+                        onInspectTrack = { track ->
+                            viewModel.openTrackProperties(track)
+                        },
+                        onClose = onClose,
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
             }

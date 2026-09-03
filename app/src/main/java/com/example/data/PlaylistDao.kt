@@ -53,6 +53,23 @@ interface PlaylistDao {
     @Query("SELECT COUNT(*) FROM playlist_tracks WHERE playlistId = :playlistId")
     suspend fun getTrackCountForPlaylist(playlistId: String): Int
 
+    @Query("""
+        SELECT p.* FROM playlists p
+        INNER JOIN playlist_tracks pt ON p.id = pt.playlistId
+        WHERE pt.trackId = :trackId
+    """)
+    suspend fun getPlaylistsContainingTrack(trackId: String): List<PlaylistEntity>
+
+    @Query("""
+        SELECT p.* FROM playlists p
+        INNER JOIN playlist_tracks pt ON p.id = pt.playlistId
+        WHERE pt.trackId = :trackId
+    """)
+    fun observePlaylistsContainingTrack(trackId: String): Flow<List<PlaylistEntity>>
+
+    @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId AND trackId = :trackId")
+    suspend fun deleteTrackFromPlaylist(playlistId: String, trackId: String)
+
     @Transaction
     suspend fun deletePlaylist(playlistId: String) {
         deletePlaylistTracks(playlistId)

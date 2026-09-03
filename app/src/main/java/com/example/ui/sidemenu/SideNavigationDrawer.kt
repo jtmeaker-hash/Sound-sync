@@ -438,6 +438,16 @@ fun SideNavigationDrawerContent(
                 ) {
                     Column(modifier = Modifier.padding(start = 24.dp)) {
                         DrawerActionItem(
+                            title = "Listening Statistics",
+                            subtitle = "Play history, top tracks & artists, library stats",
+                            icon = Icons.Default.Equalizer,
+                            accentColor = DeckACyan,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.ListeningStats)
+                            }
+                        )
+                        DrawerActionItem(
                             title = "Scanning & Storage Sources",
                             subtitle = "SAF mount points, MediaStore scan, maintenance",
                             icon = Icons.Default.LibraryMusic,
