@@ -58,6 +58,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.isActive
 import java.io.File
 import java.util.UUID
 
@@ -2508,7 +2509,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             if (unenrichedTracks.isEmpty()) return@launch
             Log.d("MainDjViewModel", "Starting background MusicBrainz catalog enrichment for ${unenrichedTracks.size} tracks...")
             for (entity in unenrichedTracks) {
-                if (!kotlinx.coroutines.isActive) break
+                if (!isActive) break
                 val currentSettings = metadataSettings.value
                 if (!currentSettings.enrichmentEnabled || !currentSettings.musicBrainzEnabled) break
                 val track = entity.toTrack()
