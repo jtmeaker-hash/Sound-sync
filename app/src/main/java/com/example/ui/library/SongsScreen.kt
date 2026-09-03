@@ -21,7 +21,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
@@ -37,6 +40,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -88,6 +93,8 @@ fun SongsScreen(
     tracks: List<Track>,
     currentPlayingTrack: Track?,
     isPlaying: Boolean,
+    hideUnavailableTracks: Boolean = false,
+    onToggleHideUnavailable: () -> Unit = {},
     onPlayTrack: (Track) -> Unit,
     onPlayAll: (List<Track>, Boolean) -> Unit,
     onAddToPlaylist: (Track) -> Unit,
@@ -100,17 +107,16 @@ fun SongsScreen(
     var sortMode by remember { mutableStateOf(SongSortMode.TITLE_ASC) }
     var showSortMenu by remember { mutableStateOf(false) }
 
-    val filteredTracks = remember(tracks, searchQuery, sortMode) {
+    val filteredTracks = remember(tracks, searchQuery, sortMode, hideUnavailableTracks) {
         val q = searchQuery.trim().lowercase()
-        val base = if (q.isBlank()) {
-            tracks
-        } else {
-            tracks.filter {
-                it.title.lowercase().contains(q) ||
-                    it.artist.lowercase().contains(q) ||
-                    it.album.lowercase().contains(q) ||
-                    it.format.lowercase().contains(q)
-            }
+        val base = tracks.filter { track ->
+            val matchesAvailability = !hideUnavailableTracks || track.isAvailable
+            val matchesQuery = q.isBlank() ||
+                track.title.lowercase().contains(q) ||
+                track.artist.lowercase().contains(q) ||
+                track.album.lowercase().contains(q) ||
+                track.format.lowercase().contains(q)
+            matchesAvailability && matchesQuery
         }
 
         when (sortMode) {
@@ -205,7 +211,7 @@ fun SongsScreen(
             }
         }
 
-        // Action Toolbar (Play All, Shuffle All, Count)
+        // Action Toolbar (Play All, Shuffle All, Count, Filter)
         if (filteredTracks.isNotEmpty()) {
             Row(
                 modifier = Modifier
@@ -214,12 +220,52 @@ fun SongsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "${filteredTracks.size} tracks",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextSecondary
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "${filteredTracks.size} tracks",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextSecondary
+                    )
+
+                    FilterChip(
+                        selected = hideUnavailableTracks,
+                        onClick = onToggleHideUnavailable,
+                        label = {
+                            Text(
+                                text = if (hideUnavailableTracks) "Playable Only" else "Show All",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (hideUnavailableTracks) Icons.Default.Check else Icons.Default.FilterList,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = DjSurfaceCard,
+                            labelColor = TextSecondary,
+                            selectedContainerColor = DeckACyan.copy(alpha = 0.2f),
+                            selectedLabelColor = DeckACyan,
+                            selectedLeadingIconColor = DeckACyan
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = hideUnavailableTracks,
+                            borderColor = DjSurfaceBorder,
+                            selectedBorderColor = DeckACyan,
+                            borderWidth = 1.dp
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(30.dp).testTag("filter_unavailable_tracks_chip")
+                    )
+                }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
@@ -353,12 +399,14 @@ fun SongTrackRow(
         String.format("%d:%02d", min, sec)
     }
 
+    val isAvailable = track.isAvailable
+
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = if (isCurrent) DeckACyan.copy(alpha = 0.08f) else DjSurfaceDark,
+        color = if (isCurrent) DeckACyan.copy(alpha = 0.08f) else DjSurfaceDark.copy(alpha = if (isAvailable) 1f else 0.45f),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            if (isCurrent) DeckACyan.copy(alpha = 0.5f) else DjSurfaceBorder.copy(alpha = 0.5f)
+            if (isCurrent) DeckACyan.copy(alpha = 0.5f) else DjSurfaceBorder.copy(alpha = if (isAvailable) 0.5f else 0.25f)
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -385,7 +433,14 @@ fun SongTrackRow(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                if (isCurrent) {
+                if (!isAvailable) {
+                    Icon(
+                        imageVector = Icons.Default.CloudOff,
+                        contentDescription = "Disconnected",
+                        tint = TextMuted,
+                        modifier = Modifier.size(22.dp)
+                    )
+                } else if (isCurrent) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Equalizer else Icons.Default.PlayArrow,
                         contentDescription = "Playing",
@@ -423,7 +478,7 @@ fun SongTrackRow(
                     text = track.title,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (isCurrent) DeckACyan else TextPrimary,
+                    color = if (!isAvailable) TextMuted else if (isCurrent) DeckACyan else TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -437,7 +492,7 @@ fun SongTrackRow(
                     Text(
                         text = track.artist,
                         fontSize = 12.sp,
-                        color = TextSecondary,
+                        color = if (!isAvailable) TextMuted.copy(alpha = 0.7f) else TextSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
@@ -458,11 +513,38 @@ fun SongTrackRow(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // DJ Pills (BPM, Key, Quality)
+                // DJ Pills (BPM, Key, Quality, Disconnected)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    if (!isAvailable) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = DjSurfaceElevated.copy(alpha = 0.7f)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudOff,
+                                    contentDescription = null,
+                                    tint = TextMuted,
+                                    modifier = Modifier.size(10.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "DISCONNECTED",
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+                    }
+
                     if (track.bpm > 0) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),

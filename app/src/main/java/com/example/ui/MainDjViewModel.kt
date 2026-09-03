@@ -391,10 +391,35 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _operationJournal = MutableStateFlow<List<OperationJournalItem>>(emptyList())
     val operationJournal = _operationJournal.asStateFlow()
 
-    // Real database tracks flow
-    val allTracks: StateFlow<List<Track>> = trackDao.getAllTracks()
-        .map { list -> list.map { it.toTrack() } }
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    private val _storageRefreshTrigger = MutableStateFlow(0L)
+
+    // Real database tracks flow with dynamic external/USB storage availability mapping
+    val allTracks: StateFlow<List<Track>> = kotlinx.coroutines.flow.combine(
+        trackDao.getAllTracks(),
+        _storageRefreshTrigger
+    ) { list, _ ->
+        val app = getApplication<Application>()
+        val checkedRoots = mutableMapOf<String, Boolean>()
+        list.map { entity ->
+            val track = entity.toTrack()
+            val root = com.example.storage.StorageAvailabilityHelper.getStorageRoot(track.filePath)
+            val isAvail = if (root != null && !root.contains("emulated")) {
+                val rootOnline = checkedRoots.getOrPut(root) {
+                    val f = java.io.File(root)
+                    f.exists() && f.canRead()
+                }
+                if (rootOnline) {
+                    val f = java.io.File(track.filePath.removePrefix("file://"))
+                    f.exists() && f.canRead()
+                } else {
+                    false
+                }
+            } else {
+                com.example.storage.StorageAvailabilityHelper.isTrackAvailable(app, track)
+            }
+            track.copy(isAvailable = isAvail)
+        }
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Dynamically grouped Albums from Real indexed tracks
     val allAlbums: StateFlow<List<com.example.model.Album>> = allTracks.map { tracks ->
@@ -593,15 +618,37 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }.sortedBy { it.name.lowercase() }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    private val _hideUnavailableTracks = MutableStateFlow(false)
+    val hideUnavailableTracks: StateFlow<Boolean> = _hideUnavailableTracks.asStateFlow()
+
+    fun toggleHideUnavailableTracks() {
+        _hideUnavailableTracks.value = !_hideUnavailableTracks.value
+    }
+
+    fun setHideUnavailableTracks(hide: Boolean) {
+        _hideUnavailableTracks.value = hide
+    }
+
     // Filtered tracks for Library view
     val filteredTracks: StateFlow<List<Track>> = combine(
         allTracks,
         _searchQuery,
         _selectedCrateId,
         _selectedGenreFilter,
-        _selectedPlatformFilter
-    ) { tracks, query, crateId, genre, platform ->
+        _selectedPlatformFilter,
+        _hideUnavailableTracks
+    ) { args: Array<Any?> ->
+        @Suppress("UNCHECKED_CAST")
+        val tracks = args[0] as List<Track>
+        val query = args[1] as String
+        val crateId = args[2] as String
+        val genre = args[3] as String?
+        val platform = args[4] as MusicPlatform?
+        val hideUnavailable = args[5] as Boolean
+
         tracks.filter { track ->
+            if (hideUnavailable && !track.isAvailable) return@filter false
+
             val matchesQuery = query.isBlank() ||
                 track.title.contains(query, ignoreCase = true) ||
                 track.artist.contains(query, ignoreCase = true) ||
@@ -640,6 +687,51 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         initializeUpdateSystem()
         observeGoogleDriveState()
         audioEngine.setCrossfadeSeconds(_crossfadeSeconds.value)
+        registerMediaReceiver()
+    }
+
+    fun triggerStorageRefresh() {
+        _storageRefreshTrigger.value = System.currentTimeMillis()
+        viewModelScope.launch(Dispatchers.IO) {
+            refreshStorageSourcesList()
+        }
+    }
+
+    private var mediaReceiver: android.content.BroadcastReceiver? = null
+
+    private fun registerMediaReceiver() {
+        val app = getApplication<Application>()
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_MEDIA_MOUNTED)
+            addAction(android.content.Intent.ACTION_MEDIA_UNMOUNTED)
+            addAction(android.content.Intent.ACTION_MEDIA_REMOVED)
+            addAction(android.content.Intent.ACTION_MEDIA_EJECT)
+            addAction(android.content.Intent.ACTION_MEDIA_BAD_REMOVAL)
+            addDataScheme("file")
+        }
+        val usbFilter = android.content.IntentFilter().apply {
+            addAction("android.hardware.usb.action.USB_DEVICE_ATTACHED")
+            addAction("android.hardware.usb.action.USB_DEVICE_DETACHED")
+        }
+
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: android.content.Intent?) {
+                Log.d("MainDjViewModel", "Media/USB storage broadcast received: ${intent?.action}")
+                triggerStorageRefresh()
+            }
+        }
+        mediaReceiver = receiver
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                app.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+                app.registerReceiver(receiver, usbFilter, Context.RECEIVER_EXPORTED)
+            } else {
+                app.registerReceiver(receiver, filter)
+                app.registerReceiver(receiver, usbFilter)
+            }
+        } catch (e: Exception) {
+            Log.w("MainDjViewModel", "Could not register media broadcast receiver: ${e.message}")
+        }
     }
 
     private var nextTrackForCrossfade: Track? = null
@@ -670,6 +762,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 } else {
                     previousTrack()
                 }
+            }
+        }
+        audioEngine.onTrackUnavailableCallback = { unplayableTrack ->
+            viewModelScope.launch(Dispatchers.Main) {
+                showSnackbar("Skipping '${unplayableTrack.title}' (storage is disconnected)...")
+                nextTrack()
             }
         }
     }
@@ -1214,8 +1312,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             val tracks: List<TrackEntity> = trackDao.getAllTracksSync()
             var missingCount = 0
             for (t in tracks) {
-                var exists = false
                 val path: String = t.filePath
+                if (path.startsWith("demo://")) continue
+
+                // CRITICAL: NEVER delete tracks from external USB or SD card storage when unmounted/disconnected!
+                val track = t.toTrack()
+                if (com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(track)) {
+                    continue
+                }
+
+                var exists = false
                 if (path.startsWith("content://")) {
                     try {
                         val fd = app.contentResolver.openFileDescriptor(Uri.parse(path), "r")
@@ -1228,14 +1334,14 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     exists = File(path).exists()
                 }
 
-                if (!exists && !path.startsWith("demo://") && !path.contains("/Music/Tech House/")) {
+                if (!exists && !path.contains("/Music/Tech House/")) {
                     trackDao.deleteTrackById(t.id)
                     missingCount++
                 }
             }
             refreshStorageSourcesList()
             withContext(Dispatchers.Main) {
-                showSnackbar("Library cleaned: Removed $missingCount deleted/missing tracks.")
+                showSnackbar("Library cleaned: Removed $missingCount deleted tracks from internal storage.")
             }
         }
     }
@@ -1397,16 +1503,29 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun playTrackList(tracks: List<Track>, shuffle: Boolean = false, startIndex: Int = 0) {
         if (tracks.isEmpty()) return
-        val listToPlay = if (shuffle) tracks.shuffled() else tracks
+        val available = tracks.filter { it.isAvailable && com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), it) }
+        if (available.isEmpty()) {
+            showSnackbar("Cannot play: all selected tracks are on a disconnected USB drive.")
+            return
+        }
+        val listToPlay = if (shuffle) available.shuffled() else available
         val start = if (shuffle) 0 else startIndex.coerceIn(0, listToPlay.lastIndex)
         playbackQueue.value = listToPlay
         queueIndex.value = start
         val track = listToPlay[start]
         playOrPreviewTrack(track, preserveQueue = true)
-        showSnackbar("${if (shuffle) "Shuffling" else "Playing"} ${tracks.size} tracks")
+        val skippedCount = tracks.size - available.size
+        val skippedMsg = if (skippedCount > 0) " ($skippedCount disconnected USB tracks skipped)" else ""
+        showSnackbar("${if (shuffle) "Shuffling" else "Playing"} ${available.size} tracks$skippedMsg")
     }
 
     fun queueTrack(track: Track, playNext: Boolean = false) {
+        if (!track.isAvailable || !com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), track)) {
+            val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(track)
+            val sourceLabel = if (isUsb) "USB drive" else "external storage"
+            showSnackbar("Cannot queue '${track.title}': $sourceLabel is disconnected.")
+            return
+        }
         val cur = playbackQueue.value.toMutableList()
         if (cur.isEmpty()) {
             playbackQueue.value = listOf(track)
@@ -1426,19 +1545,24 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun queueTracks(tracks: List<Track>, playNext: Boolean = false) {
         if (tracks.isEmpty()) return
+        val available = tracks.filter { it.isAvailable && com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), it) }
+        if (available.isEmpty()) {
+            showSnackbar("Cannot queue: selected tracks are on a disconnected USB drive.")
+            return
+        }
         val cur = playbackQueue.value.toMutableList()
         if (cur.isEmpty()) {
-            playTrackList(tracks, shuffle = false)
+            playTrackList(available, shuffle = false)
             return
         }
         val idx = queueIndex.value
         if (playNext && idx < cur.size) {
-            cur.addAll(idx + 1, tracks)
+            cur.addAll(idx + 1, available)
         } else {
-            cur.addAll(tracks)
+            cur.addAll(available)
         }
         playbackQueue.value = cur
-        showSnackbar("${if (playNext) "Playing next" else "Added to queue"}: ${tracks.size} tracks")
+        showSnackbar("Queued ${available.size} playable tracks.")
     }
 
     fun playNextInQueue() {
@@ -1784,6 +1908,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun playOrPreviewTrack(track: Track, preserveQueue: Boolean = false) {
+        if (!track.isAvailable || !com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), track)) {
+            val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(track)
+            val sourceLabel = if (isUsb) "USB drive" else "external storage"
+            showSnackbar("Cannot play '${track.title}': $sourceLabel is disconnected. Reconnect device to play.")
+            return
+        }
         if (!preserveQueue && playbackQueue.value.isNotEmpty()) {
             playbackQueue.value = emptyList()
             queueIndex.value = 0
@@ -1824,7 +1954,14 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun playTrack(track: Track) {
+        if (!track.isAvailable || !com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), track)) {
+            val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(track)
+            val sourceLabel = if (isUsb) "USB drive" else "external storage"
+            showSnackbar("Cannot play '${track.title}': $sourceLabel is disconnected. Reconnect device to play.")
+            return
+        }
         val sourceTracks = when {
+            selectedFolder.value != null -> selectedFolder.value?.tracks.orEmpty()
             selectedAlbum.value != null -> selectedAlbum.value?.tracks.orEmpty()
             selectedArtist.value != null -> selectedArtist.value?.songs.orEmpty()
             selectedPlaylist.value != null -> selectedPlaylist.value?.tracks.orEmpty()
@@ -2738,6 +2875,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        mediaReceiver?.let {
+            try { getApplication<Application>().unregisterReceiver(it) } catch (_: Exception) {}
+            mediaReceiver = null
+        }
         backgroundEnrichmentJob?.cancel()
         audioEngine.release()
     }

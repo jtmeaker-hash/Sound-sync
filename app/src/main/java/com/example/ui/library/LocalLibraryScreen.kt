@@ -57,6 +57,7 @@ fun LocalLibraryScreen(
     val allArtists by viewModel.allArtists.collectAsState()
     val allPlaylists by viewModel.allPlaylists.collectAsState()
     val allFolders by viewModel.allFolders.collectAsState()
+    val hideUnavailableTracks by viewModel.hideUnavailableTracks.collectAsState()
 
     val selectedAlbum by viewModel.selectedAlbum.collectAsState()
     val selectedArtist by viewModel.selectedArtist.collectAsState()
@@ -194,6 +195,8 @@ fun LocalLibraryScreen(
                             tracks = allTracks,
                             currentPlayingTrack = currentPlayingTrack,
                             isPlaying = isPlaying,
+                            hideUnavailableTracks = hideUnavailableTracks,
+                            onToggleHideUnavailable = { viewModel.toggleHideUnavailableTracks() },
                             onPlayTrack = { track -> viewModel.playTrack(track) },
                             onPlayAll = { tracks, shuffle -> viewModel.playTrackList(tracks, shuffle) },
                             onAddToPlaylist = { track -> viewModel.openAddToPlaylist(track) },

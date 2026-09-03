@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
@@ -275,14 +276,15 @@ fun FolderDetailScreen(
 
             // Track List Items
             itemsIndexed(folder.tracks, key = { _, track -> track.id }) { index, track ->
+                val isAvailable = track.isAvailable
                 val isCurrentlyPlaying = currentPlayingTrack?.id == track.id
                 var showTrackMenu by remember { mutableStateOf(false) }
 
                 Surface(
-                    color = if (isCurrentlyPlaying) DjSurfaceElevated else DjSurfaceCard,
+                    color = if (isCurrentlyPlaying) DjSurfaceElevated else DjSurfaceCard.copy(alpha = if (isAvailable) 1f else 0.45f),
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
-                        if (isCurrentlyPlaying) DeckACyan else DjSurfaceBorder
+                        if (isCurrentlyPlaying) DeckACyan else DjSurfaceBorder.copy(alpha = if (isAvailable) 1f else 0.35f)
                     ),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier
@@ -301,7 +303,14 @@ fun FolderDetailScreen(
                             modifier = Modifier.width(28.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            if (isCurrentlyPlaying) {
+                            if (!isAvailable) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudOff,
+                                    contentDescription = "Disconnected",
+                                    tint = TextMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            } else if (isCurrentlyPlaying) {
                                 Icon(
                                     imageVector = Icons.Default.Equalizer,
                                     contentDescription = "Playing",
@@ -326,7 +335,7 @@ fun FolderDetailScreen(
                                 text = track.title,
                                 fontSize = 14.sp,
                                 fontWeight = if (isCurrentlyPlaying) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isCurrentlyPlaying) DeckACyan else TextPrimary,
+                                color = if (!isAvailable) TextMuted else if (isCurrentlyPlaying) DeckACyan else TextPrimary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -337,13 +346,22 @@ fun FolderDetailScreen(
                                 Text(
                                     text = track.artist,
                                     fontSize = 11.sp,
-                                    color = TextSecondary,
+                                    color = if (!isAvailable) TextMuted.copy(alpha = 0.7f) else TextSecondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false)
                                 )
 
-                                if (track.isAiTagged) {
+                                if (!isAvailable) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "DISCONNECTED",
+                                        fontSize = 9.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextMuted
+                                    )
+                                } else if (track.isAiTagged) {
                                     Spacer(modifier = Modifier.width(4.dp))
                                     MetadataProvenanceBadge(track = track)
                                 }

@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
@@ -276,11 +277,15 @@ private fun AlbumTrackRow(
         val min = track.durationSeconds / 60
         val sec = track.durationSeconds % 60
         String.format("%d:%02d", min, sec)
-    }
+    val isAvailable = track.isAvailable
 
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = if (isCurrent) DeckACyan.copy(alpha = 0.08f) else DjSurfaceDark,
+        color = if (isCurrent) DeckACyan.copy(alpha = 0.08f) else DjSurfaceDark.copy(alpha = if (isAvailable) 1f else 0.45f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isCurrent) DeckACyan.copy(alpha = 0.5f) else DjSurfaceBorder.copy(alpha = if (isAvailable) 0.5f else 0.25f)
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
@@ -297,7 +302,14 @@ private fun AlbumTrackRow(
                 modifier = Modifier.width(32.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (isCurrent) {
+                if (!isAvailable) {
+                    Icon(
+                        imageVector = Icons.Default.CloudOff,
+                        contentDescription = "Disconnected",
+                        tint = TextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                } else if (isCurrent) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Equalizer else Icons.Default.PlayArrow,
                         contentDescription = null,
@@ -321,7 +333,7 @@ private fun AlbumTrackRow(
                     text = track.title,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    color = if (isCurrent) DeckACyan else TextPrimary,
+                    color = if (!isAvailable) TextMuted else if (isCurrent) DeckACyan else TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -329,6 +341,15 @@ private fun AlbumTrackRow(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    if (!isAvailable) {
+                        Text(
+                            text = "DISCONNECTED",
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = TextMuted
+                        )
+                    }
                     if (track.bpm > 0) {
                         Text(
                             text = "${track.bpm.toInt()} BPM",

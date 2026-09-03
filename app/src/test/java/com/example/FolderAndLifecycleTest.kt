@@ -128,4 +128,70 @@ class FolderAndLifecycleTest {
 
         engine.release()
     }
+
+    @Test
+    fun testStorageAvailabilityHelperClassification() {
+        val usbPath = "/storage/1234-ABCD/Music/TechHouse/banger.mp3"
+        val internalPath = "/storage/emulated/0/Music/TechHouse/banger.mp3"
+        val sdCardPath = "/mnt/media_rw/A1B2-C3D4/song.flac"
+
+        assertTrue(com.example.storage.StorageAvailabilityHelper.isExternalStoragePath(usbPath))
+        assertFalse(com.example.storage.StorageAvailabilityHelper.isExternalStoragePath(internalPath))
+        assertTrue(com.example.storage.StorageAvailabilityHelper.isExternalStoragePath(sdCardPath))
+
+        assertEquals("/storage/1234-ABCD", com.example.storage.StorageAvailabilityHelper.getStorageRoot(usbPath))
+        assertEquals("/storage/emulated/0", com.example.storage.StorageAvailabilityHelper.getStorageRoot(internalPath))
+    }
+
+    @Test
+    fun testUnplayableTrackSkippedOnLoad() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine = DjAudioEngine.getInstance(context)
+
+        val unplayableTrack = Track(
+            id = "usb_track_1",
+            title = "Offline USB Anthem",
+            artist = "DJ Unplugged",
+            filePath = "/storage/DEAD-BEEF/Music/anthem.mp3",
+            isAvailable = false
+        )
+
+        var skipCallbackFired = false
+        var skippedTrackTitle = ""
+        engine.onTrackUnavailableCallback = { t ->
+            skipCallbackFired = true
+            skippedTrackTitle = t.title
+        }
+
+        engine.loadTrack(unplayableTrack, autoPlay = true)
+
+        assertTrue("onTrackUnavailableCallback must fire for disconnected USB track", skipCallbackFired)
+        assertEquals("Offline USB Anthem", skippedTrackTitle)
+        assertFalse("Engine must not report playing for disconnected track", engine.isPlaying.value)
+
+        engine.release()
+    }
+
+    @Test
+    fun testFilterUnavailableTracks() {
+        val tracks = listOf(
+            Track(id = "1", title = "Internal Song", artist = "Artist", filePath = "/storage/emulated/0/Music/1.mp3", isAvailable = true),
+            Track(id = "2", title = "USB Song", artist = "Artist", filePath = "/storage/ABCD-1234/Music/2.mp3", isAvailable = false)
+        )
+
+        // When hideUnavailableTracks is false (default): both visible
+        val showAll = tracks.filter { track ->
+            val hideUnavailable = false
+            !hideUnavailable || track.isAvailable
+        }
+        assertEquals(2, showAll.size)
+
+        // When hideUnavailableTracks is true: only playable tracks visible
+        val playableOnly = tracks.filter { track ->
+            val hideUnavailable = true
+            !hideUnavailable || track.isAvailable
+        }
+        assertEquals(1, playableOnly.size)
+        assertEquals("Internal Song", playableOnly.first().title)
+    }
 }

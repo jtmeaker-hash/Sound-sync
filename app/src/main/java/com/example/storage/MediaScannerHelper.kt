@@ -40,10 +40,19 @@ object MediaScannerHelper {
     ): ScanSummaryResult = withContext(Dispatchers.IO) {
         val contentResolver = context.contentResolver
 
-        val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        val collectionUris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val volumeNames = MediaStore.getExternalVolumeNames(context)
+                if (volumeNames.isNotEmpty()) {
+                    volumeNames.map { MediaStore.Audio.Media.getContentUri(it) }
+                } else {
+                    listOf(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL))
+                }
+            } catch (_: Exception) {
+                listOf(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL))
+            }
         } else {
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            listOf(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
         }
 
         // Lightweight projection with required columns only
@@ -84,7 +93,8 @@ object MediaScannerHelper {
         val seenPaths = existingFilePaths.toMutableSet()
 
         try {
-            contentResolver.query(collectionUri, projection, selection, null, sortOrder)?.use { cursor ->
+            for (collectionUri in collectionUris) {
+                contentResolver.query(collectionUri, projection, selection, null, sortOrder)?.use { cursor ->
                 val idCol = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
                 val titleCol = cursor.getColumnIndex(MediaStore.Audio.Media.TITLE)
                 val artistCol = cursor.getColumnIndex(MediaStore.Audio.Media.ARTIST)
@@ -242,6 +252,7 @@ object MediaScannerHelper {
                     }
                 }
             }
+        }
 
             // Flush final batch
             if (currentBatch.isNotEmpty()) {
@@ -438,6 +449,7 @@ object MediaScannerHelper {
         return when {
             path.contains("Download", ignoreCase = true) -> "downloads"
             path.contains("USB", ignoreCase = true) || path.contains("media_rw", ignoreCase = true) -> "usb_ssd"
+            path.matches(Regex(".*/storage/[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}/.*")) -> "usb_ssd"
             path.contains("0000-0000", ignoreCase = true) || path.contains("sdcard1", ignoreCase = true) -> "sd_card"
             path.contains("CloudCache", ignoreCase = true) -> "cloud_vault"
             else -> "internal"

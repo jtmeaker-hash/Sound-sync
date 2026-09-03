@@ -120,6 +120,7 @@ data class Track(
     val filePath: String = "/Music/track.mp3",
     val directoryPath: String = "/Music",
     val isOfflineReady: Boolean = true,
+    val isAvailable: Boolean = true,
     val syncState: SyncState = SyncState.SYNCED,
     val platforms: List<MusicPlatform> = listOf(MusicPlatform.LOCAL),
     val energyRating: Int = 7, // 1 to 10 scale for DJ set building

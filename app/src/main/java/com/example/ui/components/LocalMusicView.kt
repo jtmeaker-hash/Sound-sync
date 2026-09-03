@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PlayArrow
@@ -368,6 +369,7 @@ fun LocalTrackCard(
     onInspect: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isAvailable = track.isAvailable
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -376,11 +378,11 @@ fun LocalTrackCard(
             .testTag("track_card_${track.id}"),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isCurrent) DjSurfaceElevated else DjSurfaceCard
+            containerColor = if (isCurrent) DjSurfaceElevated else DjSurfaceCard.copy(alpha = if (isAvailable) 1f else 0.45f)
         ),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            if (isCurrent) DeckACyan else DjSurfaceBorder
+            if (isCurrent) DeckACyan else DjSurfaceBorder.copy(alpha = if (isAvailable) 1f else 0.35f)
         )
     ) {
         Row(
@@ -400,12 +402,21 @@ fun LocalTrackCard(
                     .clickable { onPlay() }
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                        contentDescription = "Play",
-                        tint = if (isCurrent) DjObsidian else TextPrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    if (!isAvailable) {
+                        Icon(
+                            imageVector = Icons.Default.CloudOff,
+                            contentDescription = "Disconnected",
+                            tint = TextMuted,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                            contentDescription = "Play",
+                            tint = if (isCurrent) DjObsidian else TextPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
 
@@ -413,7 +424,7 @@ fun LocalTrackCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = track.title,
-                    color = if (isCurrent) DeckACyan else TextPrimary,
+                    color = if (!isAvailable) TextMuted else if (isCurrent) DeckACyan else TextPrimary,
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                     maxLines = 1
@@ -423,9 +434,19 @@ fun LocalTrackCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    if (!isAvailable) {
+                        Text(
+                            text = "DISCONNECTED",
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = TextMuted
+                        )
+                        Text("•", color = TextMuted, fontSize = 10.sp)
+                    }
                     Text(
                         text = track.artist,
-                        color = TextSecondary,
+                        color = if (!isAvailable) TextMuted.copy(alpha = 0.7f) else TextSecondary,
                         fontSize = 11.sp,
                         maxLines = 1
                     )
