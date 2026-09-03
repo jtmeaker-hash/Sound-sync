@@ -123,8 +123,8 @@ class FolderAndLifecycleTest {
         engine.setHaasAmount(0.75f)
         assertEquals(0.75f, engine.haasAmount.value, 0.01f)
 
-        engine.setHaasDelayMs(15f)
-        assertEquals(15f, engine.haasDelayMs.value, 0.01f)
+        engine.setHaasDelayMs(8f)
+        assertEquals(8f, engine.haasDelayMs.value, 0.01f)
 
         engine.release()
     }

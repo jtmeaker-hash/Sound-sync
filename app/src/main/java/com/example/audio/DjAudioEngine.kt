@@ -329,15 +329,6 @@ class DjAudioEngine(private val context: Context) {
             return
         }
 
-        // If track is on a disconnected or inaccessible storage volume, skip immediately to prevent playback stalls
-        if (!track.filePath.startsWith("demo://") && !isUriAccessible(track.filePath)) {
-            Log.w(TAG, "loadTrack: Track '${track.title}' is unplayable (storage disconnected: ${track.filePath}). Skipping.")
-            _isPlaying.value = false
-            _currentTrack.value = track
-            onTrackUnavailableCallback?.invoke(track)
-            return
-        }
-
         // 3. Atomically set track metadata and initial playback position
         _currentTrack.value = track
         _isPlaying.value = autoPlay
@@ -355,6 +346,14 @@ class DjAudioEngine(private val context: Context) {
         lastPublishedSecond = initialSec
         activeCueSeconds = 0
         pendingSeekMs = if (initialMs > 0) initialMs else null
+
+        // If track is explicitly marked unplayable (e.g. disconnected USB drive), trigger skip callback immediately
+        if (!track.isAvailable) {
+            Log.w(TAG, "loadTrack: Track '${track.title}' is unplayable (USB storage disconnected). Skipping.")
+            _isPlaying.value = false
+            onTrackUnavailableCallback?.invoke(track)
+            return
+        }
 
         // 4. Reset Haas delay buffer to avoid cross-track audio bleed
         haasEffect.reset()
@@ -457,13 +456,14 @@ class DjAudioEngine(private val context: Context) {
 
         try { com.example.service.MediaPlaybackService.startService(context) } catch (_: Exception) {}
 
-        if (track.filePath.startsWith("demo://")) {
-            startAudioSynthesis(session)
-        } else if (!isUriAccessible(track.filePath)) {
-            Log.w(TAG, "Cannot play track '${track.title}': storage file is not accessible (${track.filePath})")
+        if (!track.isAvailable) {
+            Log.w(TAG, "Cannot play track '${track.title}': storage device is disconnected (${track.filePath})")
             _isPlaying.value = false
             decoderShouldPause = true
             stopPlaybackImmediately()
+            onTrackUnavailableCallback?.invoke(track)
+        } else if (track.filePath.startsWith("demo://") || !isUriAccessible(track.filePath)) {
+            startAudioSynthesis(session)
         } else {
             startStreamingPlayback(session)
         }
