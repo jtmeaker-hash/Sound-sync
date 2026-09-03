@@ -192,52 +192,28 @@ object TunebatMetadataService {
      */
     fun extractEmbeddedTags(context: Context, filePathOrUri: String): VerifiedMetadata? {
         if (filePathOrUri.isBlank()) return null
-        val retriever = MediaMetadataRetriever()
         return try {
-            if (filePathOrUri.startsWith("content://") || filePathOrUri.startsWith("file://")) {
-                retriever.setDataSource(context, Uri.parse(filePathOrUri))
-            } else {
-                val f = File(filePathOrUri)
-                if (f.exists() && f.canRead()) {
-                    retriever.setDataSource(filePathOrUri)
+            val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, filePathOrUri)
+            if (embedded.hasBpm || embedded.hasKey) {
+                val sourceLabel = if (embedded.hasEmbeddedMusicBrainz) {
+                    "Embedded MusicBrainz Tags"
                 } else {
-                    return null
+                    "Embedded ID3 / File Tags"
                 }
-            }
-
-            var detectedBpm = 0.0
-            var detectedKey = ""
-
-            // MediaMetadataRetriever check
-            val mBpm = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
-            if (!mBpm.isNullOrBlank()) {
-                mBpm.toDoubleOrNull()?.let { if (it in 30.0..300.0) detectedBpm = it }
-            }
-
-            // Direct ID3 tag parse from file if local path
-            val file = File(filePathOrUri)
-            if (file.exists() && file.canRead()) {
-                val parsedTags = parseId3Frames(file)
-                if (parsedTags.first in 30.0..300.0) detectedBpm = parsedTags.first
-                if (parsedTags.second.isNotBlank()) detectedKey = parsedTags.second
-            }
-
-            val normalizedKey = normalizeCamelotKey(detectedKey)
-            if (detectedBpm > 30.0 || normalizedKey.isNotBlank()) {
                 VerifiedMetadata(
-                    bpm = detectedBpm,
-                    musicalKey = normalizedKey,
-                    bpmConfidence = if (detectedBpm > 30.0) 1.0f else 0.0f,
-                    keyConfidence = if (normalizedKey.isNotBlank()) 1.0f else 0.0f,
-                    source = "Embedded ID3 / File Tags",
+                    bpm = embedded.bpm ?: 0.0,
+                    musicalKey = embedded.camelotKey ?: embedded.musicalKey.orEmpty(),
+                    bpmConfidence = if (embedded.hasBpm) 1.0f else 0.0f,
+                    keyConfidence = if (embedded.hasKey) 1.0f else 0.0f,
+                    source = sourceLabel,
                     isConfirmed = true
                 )
-            } else null
+            } else {
+                null
+            }
         } catch (e: Exception) {
             Log.d(TAG, "extractEmbeddedTags error: ${e.message}")
             null
-        } finally {
-            try { retriever.release() } catch (_: Exception) {}
         }
     }
 
@@ -312,111 +288,38 @@ object TunebatMetadataService {
         if (title.isBlank() || title.equals("Unknown", ignoreCase = true)) return@withContext null
 
         try {
-            val cleanTitle = cleanTrackTitleForSearch(title)
-            val cleanArtist = cleanTrackArtistForSearch(artist)
-            val query = if (cleanArtist.isNotBlank() && !cleanArtist.equals("Unknown Artist", ignoreCase = true)) {
-                "$cleanTitle $cleanArtist"
-            } else {
-                cleanTitle
+            val identity = com.example.metadata.LocalTrackIdentity(
+                title = title,
+                artist = artist,
+                album = album,
+                durationSeconds = durationSeconds
+            )
+            val client = com.example.metadata.MusicBrainzClient(com.example.metadata.OkHttpMusicBrainzTransport())
+            val recording = client.findRecording(identity) ?: return@withContext null
+
+            var bpmVal = 0.0
+            var keyVal = ""
+
+            for (tagName in recording.tags) {
+                if (tagName.endsWith("bpm", ignoreCase = true)) {
+                    val candidate = tagName.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: 0.0
+                    if (candidate in 30.0..300.0) bpmVal = candidate
+                }
+                if (tagName.startsWith("key:", ignoreCase = true)) {
+                    keyVal = tagName.removePrefix("key:").trim()
+                }
             }
 
-            val encodedQuery = URLEncoder.encode(query, "UTF-8")
-            val url = "https://musicbrainz.org/ws/2/recording/?query=recording:$encodedQuery&fmt=json&limit=6"
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", "SoundSync/2.5 ( android@soundsync.app )")
-                .header("Accept", "application/json")
-                .build()
-
-            val response = httpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                response.close()
-                return@withContext null
-            }
-
-            val bodyString = response.body?.string() ?: return@withContext null
-            val json = JSONObject(bodyString)
-            val recordings = json.optJSONArray("recordings") ?: return@withContext null
-
-            val queryVersion = extractVersionInfo(title)
-
-            for (i in 0 until recordings.length()) {
-                val rec = recordings.getJSONObject(i)
-                val recTitle = rec.optString("title", "")
-                val recLengthMs = rec.optLong("length", 0L)
-                val recLengthSec = if (recLengthMs > 0) (recLengthMs / 1000).toInt() else 0
-                val disambiguation = rec.optString("disambiguation", "")
-                val recVersion = extractVersionInfo("$recTitle $disambiguation")
-
-                // 1. Version / Remix Strict Matching:
-                // If query is a remix or live or acoustic, candidate must also match that version
-                if (queryVersion.isRemix != recVersion.isRemix ||
-                    queryVersion.isLive != recVersion.isLive ||
-                    queryVersion.isAcoustic != recVersion.isAcoustic ||
-                    queryVersion.isRadioEdit != recVersion.isRadioEdit ||
-                    queryVersion.isExtended != recVersion.isExtended) {
-                    continue
-                }
-
-                // 2. Duration Tolerance Check (+/- 8 seconds for accurate mix version alignment)
-                if (durationSeconds > 0 && recLengthSec > 0) {
-                    if (abs(durationSeconds - recLengthSec) > 8) {
-                        continue
-                    }
-                }
-
-                // 3. Artist Verification
-                var artistScore = 0.0f
-                val artistCredit = rec.optJSONArray("artist-credit")
-                if (artistCredit != null && artistCredit.length() > 0) {
-                    for (a in 0 until artistCredit.length()) {
-                        val artistObj = artistCredit.optJSONObject(a)
-                        val aName = artistObj?.optString("name", "") ?: ""
-                        if (cleanArtist.isNotBlank()) {
-                            if (aName.contains(cleanArtist, ignoreCase = true) || cleanArtist.contains(aName, ignoreCase = true)) {
-                                artistScore = 1.0f
-                                break
-                            }
-                        }
-                    }
-                } else {
-                    artistScore = 0.7f
-                }
-
-                if (cleanArtist.isNotBlank() && artistScore < 0.5f) {
-                    continue
-                }
-
-                // High confidence recording match confirmed!
-                val tags = rec.optJSONArray("tags")
-                var bpmVal = 0.0
-                var keyVal = ""
-
-                if (tags != null) {
-                    for (t in 0 until tags.length()) {
-                        val tagObj = tags.getJSONObject(t)
-                        val tagName = tagObj.optString("name", "")
-                        if (tagName.endsWith("bpm", ignoreCase = true)) {
-                            val candidate = tagName.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: 0.0
-                            if (candidate in 30.0..300.0) bpmVal = candidate
-                        }
-                        if (tagName.startsWith("key:", ignoreCase = true)) {
-                            keyVal = tagName.removePrefix("key:").trim()
-                        }
-                    }
-                }
-
-                val normalizedKey = normalizeCamelotKey(keyVal)
-                if (bpmVal > 0.0 || normalizedKey.isNotBlank()) {
-                    return@withContext VerifiedMetadata(
-                        bpm = bpmVal,
-                        musicalKey = normalizedKey,
-                        bpmConfidence = if (bpmVal > 0.0) 0.94f else 0.0f,
-                        keyConfidence = if (normalizedKey.isNotBlank()) 0.92f else 0.0f,
-                        source = "Tunebat / MusicBrainz Registry",
-                        isConfirmed = true
-                    )
-                }
+            val normalizedKey = normalizeCamelotKey(keyVal)
+            if (bpmVal > 0.0 || normalizedKey.isNotBlank()) {
+                return@withContext VerifiedMetadata(
+                    bpm = bpmVal,
+                    musicalKey = normalizedKey,
+                    bpmConfidence = if (bpmVal > 0.0) 0.94f else 0.0f,
+                    keyConfidence = if (normalizedKey.isNotBlank()) 0.92f else 0.0f,
+                    source = "Tunebat / MusicBrainz Registry",
+                    isConfirmed = true
+                )
             }
         } catch (e: Exception) {
             Log.d(TAG, "queryExternalTunebatDatabase error: ${e.message}")

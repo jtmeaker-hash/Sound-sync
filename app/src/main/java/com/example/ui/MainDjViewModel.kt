@@ -866,6 +866,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 if (wasScanning && !state.isScanning && state.isCompleted) {
                     refreshStorageSourcesList()
                     showSnackbar("Background scan finished: ${state.totalIndexedInLastRun} audio tracks indexed successfully!")
+                    if (state.totalIndexedInLastRun > 0 && metadataSettings.value.enrichmentEnabled && metadataSettings.value.musicBrainzEnabled) {
+                        scheduleBackgroundMusicBrainzEnrichment()
+                    }
                 }
                 wasScanning = state.isScanning
             }
@@ -1011,6 +1014,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
             withContext(Dispatchers.Main) {
                 showSnackbar(scanResult.userMessage)
+            }
+            if (scanResult.imported > 0 && metadataSettings.value.enrichmentEnabled && metadataSettings.value.musicBrainzEnabled) {
+                scheduleBackgroundMusicBrainzEnrichment()
             }
         } catch (e: SecurityException) {
             Log.e("MainDjViewModel", "SecurityException during MediaStore scan", e)
@@ -1754,8 +1760,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun resolveBpmAndKeyForTrack(track: Track) {
-        if (track.hasValidBpm && track.hasValidKey) return
         val settings = metadataSettings.value
+        val needsBpmOrKey = (!track.hasValidBpm && settings.bpmAnalysisEnabled) || (!track.hasValidKey && settings.keyAnalysisEnabled)
+        val needsMusicBrainz = settings.musicBrainzEnabled && !track.isMusicBrainzEnriched
+        if (!needsBpmOrKey && !needsMusicBrainz) return
+
         viewModelScope.launch(Dispatchers.IO) {
             val verified = musicMetadataEnrichmentService.enrich(
                 track = track,
@@ -1763,21 +1772,15 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 bpmAnalysisEnabled = settings.bpmAnalysisEnabled,
                 keyAnalysisEnabled = settings.keyAnalysisEnabled
             )
-            if (verified.bpm != null || verified.musicalKey != null) {
-                val updatedTrack = track.copy(
-                    bpm = verified.bpm ?: track.bpm,
-                    musicalKey = verified.musicalKey ?: track.musicalKey,
-                    camelotKey = verified.camelotKey ?: track.camelotKey
-                )
-                trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
-                if (audioEngine.currentTrack.value?.id == track.id) {
-                    withContext(Dispatchers.Main) {
-                        audioEngine.updateCurrentTrackMetadata(updatedTrack)
-                    }
+            val updatedTrack = applyEnrichedMetadata(track, verified)
+            trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
+            if (audioEngine.currentTrack.value?.id == track.id) {
+                withContext(Dispatchers.Main) {
+                    audioEngine.updateCurrentTrackMetadata(updatedTrack)
                 }
-                if (_inspectingTrackForProperties.value?.id == track.id) {
-                    _inspectingTrackForProperties.value = updatedTrack
-                }
+            }
+            if (_inspectingTrackForProperties.value?.id == track.id) {
+                _inspectingTrackForProperties.value = updatedTrack
             }
         }
     }
@@ -2432,13 +2435,46 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    private var backgroundEnrichmentJob: Job? = null
+
+    fun scheduleBackgroundMusicBrainzEnrichment() {
+        val settings = metadataSettings.value
+        if (!settings.enrichmentEnabled || !settings.musicBrainzEnabled) return
+        if (backgroundEnrichmentJob?.isActive == true) return
+
+        backgroundEnrichmentJob = viewModelScope.launch(Dispatchers.IO) {
+            val unenrichedTracks = trackDao.getAllTracksSync().filter { !it.toTrack().isMusicBrainzEnriched }
+            if (unenrichedTracks.isEmpty()) return@launch
+            Log.d("MainDjViewModel", "Starting background MusicBrainz catalog enrichment for ${unenrichedTracks.size} tracks...")
+            for (entity in unenrichedTracks) {
+                val currentSettings = metadataSettings.value
+                if (!currentSettings.enrichmentEnabled || !currentSettings.musicBrainzEnabled) break
+                val track = entity.toTrack()
+                try {
+                    val enriched = musicMetadataEnrichmentService.enrich(
+                        track = track,
+                        musicBrainzEnabled = true,
+                        bpmAnalysisEnabled = false,
+                        keyAnalysisEnabled = false
+                    )
+                    if (enriched.musicBrainzRecordingId != null || enriched.musicBrainzReleaseId != null) {
+                        val updated = applyEnrichedMetadata(track, enriched)
+                        trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                    }
+                } catch (e: Exception) {
+                    Log.d("MainDjViewModel", "Background MB enrichment skipped for ${track.title}: ${e.message}")
+                }
+            }
+        }
+    }
+
     fun enrichTrackWithMusicBrainz(track: Track) {
         viewModelScope.launch {
             _isTaggingInProgress.value = true
             _taggingProgressMessage.value = "Looking up MusicBrainz catalog for '${track.title}'..."
             try {
                 val enriched = withContext(Dispatchers.IO) {
-                    musicMetadataEnrichmentService.enrich(track)
+                    musicMetadataEnrichmentService.enrich(track, musicBrainzEnabled = true)
                 }
                 val updated = applyEnrichedMetadata(track, enriched)
                 withContext(Dispatchers.IO) {

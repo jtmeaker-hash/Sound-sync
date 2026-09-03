@@ -45,7 +45,8 @@ data class MusicBrainzRecording(
     val artistCredits: List<MusicBrainzArtistCredit> = emptyList(),
     val releases: List<MusicBrainzRelease> = emptyList(),
     val isrcs: List<String> = emptyList(),
-    val tags: List<String> = emptyList()
+    val tags: List<String> = emptyList(),
+    val rating: Double? = null
 )
 
 data class MusicBrainzArtistCredit(

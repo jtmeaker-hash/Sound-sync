@@ -37,19 +37,22 @@ class MusicMetadataEnrichmentService(
         val audioBpm = if (bpmAnalysisEnabled) audio.bpm else null
         val audioKey = if (keyAnalysisEnabled) audio.musicalKey else null
         val audioCamelot = if (keyAnalysisEnabled) audio.camelotKey else null
-        val release = if (recording != null) recording.releases else emptyList()
-        val selectedRelease = release
-            ?.sortedWith(
+        val releases = recording?.releases.orEmpty()
+        val selectedRelease = releases.firstOrNull { it.id == track.musicBrainzReleaseId }
+            ?: releases.sortedWith(
                 compareByDescending<MusicBrainzRelease> { release ->
                     release.title.equals(track.album, ignoreCase = true)
                 }
                     .thenByDescending { release -> release.trackNumber == track.trackNumber && release.discNumber == track.discNumber }
-                    .thenByDescending { release -> release.title.equals(track.album, ignoreCase = true) }
+                    .thenByDescending { release -> release.status.equals("Official", ignoreCase = true) }
                     .thenBy { it.date.orEmpty() }
                     .thenBy { it.title }
-            )
-            ?.firstOrNull()
+            ).firstOrNull()
         val artist = recording?.artistCredits?.joinToString(", ") { it.name }.orEmpty().ifBlank { track.artist }
+
+        val artworkUrl = selectedRelease?.id?.let { "https://coverartarchive.org/release/$it/front-500" }
+            ?: selectedRelease?.releaseGroupId?.let { "https://coverartarchive.org/release-group/$it/front-500" }
+            ?: track.artworkUrl
 
         return EnrichedTrackMetadata(
             musicBrainzRecordingId = recording?.id ?: track.musicBrainzRecordingId,

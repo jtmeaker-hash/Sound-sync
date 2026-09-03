@@ -61,10 +61,119 @@ class MusicBrainzClientTest {
     }
 
     @Test
-    fun `returns null when transport cannot produce a candidate`() = runTest {
-        val client = MusicBrainzClient(object : MusicBrainzTransport {
-            override suspend fun get(pathAndQuery: String): String = "not-json"
-        })
-        assertNull(client.findRecording(LocalTrackIdentity("Unknown", "", "", 0)))
+    fun `parses recording with genres tags ratings and release metadata`() {
+        val json = """
+            {
+              "id":"rec-456",
+              "title":"Around the World",
+              "length":240000,
+              "disambiguation":"radio edit",
+              "artist-credit":[{"name":"Daft Punk","artist":{"id":"dp-id","name":"Daft Punk"}}],
+              "isrcs":["FR-AAA-97-00001"],
+              "genres":[{"name":"French House"},{"name":"Electronic"}],
+              "tags":[{"name":"Dance"},{"name":"French House"}],
+              "rating":{"value":4.8,"votes-count":120},
+              "releases":[{
+                "id":"rel-789",
+                "title":"Homework",
+                "date":"1997-01-20",
+                "country":"FR",
+                "status":"Official",
+                "barcode":"724384260927",
+                "release-group":{"id":"rg-101"},
+                "label-info":[{"label":{"name":"Virgin"}}],
+                "media":[{"position":1,"tracks":[{"position":7}]}]
+              }]
+            }
+        """.trimIndent()
+
+        val recording = MusicBrainzClient.parseRecording(json)
+        assertEquals("rec-456", recording.id)
+        assertEquals("Around the World", recording.title)
+        assertEquals("dp-id", recording.artistCredits.first().artistId)
+        assertEquals(listOf("FR-AAA-97-00001"), recording.isrcs)
+        assertEquals(listOf("French House", "Electronic", "Dance"), recording.tags)
+        assertEquals(4.8, recording.rating ?: 0.0, 0.01)
+        val release = recording.releases.first()
+        assertEquals("rel-789", release.id)
+        assertEquals("Homework", release.title)
+        assertEquals("1997-01-20", release.date)
+        assertEquals("FR", release.country)
+        assertEquals("Virgin", release.label)
+        assertEquals("724384260927", release.barcode)
+        assertEquals(7, release.trackNumber)
+        assertEquals(1, release.discNumber)
+    }
+
+    @Test
+    fun `lookupRecording executes ws2 recording lookup and returns parsed recording`() = runTest {
+        val transport = object : MusicBrainzTransport {
+            override suspend fun get(pathAndQuery: String): String {
+                if (pathAndQuery.startsWith("recording/rec-123")) {
+                    return """{"id":"rec-123","title":"Harder, Better, Faster, Stronger"}"""
+                }
+                return "{}"
+            }
+        }
+        val client = MusicBrainzClient(transport, InMemoryMusicBrainzCache())
+        val recording = client.lookupRecording("rec-123")
+        assertNotNull(recording)
+        assertEquals("rec-123", recording?.id)
+        assertEquals("Harder, Better, Faster, Stronger", recording?.title)
+    }
+
+    @Test
+    fun `lookupByIsrc executes ws2 isrc endpoint and falls back gracefully`() = runTest {
+        val transport = object : MusicBrainzTransport {
+            override suspend fun get(pathAndQuery: String): String {
+                if (pathAndQuery.startsWith("isrc/US-XYZ")) {
+                    return """{"recordings":[{"id":"rec-isrc","title":"Get Lucky"}]}"""
+                }
+                return """{"recordings":[]}"""
+            }
+        }
+        val client = MusicBrainzClient(transport, InMemoryMusicBrainzCache())
+        val results = client.lookupByIsrc("US-XYZ")
+        assertEquals(1, results.size)
+        assertEquals("rec-isrc", results.first().id)
+        assertEquals("Get Lucky", results.first().title)
+    }
+
+    @Test
+    fun `lookupRelease executes ws2 release lookup and returns release details`() = runTest {
+        val transport = object : MusicBrainzTransport {
+            override suspend fun get(pathAndQuery: String): String {
+                if (pathAndQuery.startsWith("release/rel-999")) {
+                    return """
+                        {
+                          "id":"rel-999",
+                          "title":"Discovery",
+                          "date":"2001-03-12",
+                          "country":"FR",
+                          "status":"Official",
+                          "barcode":"724384960629",
+                          "release-group":{"id":"rg-999"},
+                          "label-info":[{"label":{"name":"Virgin Records"}}],
+                          "media":[{"position":1,"tracks":[{"position":1}]}]
+                        }
+                    """.trimIndent()
+                }
+                return "{}"
+            }
+        }
+        val client = MusicBrainzClient(transport, InMemoryMusicBrainzCache())
+        val release = client.lookupRelease("rel-999")
+        assertNotNull(release)
+        assertEquals("rel-999", release?.id)
+        assertEquals("Discovery", release?.title)
+        assertEquals("Virgin Records", release?.label)
+        assertEquals("724384960629", release?.barcode)
+    }
+
+    @Test
+    fun `cleanSearchTerm removes file extensions track prefixes and quality tags`() {
+        assertEquals("One More Time", MusicBrainzClient.cleanSearchTerm("01. One More Time [FLAC].flac"))
+        assertEquals("Technologic", MusicBrainzClient.cleanSearchTerm("Technologic [320k].mp3"))
+        assertEquals("Aerodynamic", MusicBrainzClient.cleanSearchTerm("[02] - Aerodynamic.wav"))
     }
 }

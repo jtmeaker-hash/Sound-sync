@@ -76,6 +76,42 @@ class MusicBrainzClient(
 ) {
     private val inFlight = ConcurrentHashMap<String, CompletableDeferred<MusicBrainzRecording?>>()
 
+    suspend fun lookupRecording(recordingId: String): MusicBrainzRecording? {
+        if (recordingId.isBlank()) return null
+        val cacheKey = "recording:$recordingId"
+        cache.get(cacheKey)?.let { return it }
+        val json = requestWithRetry("recording/${urlEncode(recordingId)}?fmt=json&inc=artist-credits+releases+release-groups+media+recordings+isrcs+tags+genres+ratings")
+            ?: return null
+        val recording = runCatching { parseRecording(json) }.getOrNull()
+        if (recording != null) cache.put(cacheKey, recording)
+        return recording
+    }
+
+    suspend fun lookupByIsrc(isrc: String): List<MusicBrainzRecording> {
+        val cleanIsrc = isrc.trim()
+        if (cleanIsrc.isBlank()) return emptyList()
+        val cacheKey = "isrc:$cleanIsrc"
+        val json = requestWithRetry("isrc/${urlEncode(cleanIsrc)}?fmt=json&inc=artist-credits+releases+release-groups+media+recordings+tags+genres")
+        val candidates = parseRecordings(json.orEmpty())
+        if (candidates.isNotEmpty()) return candidates
+        // Fallback to Lucene search by ISRC if direct lookup returned empty
+        val fallbackJson = requestWithRetry("recording/?fmt=json&limit=25&query=${urlEncode("isrc:\"${escape(cleanIsrc)}\"")}")
+        return parseRecordings(fallbackJson.orEmpty())
+    }
+
+    suspend fun lookupRelease(releaseId: String): MusicBrainzRelease? {
+        if (releaseId.isBlank()) return null
+        val json = requestWithRetry("release/${urlEncode(releaseId)}?fmt=json&inc=artist-credits+labels+recordings+release-groups+media+genres+tags")
+            ?: return null
+        return runCatching { parseRelease(JSONObject(json)) }.getOrNull()
+    }
+
+    suspend fun searchRecordings(query: String, limit: Int = 25): List<MusicBrainzRecording> {
+        if (query.isBlank()) return emptyList()
+        val json = requestWithRetry("recording/?fmt=json&limit=$limit&query=${urlEncode(query)}")
+        return parseRecordings(json.orEmpty())
+    }
+
     suspend fun findRecording(identity: LocalTrackIdentity): MusicBrainzRecording? {
         val cacheKey = identity.recordingId?.let { "recording:$it" } ?: searchKey(identity)
         cache.get(cacheKey)?.let { return it }
@@ -87,22 +123,44 @@ class MusicBrainzClient(
         if (raced != null) return raced.await()
 
         try {
-            val recording = if (!identity.recordingId.isNullOrBlank()) {
-                requestWithRetry("recording/${identity.recordingId}?fmt=json&inc=artists+releases+isrcs+tags")
-                    ?.let(::parseRecording)
-                    ?.takeIf { matchesIdentity(identity, it, requireStrongIdentity = false) }
-            } else {
-                val candidates = if (!identity.isrc.isNullOrBlank()) {
-                    val isrcJson = requestWithRetry("recording/?fmt=json&limit=25&query=${urlEncode("isrc:\"${escape(identity.isrc)}\"")}")
-                    parseRecordings(isrcJson.orEmpty())
-                } else emptyList()
-                val searchCandidates = if (candidates.isNotEmpty()) candidates else {
-                    val query = buildQuery(identity)
-                    val json = requestWithRetry("recording/?fmt=json&limit=25&query=${urlEncode(query)}")
-                    parseRecordings(json.orEmpty())
+            var recording: MusicBrainzRecording? = null
+
+            // Priority 1: Exact MBID lookup if available
+            if (!identity.recordingId.isNullOrBlank()) {
+                val candidate = lookupRecording(identity.recordingId)
+                if (candidate != null && matchesIdentity(identity, candidate, requireStrongIdentity = false)) {
+                    recording = candidate
                 }
-                selectBestCandidate(identity, searchCandidates)
             }
+
+            // Priority 2: ISRC lookup
+            if (recording == null && !identity.isrc.isNullOrBlank()) {
+                val candidates = lookupByIsrc(identity.isrc)
+                recording = selectBestCandidate(identity, candidates)
+            }
+
+            // Priority 3: Title & Artist Lucene search
+            if (recording == null) {
+                val cleanTitle = cleanSearchTerm(identity.title)
+                val cleanArtist = cleanSearchTerm(identity.artist)
+                var searchCandidates = if (cleanTitle.isNotBlank()) {
+                    val strictQuery = buildQuery(cleanTitle, cleanArtist)
+                    searchRecordings(strictQuery, 25)
+                } else emptyList()
+
+                if (searchCandidates.isEmpty() && cleanTitle.isNotBlank()) {
+                    // Fallback to broader unquoted search terms
+                    val fallbackQuery = if (cleanArtist.isNotBlank()) {
+                        "\"${escape(cleanTitle)}\" \"${escape(cleanArtist)}\""
+                    } else {
+                        "\"${escape(cleanTitle)}\""
+                    }
+                    searchCandidates = searchRecordings(fallbackQuery, 25)
+                }
+
+                recording = selectBestCandidate(identity, searchCandidates)
+            }
+
             if (recording != null) cache.put(cacheKey, recording)
             deferred.complete(recording)
             return recording
@@ -141,9 +199,11 @@ class MusicBrainzClient(
         return null
     }
 
-    private fun buildQuery(identity: LocalTrackIdentity): String = buildString {
-        append("recording:\"").append(escape(identity.title)).append("\"")
-        if (identity.artist.isNotBlank()) append(" AND artist:\"").append(escape(identity.artist)).append("\"")
+    private fun buildQuery(title: String, artist: String): String = buildString {
+        append("recording:\"").append(escape(title)).append("\"")
+        if (artist.isNotBlank() && !artist.equals("Unknown Artist", ignoreCase = true) && !artist.equals("Various Artists", ignoreCase = true)) {
+            append(" AND artist:\"").append(escape(artist)).append("\"")
+        }
     }
 
     private fun selectBestCandidate(identity: LocalTrackIdentity, candidates: List<MusicBrainzRecording>): MusicBrainzRecording? {
@@ -200,6 +260,14 @@ class MusicBrainzClient(
         private fun versionTokens(value: String): Set<String> = Regex("(?i)original mix|radio edit|extended mix|club mix|remix|vip|dub|instrumental|live|acoustic|remaster")
             .findAll(value).map { it.value.lowercase(Locale.ROOT) }.toSet()
 
+        fun cleanSearchTerm(value: String): String {
+            return value
+                .replace(Regex("\\.(mp3|flac|wav|m4a|aac|ogg|aif|aiff)$", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("^\\[?[0-9]+\\]?[.\\-\\s]+"), "")
+                .replace(Regex("\\[(320k|FLAC|HQ|Official|HD|HQ Rip)\\]", RegexOption.IGNORE_CASE), "")
+                .trim()
+        }
+
         fun parseRecordings(json: String): List<MusicBrainzRecording> {
             val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyList()
             val recordings = root.optJSONArray("recordings") ?: JSONArray()
@@ -208,7 +276,7 @@ class MusicBrainzClient(
 
         fun parseRecording(json: String): MusicBrainzRecording = parseRecording(JSONObject(json))
 
-        private fun parseRecording(obj: JSONObject): MusicBrainzRecording {
+        fun parseRecording(obj: JSONObject): MusicBrainzRecording {
             val credits = obj.optJSONArray("artist-credit")?.let { array ->
                 (0 until array.length()).mapNotNull { i ->
                     val credit = array.optJSONObject(i) ?: return@mapNotNull null
@@ -220,7 +288,21 @@ class MusicBrainzClient(
                 (0 until array.length()).mapNotNull { i -> array.optJSONObject(i)?.let(::parseRelease) }
             }.orEmpty()
             val isrcs = obj.optJSONArray("isrcs")?.let { array -> (0 until array.length()).map { array.optString(it) }.filter { it.isNotBlank() } }.orEmpty()
-            val tags = obj.optJSONArray("tags")?.let { array -> (0 until array.length()).mapNotNull { array.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) } }.orEmpty()
+            
+            val allTags = mutableListOf<String>()
+            obj.optJSONArray("genres")?.let { array ->
+                for (i in 0 until array.length()) {
+                    array.optJSONObject(i)?.optString("name")?.takeIf(String::isNotBlank)?.let { allTags.add(it) }
+                }
+            }
+            obj.optJSONArray("tags")?.let { array ->
+                for (i in 0 until array.length()) {
+                    array.optJSONObject(i)?.optString("name")?.takeIf(String::isNotBlank)?.let { allTags.add(it) }
+                }
+            }
+
+            val rating = obj.optJSONObject("rating")?.optDouble("value")?.takeIf { !it.isNaN() && it > 0 }
+
             return MusicBrainzRecording(
                 id = obj.optString("id"),
                 title = obj.optString("title"),
@@ -229,11 +311,12 @@ class MusicBrainzClient(
                 artistCredits = credits,
                 releases = releases,
                 isrcs = isrcs,
-                tags = tags
+                tags = allTags.distinct(),
+                rating = rating
             )
         }
 
-        private fun parseRelease(obj: JSONObject): MusicBrainzRelease {
+        fun parseRelease(obj: JSONObject): MusicBrainzRelease {
             var trackNumber: Int? = null
             var discNumber: Int? = null
             var mediumPosition: Int? = null

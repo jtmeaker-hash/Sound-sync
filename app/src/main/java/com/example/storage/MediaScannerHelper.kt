@@ -162,20 +162,33 @@ object MediaScannerHelper {
 
                         val qualityRating = resolveQualityRating(format, computedBitrateKbps)
 
-                        // Priority 1: Extract embedded metadata (ID3 / MP4 tags) if present
-                        val embeddedTags = TunebatMetadataService.extractEmbeddedTags(context, targetPath)
-                        val detectedBpm = if (embeddedTags != null && embeddedTags.hasBpm) embeddedTags.bpm else 0.0
-                        val detectedKey = if (embeddedTags != null && embeddedTags.hasKey) embeddedTags.musicalKey else ""
+                        // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 tags & MusicBrainz tags) if present
+                        val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, targetPath)
+                        val effectiveTitle = embedded.title?.takeIf(String::isNotBlank) ?: title
+                        val effectiveArtist = embedded.artist?.takeIf(String::isNotBlank)
+                            ?: if (rawArtist.isNullOrBlank() || rawArtist == "<unknown>") "Unknown Artist" else rawArtist
+                        val effectiveAlbum = embedded.album?.takeIf(String::isNotBlank)
+                            ?: if (rawAlbum.isNullOrBlank() || rawAlbum == "<unknown>") "Single" else rawAlbum
+                        val effectiveGenre = embedded.genre?.takeIf(String::isNotBlank) ?: "DJ Library"
+                        val effectiveBpm = embedded.bpm ?: 0.0
+                        val effectiveKey = embedded.camelotKey?.takeIf(String::isNotBlank)
+                            ?: embedded.musicalKey?.takeIf(String::isNotBlank) ?: ""
+                        val effectiveTrackNum = embedded.trackNumber ?: trackNum
+                        val effectiveDiscNum = embedded.discNumber ?: discNum
+                        val effectiveYear = embedded.releaseYear
+                        val effectiveDate = embedded.releaseDate
 
                         val track = Track(
                             id = "media_$id",
-                            title = title,
-                            artist = if (rawArtist.isNullOrBlank() || rawArtist == "<unknown>") "Unknown Artist" else rawArtist,
-                            album = if (rawAlbum.isNullOrBlank() || rawAlbum == "<unknown>") "Single" else rawAlbum,
-                            genre = "DJ Library",
+                            title = effectiveTitle,
+                            artist = effectiveArtist,
+                            album = effectiveAlbum,
+                            albumArtist = embedded.albumArtist.orEmpty(),
+                            genre = effectiveGenre,
                             subGenre = "Club",
-                            bpm = detectedBpm,
-                            musicalKey = detectedKey,
+                            bpm = effectiveBpm,
+                            musicalKey = effectiveKey,
+                            camelotKey = embedded.camelotKey.orEmpty(),
                             durationSeconds = durationSec,
                             bitrateKbps = computedBitrateKbps,
                             format = format,
@@ -192,8 +205,20 @@ object MediaScannerHelper {
                             dateAdded = if (dateAddedSec > 0) dateAddedSec * 1000L else System.currentTimeMillis(),
                             crateId = "crate_all",
                             sourceId = resolveSourceId(dataPath),
-                            trackNumber = trackNum,
-                            discNumber = discNum,
+                            trackNumber = effectiveTrackNum,
+                            discNumber = effectiveDiscNum,
+                            releaseDate = effectiveDate,
+                            releaseYear = effectiveYear,
+                            recordLabel = embedded.recordLabel,
+                            barcode = embedded.barcode,
+                            isrc = embedded.isrc,
+                            musicBrainzRecordingId = embedded.musicBrainzRecordingId,
+                            musicBrainzReleaseId = embedded.musicBrainzReleaseId,
+                            musicBrainzArtistId = embedded.musicBrainzArtistId,
+                            musicBrainzReleaseGroupId = embedded.musicBrainzReleaseGroupId,
+                            musicBrainzMatchConfidence = if (embedded.hasEmbeddedMusicBrainz) 1.0 else 0.0,
+                            musicBrainzLastChecked = if (embedded.hasEmbeddedMusicBrainz) System.currentTimeMillis() else null,
+                            artworkUrl = embedded.musicBrainzReleaseId?.let { "https://coverartarchive.org/release/$it/front-500" },
                             storageRelativePath = storageRelPath,
                             contentFingerprint = fingerprint
                         )
@@ -308,10 +333,16 @@ object MediaScannerHelper {
 
             val effectiveTitle = if (!title.isNullOrBlank()) title else displayName.substringBeforeLast(".")
 
-            // Priority 1: Extract embedded metadata (ID3 / MP4 tags) if present
-            val embeddedTags = TunebatMetadataService.extractEmbeddedTags(context, uri.toString())
-            val detectedBpm = if (embeddedTags != null && embeddedTags.hasBpm) embeddedTags.bpm else 0.0
-            val detectedKey = if (embeddedTags != null && embeddedTags.hasKey) embeddedTags.musicalKey else ""
+            // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 tags & MusicBrainz tags) if present
+            val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, uri.toString())
+            val resolvedTitle = embedded.title?.takeIf(String::isNotBlank)
+                ?: if (!title.isNullOrBlank()) title else displayName.substringBeforeLast(".")
+            val resolvedArtist = embedded.artist?.takeIf(String::isNotBlank) ?: artist
+            val resolvedAlbum = embedded.album?.takeIf(String::isNotBlank) ?: album
+            val resolvedGenre = embedded.genre?.takeIf(String::isNotBlank) ?: genre
+            val resolvedBpm = embedded.bpm ?: 0.0
+            val resolvedKey = embedded.camelotKey?.takeIf(String::isNotBlank)
+                ?: embedded.musicalKey?.takeIf(String::isNotBlank) ?: ""
 
             val fingerprint = AudioFingerprintUtil.generateFingerprint(
                 context = context,
@@ -322,13 +353,15 @@ object MediaScannerHelper {
 
             Track(
                 id = id,
-                title = effectiveTitle,
-                artist = artist,
-                album = album,
-                genre = genre,
+                title = resolvedTitle,
+                artist = resolvedArtist,
+                album = resolvedAlbum,
+                albumArtist = embedded.albumArtist.orEmpty(),
+                genre = resolvedGenre,
                 subGenre = "Club",
-                bpm = detectedBpm,
-                musicalKey = detectedKey,
+                bpm = resolvedBpm,
+                musicalKey = resolvedKey,
+                camelotKey = embedded.camelotKey.orEmpty(),
                 durationSeconds = durationSec,
                 bitrateKbps = bitrateKbps,
                 format = format,
@@ -345,6 +378,20 @@ object MediaScannerHelper {
                 dateAdded = System.currentTimeMillis(),
                 crateId = "crate_all",
                 sourceId = customSourceId,
+                trackNumber = embedded.trackNumber ?: 0,
+                discNumber = embedded.discNumber ?: 1,
+                releaseDate = embedded.releaseDate,
+                releaseYear = embedded.releaseYear,
+                recordLabel = embedded.recordLabel,
+                barcode = embedded.barcode,
+                isrc = embedded.isrc,
+                musicBrainzRecordingId = embedded.musicBrainzRecordingId,
+                musicBrainzReleaseId = embedded.musicBrainzReleaseId,
+                musicBrainzArtistId = embedded.musicBrainzArtistId,
+                musicBrainzReleaseGroupId = embedded.musicBrainzReleaseGroupId,
+                musicBrainzMatchConfidence = if (embedded.hasEmbeddedMusicBrainz) 1.0 else 0.0,
+                musicBrainzLastChecked = if (embedded.hasEmbeddedMusicBrainz) System.currentTimeMillis() else null,
+                artworkUrl = embedded.musicBrainzReleaseId?.let { "https://coverartarchive.org/release/$it/front-500" },
                 contentFingerprint = fingerprint
             )
         } catch (e: Exception) {

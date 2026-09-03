@@ -376,11 +376,13 @@ class AudioScanService : Service() {
         var sampleRate = 44100
         var bitDepth = 16
 
-        val embedded = com.example.analysis.TunebatMetadataService.extractEmbeddedTags(this, uri.toString())
-        if (embedded != null) {
-            if (embedded.hasBpm) bpm = embedded.bpm
-            if (embedded.hasKey) musicalKey = embedded.musicalKey
-        }
+        val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(this, uri.toString())
+        if (embedded.title?.isNotBlank() == true) title = embedded.title
+        if (embedded.artist?.isNotBlank() == true) artist = embedded.artist
+        if (embedded.album?.isNotBlank() == true) album = embedded.album
+        if (embedded.genre?.isNotBlank() == true) genre = embedded.genre
+        if (embedded.hasBpm) bpm = embedded.bpm ?: 0.0
+        if (embedded.hasKey) musicalKey = embedded.camelotKey ?: embedded.musicalKey.orEmpty()
 
         val retriever = MediaMetadataRetriever()
         try {
@@ -400,10 +402,10 @@ class AudioScanService : Service() {
                     retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE)?.toIntOrNull()
                 } else null
 
-                if (!mTitle.isNullOrBlank()) title = mTitle
-                if (!mArtist.isNullOrBlank() && mArtist != "<unknown>") artist = mArtist
-                if (!mAlbum.isNullOrBlank() && mAlbum != "<unknown>") album = mAlbum
-                if (!mGenre.isNullOrBlank()) genre = mGenre
+                if (!mTitle.isNullOrBlank() && title == name.substringBeforeLast(".")) title = mTitle
+                if (!mArtist.isNullOrBlank() && mArtist != "<unknown>" && artist == "Unknown Artist") artist = mArtist
+                if (!mAlbum.isNullOrBlank() && mAlbum != "<unknown>" && album == "Single") album = mAlbum
+                if (!mGenre.isNullOrBlank() && genre == "DJ Library") genre = mGenre
                 if (mDuration != null) {
                     durationSec = (mDuration.toLongOrNull() ?: 0L).let { (it / 1000).toInt().coerceAtLeast(1) }
                 }
@@ -421,15 +423,19 @@ class AudioScanService : Service() {
         }
 
         // Infer BPM and Key heuristics from filename if tagged like "128_8A_Artist_Title"
-        val cleanName = name.replace("_", " ").replace("-", " ")
-        val bpmMatch = Regex("""\b(1[1-3][0-9]|14[0-9]|9[0-9])\s*(?:bpm)?\b""", RegexOption.IGNORE_CASE).find(cleanName)
-        if (bpmMatch != null) {
-            bpmMatch.groupValues[1].toDoubleOrNull()?.let { bpm = it }
+        if (bpm <= 0.0) {
+            val cleanName = name.replace("_", " ").replace("-", " ")
+            val bpmMatch = Regex("""\b(1[1-3][0-9]|14[0-9]|9[0-9])\s*(?:bpm)?\b""", RegexOption.IGNORE_CASE).find(cleanName)
+            if (bpmMatch != null) {
+                bpmMatch.groupValues[1].toDoubleOrNull()?.let { bpm = it }
+            }
         }
 
-        val keyMatch = Regex("""\b([1-9]|1[0-2])([A-B])\b""", RegexOption.IGNORE_CASE).find(name)
-        if (keyMatch != null) {
-            musicalKey = keyMatch.value.uppercase(Locale.ROOT)
+        if (musicalKey.isBlank()) {
+            val keyMatch = Regex("""\b([1-9]|1[0-2])([A-B])\b""", RegexOption.IGNORE_CASE).find(name)
+            if (keyMatch != null) {
+                musicalKey = keyMatch.value.uppercase(Locale.ROOT)
+            }
         }
 
         val qualityRating = when {
@@ -449,12 +455,14 @@ class AudioScanService : Service() {
             title = title,
             artist = artist,
             album = album,
+            albumArtist = embedded.albumArtist.orEmpty(),
             genre = genre,
             subGenre = "Club",
             bpm = bpm,
             musicalKey = musicalKey,
-            durationSeconds = durationSec,
-            bitrateKbps = bitrateKbps,
+            camelotKey = embedded.camelotKey.orEmpty(),
+            durationSeconds = if (durationSec > 0) durationSec else embedded.durationSeconds,
+            bitrateKbps = if (bitrateKbps > 0) bitrateKbps else embedded.bitrateKbps,
             format = format,
             fileSizeMb = String.format(Locale.US, "%.2f", sizeMb).toDoubleOrNull() ?: sizeMb,
             filePath = uri.toString(),
@@ -469,6 +477,20 @@ class AudioScanService : Service() {
             dateAdded = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),
             crateId = "crate_all",
             sourceId = sourceId,
+            trackNumber = embedded.trackNumber ?: 0,
+            discNumber = embedded.discNumber ?: 1,
+            releaseDate = embedded.releaseDate,
+            releaseYear = embedded.releaseYear,
+            recordLabel = embedded.recordLabel,
+            barcode = embedded.barcode,
+            isrc = embedded.isrc,
+            musicBrainzRecordingId = embedded.musicBrainzRecordingId,
+            musicBrainzReleaseId = embedded.musicBrainzReleaseId,
+            musicBrainzArtistId = embedded.musicBrainzArtistId,
+            musicBrainzReleaseGroupId = embedded.musicBrainzReleaseGroupId,
+            musicBrainzMatchConfidence = if (embedded.hasEmbeddedMusicBrainz) 1.0 else 0.0,
+            musicBrainzLastChecked = if (embedded.hasEmbeddedMusicBrainz) System.currentTimeMillis() else null,
+            artworkUrl = embedded.musicBrainzReleaseId?.let { "https://coverartarchive.org/release/$it/front-500" },
             contentFingerprint = fingerprint
         )
     }
