@@ -555,6 +555,20 @@ fun MainDjScreen(
                 NowPlayingSettingsSheet(
                     crossfadeSeconds = crossfadeSeconds,
                     onCrossfadeSecondsChange = { viewModel.setCrossfadeSeconds(it) },
+                    eqEnabled = eqEnabled,
+                    eqLow = eqLow,
+                    eqMid = eqMid,
+                    eqHigh = eqHigh,
+                    onSetEqEnabled = { viewModel.audioEngine.setEqEnabled(it) },
+                    onSetEqLow = { viewModel.audioEngine.setEq(it, eqMid, eqHigh) },
+                    onSetEqMid = { viewModel.audioEngine.setEq(eqLow, it, eqHigh) },
+                    onSetEqHigh = { viewModel.audioEngine.setEq(eqLow, eqMid, it) },
+                    haasEnabled = haasEnabled,
+                    haasAmount = haasAmount,
+                    haasDelayMs = haasDelayMs,
+                    onSetHaasEnabled = { viewModel.audioEngine.setHaasEnabled(it) },
+                    onSetHaasAmount = { viewModel.audioEngine.setHaasAmount(it) },
+                    onSetHaasDelayMs = { viewModel.audioEngine.setHaasDelayMs(it) },
                     onDismiss = { showNowPlayingSettings = false }
                 )
             }

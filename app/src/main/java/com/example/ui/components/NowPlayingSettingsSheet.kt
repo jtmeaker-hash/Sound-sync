@@ -5,6 +5,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Tune
@@ -38,6 +42,22 @@ import java.util.Locale
 fun NowPlayingSettingsSheet(
     crossfadeSeconds: Int,
     onCrossfadeSecondsChange: (Int) -> Unit,
+    // EQ state
+    eqEnabled: Boolean = true,
+    eqLow: Float = 1f,
+    eqMid: Float = 1f,
+    eqHigh: Float = 1f,
+    onSetEqEnabled: (Boolean) -> Unit = {},
+    onSetEqLow: (Float) -> Unit = {},
+    onSetEqMid: (Float) -> Unit = {},
+    onSetEqHigh: (Float) -> Unit = {},
+    // Haas state
+    haasEnabled: Boolean = false,
+    haasAmount: Float = 0.5f,
+    haasDelayMs: Float = 5f,
+    onSetHaasEnabled: (Boolean) -> Unit = {},
+    onSetHaasAmount: (Float) -> Unit = {},
+    onSetHaasDelayMs: (Float) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -48,7 +68,8 @@ fun NowPlayingSettingsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Row(
@@ -65,6 +86,26 @@ fun NowPlayingSettingsSheet(
                 }
             }
 
+            // ── Audio Effects Panel (3-Band EQ & Haas 3D Surround) ───
+            AudioEffectsPanel(
+                eqEnabled = eqEnabled,
+                eqLow = eqLow,
+                eqMid = eqMid,
+                eqHigh = eqHigh,
+                onSetEqEnabled = onSetEqEnabled,
+                onSetEqLow = onSetEqLow,
+                onSetEqMid = onSetEqMid,
+                onSetEqHigh = onSetEqHigh,
+                haasEnabled = haasEnabled,
+                haasAmount = haasAmount,
+                haasDelayMs = haasDelayMs,
+                onSetHaasEnabled = onSetHaasEnabled,
+                onSetHaasAmount = onSetHaasAmount,
+                onSetHaasDelayMs = onSetHaasDelayMs,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // ── Playback Transitions (Crossfade) ──────────────────────
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = DjObsidian,

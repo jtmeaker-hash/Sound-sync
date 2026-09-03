@@ -103,4 +103,29 @@ class FolderAndLifecycleTest {
         // Clean up
         engine2.release()
     }
+
+    @Test
+    fun testAudioEffectsEngineParameters() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine = DjAudioEngine.getInstance(context)
+
+        engine.setEqEnabled(true)
+        assertTrue(engine.eqEnabled.value)
+
+        engine.setEq(1.5f, 0.8f, 1.2f)
+        assertEquals(1.5f, engine.eqLow.value, 0.01f)
+        assertEquals(0.8f, engine.eqMid.value, 0.01f)
+        assertEquals(1.2f, engine.eqHigh.value, 0.01f)
+
+        engine.setHaasEnabled(true)
+        assertTrue(engine.haasEnabled.value)
+
+        engine.setHaasAmount(0.75f)
+        assertEquals(0.75f, engine.haasAmount.value, 0.01f)
+
+        engine.setHaasDelayMs(15f)
+        assertEquals(15f, engine.haasDelayMs.value, 0.01f)
+
+        engine.release()
+    }
 }

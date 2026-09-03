@@ -22,7 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -34,8 +34,11 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -202,7 +205,7 @@ fun NowPlayingFullScreen(
                             .testTag("now_playing_settings_button")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.MoreVert,
+                            imageVector = Icons.Default.Tune,
                             contentDescription = "Now Playing Settings",
                             tint = TextSecondary,
                             modifier = Modifier.size(22.dp)
@@ -591,25 +594,40 @@ fun NowPlayingFullScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // 6. AUDIO EFFECTS PANEL (EQ + Haas Surround)
-                AudioEffectsPanel(
-                    eqEnabled = eqEnabled,
-                    eqLow = eqLow,
-                    eqMid = eqMid,
-                    eqHigh = eqHigh,
-                    onSetEqEnabled = onSetEqEnabled,
-                    onSetEqLow = onSetEqLow,
-                    onSetEqMid = onSetEqMid,
-                    onSetEqHigh = onSetEqHigh,
-                    haasEnabled = haasEnabled,
-                    haasAmount = haasAmount,
-                    haasDelayMs = haasDelayMs,
-                    onSetHaasEnabled = onSetHaasEnabled,
-                    onSetHaasAmount = onSetHaasAmount,
-                    onSetHaasDelayMs = onSetHaasDelayMs
-                )
+                // 6. AUDIO EFFECTS & SETTINGS ACTION
+                OutlinedButton(
+                    onClick = onOpenSettings,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("open_audio_effects_settings_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = null,
+                        tint = DeckACyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Audio Effects & Settings",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = TextSecondary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
