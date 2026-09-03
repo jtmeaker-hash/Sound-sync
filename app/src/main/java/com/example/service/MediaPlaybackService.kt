@@ -146,7 +146,7 @@ class MediaPlaybackService : Service() {
             }
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun observeAudioEngine() {
@@ -420,6 +420,15 @@ class MediaPlaybackService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.d(TAG, "onTaskRemoved: User closed app from recents. Stopping service.")
+        try {
+            audioEngine.pause()
+        } catch (_: Exception) {}
+        stopForegroundService()
+    }
 
     override fun onDestroy() {
         Log.d(TAG, "MediaPlaybackService onDestroy")

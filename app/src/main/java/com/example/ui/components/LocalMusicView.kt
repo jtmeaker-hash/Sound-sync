@@ -101,7 +101,8 @@ fun LocalMusicView(
                 it.artist.lowercase().contains(query) ||
                 it.album.lowercase().contains(query) ||
                 it.genre.lowercase().contains(query) ||
-                it.format.lowercase().contains(query)
+                it.format.lowercase().contains(query) ||
+                it.directoryPath.lowercase().contains(query)
             }
         }
 

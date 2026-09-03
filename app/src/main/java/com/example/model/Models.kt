@@ -233,6 +233,15 @@ data class FolderItem(
     val totalSizeMb: Double = 0.0
 )
 
+data class TrackFolder(
+    val id: String,
+    val name: String,
+    val path: String,
+    val trackCount: Int = 0,
+    val totalDurationSeconds: Int = 0,
+    val tracks: List<Track> = emptyList()
+)
+
 data class DjCrate(
     val id: String,
     val name: String,

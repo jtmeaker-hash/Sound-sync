@@ -50,8 +50,17 @@ class DjAudioEngine(private val context: Context) {
         private var instance: DjAudioEngine? = null
 
         fun getInstance(context: Context): DjAudioEngine {
-            return instance ?: synchronized(this) {
-                instance ?: DjAudioEngine(context.applicationContext).also { instance = it }
+            val current = instance
+            if (current != null && !current.isEngineReleased) {
+                return current
+            }
+            return synchronized(this) {
+                val existing = instance
+                if (existing != null && !existing.isEngineReleased) {
+                    existing
+                } else {
+                    DjAudioEngine(context.applicationContext).also { instance = it }
+                }
             }
         }
     }
@@ -1349,6 +1358,11 @@ class DjAudioEngine(private val context: Context) {
     // ── Release ────────────────────────────────────────────────────────────
 
     fun release() {
+        synchronized(Companion) {
+            if (instance === this) {
+                instance = null
+            }
+        }
         isEngineReleased = true
         decoderShouldPause = true
         _isPlaying.value = false
@@ -1358,8 +1372,12 @@ class DjAudioEngine(private val context: Context) {
         prepareJob?.cancel()
         analysisScope.cancel()
         scope.cancel()
-        audioThreadExecutor.shutdownNow()
-        analysisExecutor.shutdownNow()
+        try {
+            audioThreadExecutor.shutdownNow()
+        } catch (_: Exception) {}
+        try {
+            analysisExecutor.shutdownNow()
+        } catch (_: Exception) {}
     }
 
     /**

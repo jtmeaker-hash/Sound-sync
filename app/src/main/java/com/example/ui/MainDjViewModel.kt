@@ -79,7 +79,8 @@ enum class LocalCategory(val label: String, val iconName: String) {
     SONGS("Songs", "music_note"),
     ALBUMS("Albums", "album"),
     ARTISTS("Artists", "person"),
-    PLAYLISTS("Playlists", "queue_music")
+    PLAYLISTS("Playlists", "queue_music"),
+    FOLDERS("Folders", "folder")
 }
 
 class MainDjViewModel(application: Application) : AndroidViewModel(application) {
@@ -251,6 +252,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _selectedPlaylist = MutableStateFlow<com.example.model.Playlist?>(null)
     val selectedPlaylist = _selectedPlaylist.asStateFlow()
+
+    private val _selectedFolder = MutableStateFlow<com.example.model.TrackFolder?>(null)
+    val selectedFolder = _selectedFolder.asStateFlow()
 
     private val _isFolderExplorerOpen = MutableStateFlow(false)
     val isFolderExplorerOpen = _isFolderExplorerOpen.asStateFlow()
@@ -437,6 +441,30 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             .sortedBy { if (it.name.equals("Unknown Artist", ignoreCase = true)) "zzzz" else it.name.lowercase() }
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    // Dynamically grouped Folders from Real indexed tracks
+    val allFolders: StateFlow<List<com.example.model.TrackFolder>> = allTracks.map { tracks ->
+        tracks.groupBy { track ->
+            val dir = track.directoryPath.ifBlank {
+                java.io.File(track.filePath).parent ?: "/Music"
+            }
+            dir.trimEnd('/')
+        }.map { (folderPath, folderTracks) ->
+            val folderName = folderPath.substringAfterLast('/').ifBlank { folderPath.ifBlank { "Root" } }
+            val sortedTracks = folderTracks.sortedWith(
+                compareBy<Track> { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
+                    .thenBy { it.title.lowercase(java.util.Locale.ROOT) }
+            )
+            com.example.model.TrackFolder(
+                id = "folder_${folderPath.hashCode()}",
+                name = folderName,
+                path = folderPath,
+                trackCount = sortedTracks.size,
+                totalDurationSeconds = sortedTracks.sumOf { it.durationSeconds },
+                tracks = sortedTracks
+            )
+        }.sortedBy { it.name.lowercase(java.util.Locale.ROOT) }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Reactive Playlists flow combining Room playlist entities and track references
@@ -1303,6 +1331,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         _selectedAlbum.value = null
         _selectedArtist.value = null
         _selectedPlaylist.value = null
+        _selectedFolder.value = null
     }
 
     fun openAlbum(album: com.example.model.Album) {
@@ -1319,6 +1348,14 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun closeArtist() {
         _selectedArtist.value = null
+    }
+
+    fun openFolder(folder: com.example.model.TrackFolder) {
+        _selectedFolder.value = folder
+    }
+
+    fun closeFolder() {
+        _selectedFolder.value = null
     }
 
     fun openPlaylist(playlist: com.example.model.Playlist) {
@@ -2465,10 +2502,13 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         if (backgroundEnrichmentJob?.isActive == true) return
 
         backgroundEnrichmentJob = viewModelScope.launch(Dispatchers.IO) {
-            val unenrichedTracks = trackDao.getAllTracksSync().filter { !it.toTrack().isMusicBrainzEnriched }
+            val unenrichedTracks = trackDao.getAllTracksSync()
+                .filter { !it.toTrack().isMusicBrainzEnriched }
+                .take(30)
             if (unenrichedTracks.isEmpty()) return@launch
             Log.d("MainDjViewModel", "Starting background MusicBrainz catalog enrichment for ${unenrichedTracks.size} tracks...")
             for (entity in unenrichedTracks) {
+                if (!kotlinx.coroutines.isActive) break
                 val currentSettings = metadataSettings.value
                 if (!currentSettings.enrichmentEnabled || !currentSettings.musicBrainzEnabled) break
                 val track = entity.toTrack()
@@ -2697,6 +2737,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        backgroundEnrichmentJob?.cancel()
         audioEngine.release()
     }
 }

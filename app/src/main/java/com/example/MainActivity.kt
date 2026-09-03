@@ -187,6 +187,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "onDestroy: Activity destroyed.")
+        Log.d(TAG, "onDestroy: Activity destroyed (isFinishing=$isFinishing).")
+        if (isFinishing) {
+            if (activeViewModel?.audioEngine?.isPlaying?.value != true) {
+                com.example.service.MediaPlaybackService.stopService(applicationContext)
+            }
+        }
     }
 }

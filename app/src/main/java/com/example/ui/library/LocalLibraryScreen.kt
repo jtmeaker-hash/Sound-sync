@@ -56,10 +56,12 @@ fun LocalLibraryScreen(
     val allAlbums by viewModel.allAlbums.collectAsState()
     val allArtists by viewModel.allArtists.collectAsState()
     val allPlaylists by viewModel.allPlaylists.collectAsState()
+    val allFolders by viewModel.allFolders.collectAsState()
 
     val selectedAlbum by viewModel.selectedAlbum.collectAsState()
     val selectedArtist by viewModel.selectedArtist.collectAsState()
     val selectedPlaylist by viewModel.selectedPlaylist.collectAsState()
+    val selectedFolder by viewModel.selectedFolder.collectAsState()
 
     val currentPlayingTrack by viewModel.audioEngine.currentTrack.collectAsState()
     val isPlaying by viewModel.audioEngine.isPlaying.collectAsState()
@@ -157,6 +159,21 @@ fun LocalLibraryScreen(
                     onInspectSpectrogram = { track -> viewModel.inspectTrackSpectrogram(track, showTab = true) }
                 )
             }
+            selectedFolder != null -> {
+                FolderDetailScreen(
+                    folder = selectedFolder!!,
+                    currentPlayingTrack = currentPlayingTrack,
+                    isPlaying = isPlaying,
+                    onBack = { viewModel.closeFolder() },
+                    onPlayTrack = { track -> viewModel.playTrack(track) },
+                    onPlayAll = { tracks, shuffle -> viewModel.playTrackList(tracks, shuffle) },
+                    onAddFolderToPlaylist = { tracks -> viewModel.openAddToPlaylist(tracks) },
+                    onAddTrackToPlaylist = { track -> viewModel.openAddToPlaylist(track) },
+                    onQueueTrack = { track, playNext -> viewModel.queueTrack(track, playNext) },
+                    onInspectProperties = { track -> viewModel.openTrackProperties(track) },
+                    onInspectSpectrogram = { track -> viewModel.inspectTrackSpectrogram(track, showTab = true) }
+                )
+            }
             else -> {
                 // Category Selector Bar
                 CategorySelectorBar(
@@ -165,6 +182,7 @@ fun LocalLibraryScreen(
                     albumCount = allAlbums.size,
                     artistCount = allArtists.size,
                     playlistCount = allPlaylists.size,
+                    folderCount = allFolders.size,
                     onSelectCategory = { cat -> viewModel.selectLocalCategory(cat) },
                     onOpenFolderExplorer = onOpenFolderExplorer
                 )
@@ -209,6 +227,13 @@ fun LocalLibraryScreen(
                             onExportToRockbox = { playlist -> viewModel.exportPlaylistToRockbox(playlist.id) }
                         )
                     }
+                    LocalCategory.FOLDERS -> {
+                        FoldersScreen(
+                            folders = allFolders,
+                            onSelectFolder = { folder -> viewModel.openFolder(folder) },
+                            onPlayFolder = { folder, shuffle -> viewModel.playTrackList(folder.tracks, shuffle) }
+                        )
+                    }
                 }
             }
         }
@@ -222,6 +247,7 @@ private fun CategorySelectorBar(
     albumCount: Int,
     artistCount: Int,
     playlistCount: Int,
+    folderCount: Int,
     onSelectCategory: (LocalCategory) -> Unit,
     onOpenFolderExplorer: () -> Unit
 ) {
@@ -251,6 +277,7 @@ private fun CategorySelectorBar(
                         LocalCategory.ALBUMS -> albumCount
                         LocalCategory.ARTISTS -> artistCount
                         LocalCategory.PLAYLISTS -> playlistCount
+                        LocalCategory.FOLDERS -> folderCount
                     }
 
                     Surface(
@@ -273,6 +300,7 @@ private fun CategorySelectorBar(
                                     LocalCategory.ALBUMS -> Icons.Default.Album
                                     LocalCategory.ARTISTS -> Icons.Default.Person
                                     LocalCategory.PLAYLISTS -> Icons.Default.QueueMusic
+                                    LocalCategory.FOLDERS -> Icons.Default.Folder
                                 },
                                 contentDescription = null,
                                 tint = if (isSelected) DjObsidian else TextSecondary,
