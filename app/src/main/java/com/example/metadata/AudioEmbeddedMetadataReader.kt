@@ -61,7 +61,7 @@ object AudioEmbeddedMetadataReader {
     private const val TAG = "AudioEmbeddedMetadata"
     private const val MAX_TAG_HEADER_READ = 512 * 1024 // Read up to 512KB for embedded tags
 
-    fun read(context: Context, filePathOrUri: String): EmbeddedAudioMetadata {
+    fun read(context: Context? = null, filePathOrUri: String): EmbeddedAudioMetadata {
         if (filePathOrUri.isBlank()) return EmbeddedAudioMetadata()
 
         val retrieverMetadata = readWithRetriever(context, filePathOrUri)
@@ -70,10 +70,11 @@ object AudioEmbeddedMetadataReader {
         return mergeMetadata(retrieverMetadata, streamMetadata)
     }
 
-    private fun readWithRetriever(context: Context, filePathOrUri: String): EmbeddedAudioMetadata {
+    private fun readWithRetriever(context: Context?, filePathOrUri: String): EmbeddedAudioMetadata {
         val retriever = MediaMetadataRetriever()
         return try {
             if (filePathOrUri.startsWith("content://") || filePathOrUri.startsWith("file://")) {
+                if (context == null) return EmbeddedAudioMetadata()
                 context.contentResolver.openFileDescriptor(Uri.parse(filePathOrUri), "r")?.use { pfd ->
                     retriever.setDataSource(pfd.fileDescriptor)
                 } ?: return EmbeddedAudioMetadata()
@@ -136,10 +137,10 @@ object AudioEmbeddedMetadataReader {
         }
     }
 
-    private fun readFromStream(context: Context, filePathOrUri: String): EmbeddedAudioMetadata {
+    private fun readFromStream(context: Context?, filePathOrUri: String): EmbeddedAudioMetadata {
         return try {
             val stream: InputStream? = if (filePathOrUri.startsWith("content://") || filePathOrUri.startsWith("file://")) {
-                context.contentResolver.openInputStream(Uri.parse(filePathOrUri))
+                context?.contentResolver?.openInputStream(Uri.parse(filePathOrUri))
             } else {
                 val f = File(filePathOrUri)
                 if (f.exists() && f.canRead()) f.inputStream() else null

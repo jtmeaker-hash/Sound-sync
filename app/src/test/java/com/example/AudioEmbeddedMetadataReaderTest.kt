@@ -1,12 +1,19 @@
 package com.example
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.example.metadata.AudioEmbeddedMetadataReader
 import com.example.metadata.EmbeddedAudioMetadata
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class AudioEmbeddedMetadataReaderTest {
 
     @Test
@@ -34,10 +41,24 @@ class AudioEmbeddedMetadataReaderTest {
     }
 
     @Test
-    fun `reads empty metadata for empty or blank file path`() {
-        val result = AudioEmbeddedMetadataReader.read(org.robolectric.RuntimeEnvironment.getApplication(), "")
+    fun `reads empty metadata for empty or blank file path with application context`() {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val result = AudioEmbeddedMetadataReader.read(context, "")
         assertFalse(result.hasBpm)
         assertFalse(result.hasKey)
         assertFalse(result.hasEmbeddedMusicBrainz)
+    }
+
+    @Test
+    fun `reads empty metadata for null context or non-existent file path`() {
+        val resultNullContext = AudioEmbeddedMetadataReader.read(null, "")
+        assertFalse(resultNullContext.hasBpm)
+        assertFalse(resultNullContext.hasKey)
+
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val resultNonExistent = AudioEmbeddedMetadataReader.read(context, "/nonexistent/path/track.mp3")
+        assertFalse(resultNonExistent.hasBpm)
+        assertFalse(resultNonExistent.hasKey)
+        assertFalse(resultNonExistent.hasEmbeddedMusicBrainz)
     }
 }
