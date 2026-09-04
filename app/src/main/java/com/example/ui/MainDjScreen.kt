@@ -210,6 +210,7 @@ fun MainDjScreen(
     val isNowPlayingExpanded by viewModel.isNowPlayingExpanded.collectAsState()
     val waveformData by viewModel.waveformData.collectAsState()
     val isWaveformLoading by viewModel.isWaveformLoading.collectAsState()
+    val waveformStyle by viewModel.waveformStyle.collectAsState()
     val themeMode by viewModel.themeMode.collectAsState()
     val crossfadeSeconds by viewModel.crossfadeSeconds.collectAsState()
     val bulkEditingTracks by viewModel.bulkEditingTracks.collectAsState()
@@ -369,6 +370,7 @@ fun MainDjScreen(
                         haasEnabled = haasEnabled,
                         haasAmount = haasAmount,
                         haasDelayMs = haasDelayMs,
+                        waveformStyle = waveformStyle,
                         onPickSafFolder = onPickSafFolder,
                         onPickAudioFiles = onPickAudioFiles,
                         onClose = { activeSideDestination = null }
@@ -576,6 +578,8 @@ fun MainDjScreen(
                         waveformData = waveformData,
                         isWaveformLoading = isWaveformLoading,
                         isPlaying = isPlaying,
+                        waveformStyle = waveformStyle,
+                        onToggleWaveformStyle = { viewModel.toggleWaveformStyle() },
                         audioEngine = viewModel.audioEngine,
                         eqEnabled = eqEnabled,
                         eqLow = eqLow,
@@ -612,6 +616,8 @@ fun MainDjScreen(
                 NowPlayingSettingsSheet(
                     crossfadeSeconds = crossfadeSeconds,
                     onCrossfadeSecondsChange = { viewModel.setCrossfadeSeconds(it) },
+                    waveformStyle = waveformStyle,
+                    onSetWaveformStyle = { viewModel.setWaveformStyle(it) },
                     eqEnabled = eqEnabled,
                     eqLow = eqLow,
                     eqMid = eqMid,
@@ -969,6 +975,8 @@ private fun PositionAwareNowPlaying(
     waveformData: com.example.audio.WaveformData?,
     isWaveformLoading: Boolean,
     isPlaying: Boolean,
+    waveformStyle: com.example.model.WaveformStyle = com.example.model.WaveformStyle.DETAILED,
+    onToggleWaveformStyle: (() -> Unit)? = null,
     audioEngine: com.example.audio.DjAudioEngine,
     eqEnabled: Boolean, eqLow: Float, eqMid: Float, eqHigh: Float,
     onSetEqEnabled: (Boolean) -> Unit, onSetEqLow: (Float) -> Unit,
@@ -995,6 +1003,8 @@ private fun PositionAwareNowPlaying(
         isPlaying = isPlaying,
         currentPositionMs = currentPositionMs,
         durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L,
+        waveformStyle = waveformStyle,
+        onToggleWaveformStyle = onToggleWaveformStyle,
         eqEnabled = eqEnabled, eqLow = eqLow, eqMid = eqMid, eqHigh = eqHigh,
         onSetEqEnabled = onSetEqEnabled, onSetEqLow = onSetEqLow,
         onSetEqMid = onSetEqMid, onSetEqHigh = onSetEqHigh,
@@ -1073,6 +1083,7 @@ private fun SideDestinationScreen(
     haasEnabled: Boolean,
     haasAmount: Float,
     haasDelayMs: Float,
+    waveformStyle: com.example.model.WaveformStyle = com.example.model.WaveformStyle.DETAILED,
     onPickSafFolder: () -> Unit,
     onPickAudioFiles: () -> Unit,
     onClose: () -> Unit
@@ -1204,7 +1215,9 @@ private fun SideDestinationScreen(
                         repeatMode = repeatMode,
                         onToggleRepeat = { viewModel.toggleRepeatMode() },
                         isShuffleEnabled = isShuffleEnabled,
-                        onToggleShuffle = { viewModel.toggleShuffle() }
+                        onToggleShuffle = { viewModel.toggleShuffle() },
+                        waveformStyle = waveformStyle,
+                        onSetWaveformStyle = { viewModel.setWaveformStyle(it) }
                     )
                 }
                 SideMenuDestination.LibrarySettings -> {
@@ -1272,7 +1285,9 @@ private fun SideDestinationScreen(
                 SideMenuDestination.AppearanceSettings -> {
                     AppearanceSettingsScreen(
                         themeMode = themeMode,
-                        onSetThemeMode = { viewModel.setThemeMode(it) }
+                        onSetThemeMode = { viewModel.setThemeMode(it) },
+                        waveformStyle = waveformStyle,
+                        onSetWaveformStyle = { viewModel.setWaveformStyle(it) }
                     )
                 }
                 SideMenuDestination.GitHubUpdates -> {

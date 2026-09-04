@@ -144,7 +144,7 @@ object AudioDecoder {
             val totalDurationUs = if (durationUs > 0) durationUs else (track.durationSeconds.coerceAtLeast(10) * 1_000_000L)
             val durationMs = totalDurationUs / 1000L
 
-            val binCount = targetBins.coerceIn(600, 3600)
+            val binCount = targetBins.coerceIn(600, 7200)
 
             // Accumulator arrays for all bins (Memory footprint ~40 KB)
             val maxPeakInBin = FloatArray(binCount)
@@ -277,29 +277,34 @@ object AudioDecoder {
             val lowBand = FloatArray(binCount)
             val midBand = FloatArray(binCount)
             val highBand = FloatArray(binCount)
+            val rmsBand = FloatArray(binCount)
 
             var globalMaxPeak = 0.0001f
             var globalMaxLow = 0.0001f
             var globalMaxMid = 0.0001f
             var globalMaxHigh = 0.0001f
+            var globalMaxRms = 0.0001f
 
             for (b in 0 until binCount) {
                 val count = sampleCountInBin[b]
                 if (count > 0) {
                     val rms = sqrt(sumSqInBin[b] / count)
                     val maxPeak = maxPeakInBin[b]
-                    // Weighted blend of RMS (70%) and Peak (30%): preserves punchy transient drops while showing true dynamic range
-                    val combinedPeak = (rms * 0.70f + maxPeak * 0.30f)
+                    // Preserve small transients (kicks, snares, hi-hats, percussive peaks)
+                    // while maintaining musical dynamics and body
+                    val transientPeak = max(rms * 0.55f + maxPeak * 0.45f, maxPeak * 0.85f)
                     val low = sqrt(lowSumSqInBin[b] / count)
                     val mid = sqrt(midSumSqInBin[b] / count)
                     val high = sqrt(highSumSqInBin[b] / count)
 
-                    peaks[b] = combinedPeak
+                    peaks[b] = transientPeak
+                    rmsBand[b] = rms
                     lowBand[b] = low
                     midBand[b] = mid
                     highBand[b] = high
 
-                    if (combinedPeak > globalMaxPeak) globalMaxPeak = combinedPeak
+                    if (transientPeak > globalMaxPeak) globalMaxPeak = transientPeak
+                    if (rms > globalMaxRms) globalMaxRms = rms
                     if (low > globalMaxLow) globalMaxLow = low
                     if (mid > globalMaxMid) globalMaxMid = mid
                     if (high > globalMaxHigh) globalMaxHigh = high
@@ -311,17 +316,20 @@ object AudioDecoder {
             var lastValidLow = 0.0f
             var lastValidMid = 0.0f
             var lastValidHigh = 0.0f
+            var lastValidRms = 0.0f
             for (b in 0 until binCount) {
                 if (sampleCountInBin[b] == 0) {
                     peaks[b] = lastValidPeak * 0.9f
                     lowBand[b] = lastValidLow * 0.9f
                     midBand[b] = lastValidMid * 0.9f
                     highBand[b] = lastValidHigh * 0.9f
+                    rmsBand[b] = lastValidRms * 0.9f
                 } else {
                     lastValidPeak = peaks[b]
                     lastValidLow = lowBand[b]
                     lastValidMid = midBand[b]
                     lastValidHigh = highBand[b]
+                    lastValidRms = rmsBand[b]
                 }
             }
 
@@ -330,12 +338,14 @@ object AudioDecoder {
             val lowNorm = if (globalMaxLow > 0.0001f) globalMaxLow else 1.0f
             val midNorm = if (globalMaxMid > 0.0001f) globalMaxMid else 1.0f
             val highNorm = if (globalMaxHigh > 0.0001f) globalMaxHigh else 1.0f
+            val rmsNorm = if (globalMaxRms > 0.0001f) globalMaxRms else 1.0f
 
             for (b in 0 until binCount) {
                 peaks[b] = (peaks[b] / peakNorm).coerceIn(0.0f, 1.0f)
                 lowBand[b] = (lowBand[b] / lowNorm).coerceIn(0.0f, 1.0f)
                 midBand[b] = (midBand[b] / midNorm).coerceIn(0.0f, 1.0f)
                 highBand[b] = (highBand[b] / highNorm).coerceIn(0.0f, 1.0f)
+                rmsBand[b] = (rmsBand[b] / rmsNorm).coerceIn(0.0f, 1.0f)
             }
 
             WaveformData(
@@ -347,7 +357,8 @@ object AudioDecoder {
                 midBand = midBand,
                 highBand = highBand,
                 bpm = if (track.bpm > 0) track.bpm else 126.0,
-                isRealAudioData = true
+                isRealAudioData = true,
+                rms = rmsBand
             )
         } catch (e: CancellationException) {
             Log.d(TAG, "decodeRealWaveformPcm cancelled for '${track.title}'")

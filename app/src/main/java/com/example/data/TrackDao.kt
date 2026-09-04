@@ -16,6 +16,9 @@ interface TrackDao {
     @Query("SELECT * FROM tracks ORDER BY dateAdded DESC")
     suspend fun getAllTracksSync(): List<TrackEntity>
 
+    @Query("SELECT * FROM tracks ORDER BY dateAdded DESC LIMIT 1")
+    suspend fun getFirstTrackSync(): TrackEntity?
+
     @Query("SELECT * FROM tracks WHERE crateId = :crateId ORDER BY bpm ASC")
     fun getTracksByCrate(crateId: String): Flow<List<TrackEntity>>
 

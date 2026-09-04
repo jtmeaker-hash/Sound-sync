@@ -26,12 +26,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.WaveformStyle
 import com.example.ui.theme.BloodRedPrimary
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DjObsidian
 import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceDark
 import com.example.ui.theme.DjSurfaceElevated
+import com.example.ui.theme.NeonAmber
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.ThemeMode
@@ -40,6 +42,8 @@ import com.example.ui.theme.ThemeMode
 fun AppearanceSettingsScreen(
     themeMode: ThemeMode,
     onSetThemeMode: (ThemeMode) -> Unit,
+    waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
+    onSetWaveformStyle: (WaveformStyle) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -49,6 +53,7 @@ fun AppearanceSettingsScreen(
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // App Theme Card
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -93,6 +98,54 @@ fun AppearanceSettingsScreen(
                 }
             }
         }
+
+        // Waveform Display Style Card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("waveform_style_section_card"),
+            colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
+            shape = RoundedCornerShape(10.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Waveform Display Style", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    "Select how waveforms are rendered in Now Playing and DJ views. Both modes operate with real-time 60fps scrolling and strict audio synchronisation.",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    AppearanceOptionTile(
+                        title = "Detailed Waveform",
+                        description = "High-resolution multi-band peaks with crisp transient needles & dynamic nuance",
+                        selected = waveformStyle == WaveformStyle.DETAILED,
+                        accent = DeckACyan,
+                        onClick = { onSetWaveformStyle(WaveformStyle.DETAILED) },
+                        modifier = Modifier.weight(1f),
+                        testTag = "waveform_style_option_detailed"
+                    )
+
+                    AppearanceOptionTile(
+                        title = "Retro Waveform",
+                        description = "Classic chunky pixel-style waveform with nostalgic visual aesthetic",
+                        selected = waveformStyle == WaveformStyle.RETRO,
+                        accent = NeonAmber,
+                        onClick = { onSetWaveformStyle(WaveformStyle.RETRO) },
+                        modifier = Modifier.weight(1f),
+                        testTag = "waveform_style_option_retro"
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -103,13 +156,14 @@ private fun AppearanceOptionTile(
     selected: Boolean,
     accent: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    testTag: String? = null
 ) {
     Surface(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .testTag("appearance_option_${title.lowercase().replace(" ", "_")}"),
+            .testTag(testTag ?: "appearance_option_${title.lowercase().replace(" ", "_")}"),
         color = if (selected) accent.copy(alpha = 0.16f) else DjSurfaceElevated,
         shape = RoundedCornerShape(8.dp),
         border = androidx.compose.foundation.BorderStroke(1.5.dp, if (selected) accent else DjSurfaceBorder)

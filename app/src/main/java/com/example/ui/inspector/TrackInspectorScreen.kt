@@ -46,6 +46,7 @@ import com.example.data.TrackPlaybackStats
 import com.example.model.AudioQualityRating
 import com.example.model.SpectrogramAnalysis
 import com.example.model.Track
+import com.example.model.WaveformStyle
 import com.example.ui.MainDjViewModel
 import com.example.ui.components.RekordboxWaveformView
 import com.example.ui.components.SpectrogramAnalyzerView
@@ -313,6 +314,8 @@ fun TrackInspectorScreen(
                 isLoading = isWaveformLoading,
                 isPlaying = isPlayingThisTrack,
                 currentPositionMs = if (isPlayingThisTrack) currentPositionMs else 0L,
+                waveformStyle = viewModel.waveformStyle.collectAsState().value,
+                onToggleWaveformStyle = { viewModel.toggleWaveformStyle() },
                 onSeekToMs = { targetMs ->
                     if (isPlayingThisTrack) {
                         audioEngine.seekToMs(targetMs)
@@ -969,6 +972,8 @@ private fun InspectorWaveformSection(
     isLoading: Boolean,
     isPlaying: Boolean,
     currentPositionMs: Long,
+    waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
+    onToggleWaveformStyle: (() -> Unit)? = null,
     onSeekToMs: (Long) -> Unit,
     onReanalyse: () -> Unit
 ) {
@@ -1005,6 +1010,8 @@ private fun InspectorWaveformSection(
                     durationMs = (track.durationSeconds * 1000L).coerceAtLeast(1000L),
                     onSeekToMs = onSeekToMs,
                     isLoading = isLoading,
+                    waveformStyle = waveformStyle,
+                    onToggleWaveformStyle = onToggleWaveformStyle,
                     modifier = Modifier.fillMaxSize()
                 )
             }

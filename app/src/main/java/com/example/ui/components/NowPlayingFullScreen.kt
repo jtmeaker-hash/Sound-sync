@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.sp
 import com.example.audio.WaveformData
 import com.example.model.NowPlayingDisplayMode
 import com.example.model.Track
+import com.example.model.WaveformStyle
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
@@ -130,6 +131,8 @@ fun NowPlayingFullScreen(
     onSeekToMs: (Long) -> Unit,
     onToggleDisplayMode: () -> Unit,
     onSetDisplayMode: (NowPlayingDisplayMode) -> Unit,
+    waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
+    onToggleWaveformStyle: (() -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
     onOpenProperties: (Track) -> Unit = {},
     modifier: Modifier = Modifier
@@ -359,6 +362,8 @@ fun NowPlayingFullScreen(
                                 durationMs = durationMs,
                                 onSeekToMs = onSeekToMs,
                                 isLoading = isWaveformLoading,
+                                waveformStyle = waveformStyle,
+                                onToggleWaveformStyle = onToggleWaveformStyle,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }

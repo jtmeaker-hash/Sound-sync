@@ -66,6 +66,67 @@ object StorageAvailabilityHelper {
     }
 
     /**
+     * Cache of storage root availability to eliminate per-track filesystem stat calls.
+     */
+    private val rootAvailabilityCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /**
+     * Checks if a storage root is mounted and readable.
+     * Internal/emulated storage roots are always treated as available.
+     * Removable external roots (USB OTG, SD card) are checked via directory exists/canRead.
+     */
+    fun isRootAvailable(root: String?): Boolean {
+        if (root == null || root.contains("emulated")) return true
+        return try {
+            val dir = File(root)
+            dir.exists() && dir.canRead()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * Refreshes the cached availability status for the given storage roots.
+     * Should be called off the main thread (Dispatchers.IO).
+     */
+    fun refreshRoots(roots: Collection<String>): Map<String, Boolean> {
+        val updated = mutableMapOf<String, Boolean>()
+        for (root in roots) {
+            val isAvail = isRootAvailable(root)
+            rootAvailabilityCache[root] = isAvail
+            updated[root] = isAvail
+        }
+        return updated
+    }
+
+    /**
+     * Gets the cached availability of a storage root without doing per-file filesystem I/O,
+     * computing it on demand if not present.
+     */
+    fun getCachedRootAvailability(root: String?): Boolean {
+        if (root == null || root.contains("emulated")) return true
+        return rootAvailabilityCache[root] ?: isRootAvailable(root).also { rootAvailabilityCache[root] = it }
+    }
+
+    /**
+     * Determines whether a track is available based on its storage root availability,
+     * without performing per-file filesystem stat operations.
+     */
+    fun isTrackRootAvailable(filePath: String, rootAvailabilityMap: Map<String, Boolean>? = null): Boolean {
+        if (filePath.startsWith("demo://")) return true
+        val root = getStorageRoot(filePath)
+        if (root == null || root.contains("emulated")) return true
+        if (rootAvailabilityMap != null) {
+            return rootAvailabilityMap[root] ?: isRootAvailable(root)
+        }
+        return getCachedRootAvailability(root)
+    }
+
+    fun clearCache() {
+        rootAvailabilityCache.clear()
+    }
+
+    /**
      * Checks whether a specific file path is currently accessible on device storage.
      */
     fun isTrackPathAvailable(context: Context, filePath: String): Boolean {

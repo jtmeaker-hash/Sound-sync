@@ -5,6 +5,7 @@ import androidx.compose.ui.Modifier
 import com.example.audio.WaveformData
 import com.example.model.NowPlayingDisplayMode
 import com.example.model.Track
+import com.example.model.WaveformStyle
 
 /**
  * Full-screen Now Playing screen delegator for backward compatibility.
@@ -41,6 +42,8 @@ fun NowPlayingModalSheet(
     onSeekToMs: (Long) -> Unit,
     onToggleDisplayMode: () -> Unit,
     onSetDisplayMode: (NowPlayingDisplayMode) -> Unit,
+    waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
+    onToggleWaveformStyle: (() -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
     onOpenProperties: (Track) -> Unit = {},
     modifier: Modifier = Modifier
@@ -74,6 +77,8 @@ fun NowPlayingModalSheet(
         onSeekToMs = onSeekToMs,
         onToggleDisplayMode = onToggleDisplayMode,
         onSetDisplayMode = onSetDisplayMode,
+        waveformStyle = waveformStyle,
+        onToggleWaveformStyle = onToggleWaveformStyle,
         onOpenSettings = onOpenSettings,
         onOpenProperties = onOpenProperties,
         modifier = modifier

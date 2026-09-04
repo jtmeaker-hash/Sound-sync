@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
@@ -32,10 +33,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.WaveformStyle
 import com.example.ui.RepeatMode
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
@@ -44,6 +47,7 @@ import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceCard
 import com.example.ui.theme.DjSurfaceDark
 import com.example.ui.theme.DjSurfaceElevated
+import com.example.ui.theme.NeonAmber
 import com.example.ui.theme.NeonGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
@@ -58,6 +62,8 @@ fun PlaybackSettingsScreen(
     onToggleRepeat: () -> Unit,
     isShuffleEnabled: Boolean,
     onToggleShuffle: () -> Unit,
+    waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
+    onSetWaveformStyle: (WaveformStyle) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -228,6 +234,114 @@ fun PlaybackSettingsScreen(
                                 uncheckedTrackColor = DjSurfaceElevated
                             )
                         )
+                    }
+                }
+            }
+        }
+
+        // Waveform Display Style card
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("playback_waveform_style_card"),
+                colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
+                shape = RoundedCornerShape(10.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.GraphicEq,
+                                contentDescription = null,
+                                tint = DeckACyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text("Waveform Style", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("Choose between high-resolution or classic retro chunky waveform", color = TextSecondary, fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Detailed mode button
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSetWaveformStyle(WaveformStyle.DETAILED) }
+                                .testTag("playback_waveform_detailed"),
+                            color = if (waveformStyle == WaveformStyle.DETAILED) DeckACyan.copy(alpha = 0.16f) else DjSurfaceElevated,
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (waveformStyle == WaveformStyle.DETAILED) DeckACyan else DjSurfaceBorder
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Detailed",
+                                    color = if (waveformStyle == WaveformStyle.DETAILED) DeckACyan else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    "High resolution transients & dynamic range",
+                                    color = TextSecondary,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+
+                        // Retro mode button
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSetWaveformStyle(WaveformStyle.RETRO) }
+                                .testTag("playback_waveform_retro"),
+                            color = if (waveformStyle == WaveformStyle.RETRO) NeonAmber.copy(alpha = 0.16f) else DjSurfaceElevated,
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (waveformStyle == WaveformStyle.RETRO) NeonAmber else DjSurfaceBorder
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Retro",
+                                    color = if (waveformStyle == WaveformStyle.RETRO) NeonAmber else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    "Classic chunky pixel-style visual aesthetic",
+                                    color = TextSecondary,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
                     }
                 }
             }

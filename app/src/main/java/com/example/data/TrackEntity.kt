@@ -12,7 +12,9 @@ import com.example.model.Track
     tableName = "tracks",
     indices = [
         Index(value = ["contentFingerprint"]),
-        Index(value = ["filePath"])
+        Index(value = ["filePath"]),
+        Index(value = ["crateId"]),
+        Index(value = ["dateAdded"])
     ]
 )
 data class TrackEntity(

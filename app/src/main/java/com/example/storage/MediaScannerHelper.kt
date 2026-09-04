@@ -34,7 +34,7 @@ object MediaScannerHelper {
         context: Context,
         existingFingerprints: Set<String> = emptySet(),
         existingFilePaths: Set<String> = emptySet(),
-        batchSize: Int = 50,
+        batchSize: Int = 200,
         onBatch: suspend (List<Track>) -> Unit,
         onProgress: (current: Int, total: Int, currentTitle: String) -> Unit = { _, _, _ -> }
     ): ScanSummaryResult = withContext(Dispatchers.IO) {

@@ -35,6 +35,12 @@ import com.example.ui.theme.DjSurfaceDark
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
+import com.example.model.WaveformStyle
+import com.example.ui.theme.NeonAmber
+import com.example.ui.theme.DjSurfaceElevated
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,6 +48,8 @@ import java.util.Locale
 fun NowPlayingSettingsSheet(
     crossfadeSeconds: Int,
     onCrossfadeSecondsChange: (Int) -> Unit,
+    waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
+    onSetWaveformStyle: (WaveformStyle) -> Unit = {},
     // EQ state
     eqEnabled: Boolean = true,
     eqLow: Float = 1f,
@@ -147,6 +155,85 @@ fun NowPlayingSettingsSheet(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("OFF", color = TextMuted, fontSize = 10.sp)
                         Text("12 seconds", color = TextSecondary, fontSize = 10.sp)
+                    }
+                }
+            }
+
+            // ── Waveform Display Style ──────────────────────────────
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("now_playing_waveform_style_section"),
+                color = DjObsidian,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Column {
+                        Text("Waveform Display Style", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("Choose between Detailed 60fps transients or classic Retro chunky waveform", color = TextMuted, fontSize = 11.sp)
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                .clickable { onSetWaveformStyle(WaveformStyle.DETAILED) }
+                                .testTag("sheet_waveform_detailed"),
+                            color = if (waveformStyle == WaveformStyle.DETAILED) DeckACyan.copy(alpha = 0.16f) else DjSurfaceElevated,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (waveformStyle == WaveformStyle.DETAILED) DeckACyan else DjSurfaceBorder
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Detailed",
+                                    color = if (waveformStyle == WaveformStyle.DETAILED) DeckACyan else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text("High resolution transients & dynamic range", color = TextSecondary, fontSize = 9.5.sp)
+                            }
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                .clickable { onSetWaveformStyle(WaveformStyle.RETRO) }
+                                .testTag("sheet_waveform_retro"),
+                            color = if (waveformStyle == WaveformStyle.RETRO) NeonAmber.copy(alpha = 0.16f) else DjSurfaceElevated,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (waveformStyle == WaveformStyle.RETRO) NeonAmber else DjSurfaceBorder
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Retro",
+                                    color = if (waveformStyle == WaveformStyle.RETRO) NeonAmber else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text("Classic chunky nostalgic pixel styling", color = TextSecondary, fontSize = 9.5.sp)
+                            }
+                        }
                     }
                 }
             }

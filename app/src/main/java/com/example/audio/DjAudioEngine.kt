@@ -1397,9 +1397,7 @@ class DjAudioEngine(private val context: Context) {
                 val file = File(uriOrPath)
                 file.exists() && file.canRead()
             }
-        } catch (_: SecurityException) {
-            false
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             false
         }
     }

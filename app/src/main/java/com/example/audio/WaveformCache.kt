@@ -29,7 +29,9 @@ data class WaveformData(
     /** High frequency energy [0.0f .. 1.0f] (Rekordbox White/Cyan band) */
     val highBand: FloatArray,
     val bpm: Double = 126.0,
-    val isRealAudioData: Boolean = true
+    val isRealAudioData: Boolean = true,
+    /** RMS / body power per bin [0.0f .. 1.0f] */
+    val rms: FloatArray = FloatArray(0)
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -57,7 +59,7 @@ data class WaveformData(
  */
 object WaveformCache {
     private const val TAG = "WaveformCache"
-    const val WAVEFORM_ANALYSIS_VERSION = 5
+    const val WAVEFORM_ANALYSIS_VERSION = 6
     private const val MAGIC_HEADER = 0x53594E43 // "SYNC"
 
     // Memory LRU Cache (up to 100 waveform objects in RAM ~5MB max)
@@ -93,7 +95,7 @@ object WaveformCache {
                         if (mod > 0) fileModified = mod
                     }
                 }
-            } catch (ignored: Exception) {}
+            } catch (ignored: Throwable) {}
         }
 
         val sanitizedTrackId = track.id.replace(Regex("[^a-zA-Z0-9_-]"), "_")
@@ -115,6 +117,16 @@ object WaveformCache {
             if (diskData != null) {
                 memoryCache.put(cacheKey, diskData)
                 return diskData
+            }
+
+            // Backward compatibility fallback: check for previous version 5 cache
+            if (cacheKey.contains("_v$WAVEFORM_ANALYSIS_VERSION")) {
+                val v5Key = cacheKey.replace("_v$WAVEFORM_ANALYSIS_VERSION", "_v5")
+                val v5Data = readFromDisk(v5Key, context)
+                if (v5Data != null) {
+                    memoryCache.put(cacheKey, v5Data)
+                    return v5Data
+                }
             }
         }
 
@@ -158,15 +170,17 @@ object WaveformCache {
         Log.d(TAG, "Waveform memory and disk cache cleared")
     }
 
-    private fun getCacheDir(context: Context): File {
-        val dir = File(context.cacheDir, "waveforms_v$WAVEFORM_ANALYSIS_VERSION")
+    private fun getCacheDir(context: Context, version: String = WAVEFORM_ANALYSIS_VERSION.toString()): File {
+        val dir = File(context.cacheDir, "waveforms_v$version")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
 
     private fun getDiskFile(cacheKey: String, context: Context): File {
         val safeFileName = "${cacheKey.hashCode().toUInt().toString(16)}_${cacheKey.take(32)}.bin"
-        return File(getCacheDir(context), safeFileName)
+        val versionMatch = Regex("_v(\\d+)").find(cacheKey)
+        val version = versionMatch?.groupValues?.get(1) ?: WAVEFORM_ANALYSIS_VERSION.toString()
+        return File(getCacheDir(context, version), safeFileName)
     }
 
     private fun writeToDisk(cacheKey: String, data: WaveformData, context: Context) {
@@ -186,6 +200,10 @@ object WaveformCache {
                 for (i in 0 until data.samplePoints) out.writeFloat(data.lowBand.getOrElse(i) { 0f })
                 for (i in 0 until data.samplePoints) out.writeFloat(data.midBand.getOrElse(i) { 0f })
                 for (i in 0 until data.samplePoints) out.writeFloat(data.highBand.getOrElse(i) { 0f })
+
+                // Write rms array
+                out.writeInt(data.rms.size)
+                for (i in 0 until data.rms.size) out.writeFloat(data.rms[i])
             }
             if (tmpFile.renameTo(file)) {
                 // success
@@ -216,6 +234,13 @@ object WaveformCache {
                 val midBand = FloatArray(samplePoints) { inStream.readFloat() }
                 val highBand = FloatArray(samplePoints) { inStream.readFloat() }
 
+                val rms = if (inStream.available() >= 4) {
+                    val rmsCount = inStream.readInt()
+                    if (rmsCount in 1..samplePoints && inStream.available() >= rmsCount * 4) {
+                        FloatArray(rmsCount) { inStream.readFloat() }
+                    } else FloatArray(0)
+                } else FloatArray(0)
+
                 WaveformData(
                     trackId = trackId,
                     durationMs = durationMs,
@@ -225,7 +250,8 @@ object WaveformCache {
                     midBand = midBand,
                     highBand = highBand,
                     bpm = bpm,
-                    isRealAudioData = isReal
+                    isRealAudioData = isReal,
+                    rms = rms
                 )
             }
         } catch (e: Exception) {

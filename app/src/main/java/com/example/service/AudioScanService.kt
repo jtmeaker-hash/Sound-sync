@@ -149,7 +149,8 @@ class AudioScanService : Service() {
             var totalSizeBytes = 0L
 
             val trackBatch = mutableListOf<TrackEntity>()
-            val BATCH_SIZE = 25
+            val BATCH_SIZE = 200
+            var lastProgressEmitTime = 0L
 
             try {
                 val seenFingerprints = database.trackDao().getAllFingerprints().toMutableSet()
@@ -241,24 +242,26 @@ class AudioScanService : Service() {
                                 trackBatch.add(entity)
                                 totalIndexed++
 
-                                val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                                val now = System.currentTimeMillis()
+                                val elapsed = (now - startTime).coerceAtLeast(1)
                                 val speed = (totalIndexed.toDouble() / (elapsed / 1000.0))
-
-                                _scanState.value = _scanState.value.copy(
-                                    currentFile = fileName,
-                                    filesIndexed = totalIndexed,
-                                    filesSkipped = totalSkipped,
-                                    filesFailed = totalFailed,
-                                    currentFormat = track.format,
-                                    currentBitrate = track.bitrateKbps,
-                                    scanSpeedFilesPerSec = String.format(Locale.US, "%.1f", speed).toDoubleOrNull() ?: speed,
-                                    elapsedTimeMs = elapsed
-                                )
 
                                 // Flush batch if full
                                 if (trackBatch.size >= BATCH_SIZE) {
                                     database.trackDao().insertTracks(trackBatch.toList())
                                     trackBatch.clear()
+                                    lastProgressEmitTime = now
+
+                                    _scanState.value = _scanState.value.copy(
+                                        currentFile = fileName,
+                                        filesIndexed = totalIndexed,
+                                        filesSkipped = totalSkipped,
+                                        filesFailed = totalFailed,
+                                        currentFormat = track.format,
+                                        currentBitrate = track.bitrateKbps,
+                                        scanSpeedFilesPerSec = String.format(Locale.US, "%.1f", speed).toDoubleOrNull() ?: speed,
+                                        elapsedTimeMs = elapsed
+                                    )
 
                                     // Update notification periodically
                                     updateNotification(
@@ -267,6 +270,18 @@ class AudioScanService : Service() {
                                         current = totalIndexed + totalSkipped + totalFailed,
                                         max = totalDiscovered.coerceAtLeast(totalIndexed + totalSkipped),
                                         isPaused = false
+                                    )
+                                } else if (now - lastProgressEmitTime >= 250L) {
+                                    lastProgressEmitTime = now
+                                    _scanState.value = _scanState.value.copy(
+                                        currentFile = fileName,
+                                        filesIndexed = totalIndexed,
+                                        filesSkipped = totalSkipped,
+                                        filesFailed = totalFailed,
+                                        currentFormat = track.format,
+                                        currentBitrate = track.bitrateKbps,
+                                        scanSpeedFilesPerSec = String.format(Locale.US, "%.1f", speed).toDoubleOrNull() ?: speed,
+                                        elapsedTimeMs = elapsed
                                     )
                                 }
                             } else {
@@ -278,12 +293,6 @@ class AudioScanService : Service() {
                             _scanState.value = _scanState.value.copy(filesFailed = totalFailed)
                             Log.w(TAG, "Failed reading audio file $fileName: ${e.message}")
                         }
-                    }
-
-                    // Flush remaining tracks from this folder
-                    if (trackBatch.isNotEmpty()) {
-                        database.trackDao().insertTracks(trackBatch.toList())
-                        trackBatch.clear()
                     }
 
                     // Recursively scan subfolders

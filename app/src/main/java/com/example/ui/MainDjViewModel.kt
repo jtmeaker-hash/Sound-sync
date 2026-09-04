@@ -25,6 +25,7 @@ import com.example.model.FileOperationType
 import com.example.model.FolderItem
 import com.example.model.MusicPlatform
 import com.example.model.NowPlayingDisplayMode
+import com.example.model.WaveformStyle
 import com.example.model.OperationJournalItem
 import com.example.model.SpectrogramAnalysis
 import com.example.model.StorageSource
@@ -383,6 +384,35 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     )
     val nowPlayingDisplayMode: StateFlow<NowPlayingDisplayMode> = _nowPlayingDisplayMode.asStateFlow()
 
+    // Waveform Display Style (Retro vs Detailed) with persistent SharedPreferences
+    private val _waveformStyle = MutableStateFlow(
+        try {
+            val savedStyle = prefs.getString("waveform_style", WaveformStyle.DETAILED.name)
+            WaveformStyle.valueOf(savedStyle ?: WaveformStyle.DETAILED.name)
+        } catch (e: Exception) {
+            WaveformStyle.DETAILED
+        }
+    )
+    val waveformStyle: StateFlow<WaveformStyle> = _waveformStyle.asStateFlow()
+
+    fun setWaveformStyle(style: WaveformStyle) {
+        _waveformStyle.value = style
+        try {
+            prefs.edit().putString("waveform_style", style.name).apply()
+        } catch (e: Exception) {
+            Log.w("MainDjViewModel", "Failed to persist waveform style: ${e.message}")
+        }
+    }
+
+    fun toggleWaveformStyle() {
+        val next = if (_waveformStyle.value == WaveformStyle.DETAILED) {
+            WaveformStyle.RETRO
+        } else {
+            WaveformStyle.DETAILED
+        }
+        setWaveformStyle(next)
+    }
+
     // Expanded Now Playing Sheet / Panel State
     private val _isNowPlayingExpanded = MutableStateFlow(false)
     val isNowPlayingExpanded: StateFlow<Boolean> = _isNowPlayingExpanded.asStateFlow()
@@ -402,38 +432,30 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val operationJournal = _operationJournal.asStateFlow()
 
     private val _storageRefreshTrigger = MutableStateFlow(0L)
+    private val _storageRootAvailability = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val storageRootAvailability: StateFlow<Map<String, Boolean>> = _storageRootAvailability.asStateFlow()
 
-    // Real database tracks flow with dynamic external/USB storage availability mapping
+    // Real database tracks flow with cached storage availability mapping
     val allTracks: StateFlow<List<Track>> = kotlinx.coroutines.flow.combine(
         trackDao.getAllTracks(),
-        _storageRefreshTrigger
-    ) { list, _ ->
-        val app = getApplication<Application>()
-        val checkedRoots = mutableMapOf<String, Boolean>()
-        list.map { entity ->
+        _storageRootAvailability
+    ) { entities, rootAvailability ->
+        val startNs = System.nanoTime()
+        val tracks = entities.map { entity ->
             val track = entity.toTrack()
-            val root = com.example.storage.StorageAvailabilityHelper.getStorageRoot(track.filePath)
-            val isAvail = if (root != null && !root.contains("emulated")) {
-                val rootOnline = checkedRoots.getOrPut(root) {
-                    val f = java.io.File(root)
-                    f.exists() && f.canRead()
-                }
-                if (rootOnline) {
-                    val f = java.io.File(track.filePath.removePrefix("file://"))
-                    f.exists() && f.canRead()
-                } else {
-                    false
-                }
-            } else {
-                com.example.storage.StorageAvailabilityHelper.isTrackAvailable(app, track)
-            }
-            track.copy(isAvailable = isAvail)
+            val isAvail = com.example.storage.StorageAvailabilityHelper.isTrackRootAvailable(track.filePath, rootAvailability)
+            if (track.isAvailable == isAvail) track else track.copy(isAvailable = isAvail)
         }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+        Log.d("SoundSyncPerf", "database tracks emitted: ${entities.size}, converted in ${elapsedMs}ms")
+        tracks
+    }.flowOn(Dispatchers.Default)
+    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Dynamically grouped Albums from Real indexed tracks
     val allAlbums: StateFlow<List<com.example.model.Album>> = allTracks.map { tracks ->
-        tracks.filter { it.album.isNotBlank() }
+        val startNs = System.nanoTime()
+        val albums = tracks.filter { it.album.isNotBlank() }
             .groupBy { "${it.artist.trim().lowercase()}:::${it.album.trim().lowercase()}" }
             .map { entry ->
                 val albumTracks = entry.value.sortedWith(
@@ -456,15 +478,21 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             .sortedBy { it.title.lowercase() }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+        Log.d("SoundSyncPerf", "album grouping in ${elapsedMs}ms (${albums.size} albums)")
+        albums
+    }.flowOn(Dispatchers.Default)
+    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // Dynamically grouped Artists from Real indexed tracks
+    // Dynamically grouped Artists from Real indexed tracks (O(N+M) lookup using pre-grouped map)
     val allArtists: StateFlow<List<com.example.model.Artist>> = combine(allTracks, allAlbums) { tracks, albums ->
-        tracks.groupBy { it.artist.trim().lowercase() }
+        val startNs = System.nanoTime()
+        val albumsByArtist = albums.groupBy { it.artist.trim().lowercase() }
+        val artists = tracks.groupBy { it.artist.trim().lowercase() }
             .map { entry ->
                 val artistSongs = entry.value.sortedBy { it.title.lowercase() }
                 val artistName = artistSongs.firstOrNull()?.artist?.ifBlank { "Unknown Artist" } ?: "Unknown Artist"
-                val artistAlbums = albums.filter { it.artist.equals(artistName, ignoreCase = true) }
+                val artistAlbums = albumsByArtist[entry.key] ?: emptyList()
                 val totalSec = artistSongs.sumOf { it.durationSeconds }
                 com.example.model.Artist(
                     id = "artist_${artistName.hashCode()}",
@@ -477,13 +505,18 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             .sortedBy { if (it.name.equals("Unknown Artist", ignoreCase = true)) "zzzz" else it.name.lowercase() }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+        Log.d("SoundSyncPerf", "artist grouping in ${elapsedMs}ms (${artists.size} artists)")
+        artists
+    }.flowOn(Dispatchers.Default)
+    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Dynamically grouped Folders from Real indexed tracks
     val allFolders: StateFlow<List<com.example.model.TrackFolder>> = allTracks.map { tracks ->
-        tracks.groupBy { track ->
+        val startNs = System.nanoTime()
+        val folders = tracks.groupBy { track ->
             val dir = track.directoryPath.ifBlank {
-                java.io.File(track.filePath).parent ?: "/Music"
+                if (track.filePath.contains('/')) track.filePath.substringBeforeLast('/') else "/Music"
             }
             dir.trimEnd('/')
         }.map { (folderPath, folderTracks) ->
@@ -501,7 +534,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 tracks = sortedTracks
             )
         }.sortedBy { it.name.lowercase(java.util.Locale.ROOT) }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+        Log.d("SoundSyncPerf", "folder grouping in ${elapsedMs}ms (${folders.size} folders)")
+        folders
+    }.flowOn(Dispatchers.Default)
+    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Reactive Playlists flow combining Room playlist entities and track references
     val allPlaylists: StateFlow<List<com.example.model.Playlist>> = combine(
@@ -544,7 +581,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 hasCrossStorageWarning = hasCrossStorage
             )
         }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    }.flowOn(Dispatchers.Default)
+    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Tracks in Current Directory for File Explorer
     val currentDirectoryTracks: StateFlow<List<Track>> = combine(
@@ -584,7 +622,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             ExplorerSortOption.DATE_DESC -> filtered.sortedByDescending { it.dateAdded }
             ExplorerSortOption.SIZE_DESC -> filtered.sortedByDescending { it.fileSizeMb }
         }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    }.flowOn(Dispatchers.Default)
+    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Subfolders in current directory
     val currentSubFolders: StateFlow<List<FolderItem>> = combine(
@@ -626,7 +665,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 totalSizeMb = folderTracks.sumOf { it.fileSizeMb }
             )
         }.sortedBy { it.name.lowercase() }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    }.flowOn(Dispatchers.Default)
+    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     private val _hideUnavailableTracks = MutableStateFlow(false)
     val hideUnavailableTracks: StateFlow<Boolean> = _hideUnavailableTracks.asStateFlow()
@@ -678,7 +718,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
             matchesQuery && matchesCrate && matchesGenre && matchesPlatform
         }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    }.flowOn(Dispatchers.Default)
+    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Fuzzy duplicate detector live matches
     val duplicateMatches: StateFlow<List<DuplicateMatch>> = allTracks.map { tracks ->
@@ -703,8 +744,35 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun triggerStorageRefresh() {
         _storageRefreshTrigger.value = System.currentTimeMillis()
         viewModelScope.launch(Dispatchers.IO) {
+            refreshStorageAvailabilityInternal()
             refreshStorageSourcesList()
         }
+    }
+
+    suspend fun refreshStorageAvailabilityInternal() = withContext(Dispatchers.IO) {
+        val startNs = System.nanoTime()
+        val distinctRoots = mutableSetOf<String>()
+        val app = getApplication<Application>()
+
+        val physicalSources = LocalFileSystemScanner.getAvailableStorageSources(app)
+        for (ps in physicalSources) {
+            val root = com.example.storage.StorageAvailabilityHelper.getStorageRoot(ps.path)
+            if (root != null) distinctRoots.add(root)
+        }
+        for (src in _storageSources.value) {
+            if (src.path.isNotBlank() && !src.path.startsWith("content://")) {
+                val root = com.example.storage.StorageAvailabilityHelper.getStorageRoot(src.path)
+                if (root != null) distinctRoots.add(root)
+            }
+        }
+        for (cachedRoot in _storageRootAvailability.value.keys) {
+            distinctRoots.add(cachedRoot)
+        }
+
+        val updatedMap = com.example.storage.StorageAvailabilityHelper.refreshRoots(distinctRoots)
+        _storageRootAvailability.value = updatedMap
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+        Log.d("SoundSyncPerf", "storage availability refresh in ${elapsedMs}ms (${distinctRoots.size} roots checked)")
     }
 
     private var mediaReceiver: android.content.BroadcastReceiver? = null
@@ -1042,12 +1110,13 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
 
+            refreshStorageAvailabilityInternal()
             refreshStorageSourcesList()
 
             val existingCount = trackDao.getTrackCount()
             if (existingCount > 0) {
                 // Restore first track into engine in PAUSED state (strict no autoplay on startup)
-                val firstTrack = trackDao.getAllTracksSync().firstOrNull()?.toTrack()
+                val firstTrack = trackDao.getFirstTrackSync()?.toTrack()
                 if (firstTrack != null) {
                     withContext(Dispatchers.Main) {
                         Log.d("MainDjViewModel", "Restoring track '${firstTrack.title}' on startup in paused state")
@@ -1118,13 +1187,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
             val scanResult = MediaScannerHelper.scanDeviceAudioStreaming(
                 context = app,
-                batchSize = 50,
+                batchSize = 200,
                 existingFingerprints = existingFingerprints,
                 existingFilePaths = existingFilePaths,
                 onBatch = { batch ->
                     val entities = batch.map { TrackEntity.fromTrack(it) }
                     trackDao.insertTracks(entities)
-                    refreshStorageSourcesList()
 
                     if (isFirstBatch && batch.isNotEmpty() && audioEngine.currentTrack.value == null) {
                         isFirstBatch = false
@@ -1139,6 +1207,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     _scanProgressMessage.value = "Scanning audio files: $current of $total ($title)..."
                 }
             )
+
+            refreshStorageAvailabilityInternal()
+            refreshStorageSourcesList()
 
             scanStateManager.status = ScanStatus.COMPLETED
             scanStateManager.lastScanTime = System.currentTimeMillis()
@@ -2368,10 +2439,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             if (audioEngine.currentTrack.value?.id == updatedTrack.id) {
-                val wasPlaying = audioEngine.isPlaying.value
-                val currentSec = audioEngine.currentPositionSec.value
                 withContext(Dispatchers.Main) {
-                    audioEngine.loadTrack(updatedTrack, autoPlay = wasPlaying, initialPositionSec = currentSec)
+                    audioEngine.updateCurrentTrackMetadata(updatedTrack)
                 }
             }
             withContext(Dispatchers.Main) {
