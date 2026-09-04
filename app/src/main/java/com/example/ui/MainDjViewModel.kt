@@ -142,6 +142,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     val audioEngine = DjAudioEngine.getInstance(application)
 
+    val trackAnalysisManager = com.example.analysis.TrackAnalysisManager.getInstance(application).apply {
+        attachAudioEngine(audioEngine)
+    }
+    val analysisProgress = trackAnalysisManager.queueProgress
+
+    val carModeManager = com.example.carmode.CarModeManager.getInstance(application).apply {
+        attachAudioEngine(audioEngine)
+    }
+    val isCarModeActive = carModeManager.isCarModeActive
+
     private val _themeMode = MutableStateFlow(
         ThemeMode.fromStoredValue(prefs.getString("theme_mode", ThemeMode.CURRENT.name))
     )
@@ -751,6 +761,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         observeGoogleDriveState()
         audioEngine.setCrossfadeSeconds(_crossfadeSeconds.value)
         registerMediaReceiver()
+        trackAnalysisManager.triggerQueueProcessing()
+        com.example.analysis.LibraryAnalysisWorker.enqueueWork(application)
     }
 
     fun triggerStorageRefresh() {
@@ -836,8 +848,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 val index = queue.indexOfFirst { it.id == startedTrack.id }
                 if (index >= 0) queueIndex.value = index
                 nextTrackForCrossfade = null
-                inspectTrackSpectrogram(startedTrack, showTab = false)
-                resolveBpmAndKeyForTrack(startedTrack)
+
+                // Only perform heavy real-time STFT calculation if the Spectrogram tab is actively open
+                if (_selectedTab.value == DjTab.SPECTROGRAM) {
+                    inspectTrackSpectrogram(startedTrack, showTab = false)
+                }
+
+                // Prioritise background analysis for this track if incomplete, without blocking playback
+                if (!startedTrack.hasValidBpm || !startedTrack.hasValidKey) {
+                    trackAnalysisManager.prioritizeTrack(startedTrack)
+                }
+
+                // Record in active driving session if Car Mode is tracking
+                carModeManager.recordTrackPlayedInSession(startedTrack)
             }
         }
         audioEngine.onNextTrackCallback = {
@@ -1205,13 +1228,13 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 onBatch = { batch ->
                     val entities = batch.map { TrackEntity.fromTrack(it) }
                     trackDao.insertTracks(entities)
+                    trackAnalysisManager.enqueueDiscoveredTracks(batch.map { it.id })
 
                     if (isFirstBatch && batch.isNotEmpty() && audioEngine.currentTrack.value == null) {
                         isFirstBatch = false
                         val first = batch.first()
                         withContext(Dispatchers.Main) {
                             audioEngine.loadTrack(first, autoPlay = false)
-                            inspectTrackSpectrogram(first)
                         }
                     }
                 },
@@ -1230,8 +1253,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             withContext(Dispatchers.Main) {
                 showSnackbar(scanResult.userMessage)
             }
-            if (scanResult.imported > 0 && metadataSettings.value.enrichmentEnabled && metadataSettings.value.musicBrainzEnabled) {
-                scheduleBackgroundMusicBrainzEnrichment()
+            if (scanResult.imported > 0) {
+                trackAnalysisManager.triggerQueueProcessing()
+                com.example.analysis.LibraryAnalysisWorker.enqueueWork(app)
             }
         } catch (e: SecurityException) {
             Log.e("MainDjViewModel", "SecurityException during MediaStore scan", e)
@@ -1537,12 +1561,108 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         _selectedAlbum.value = null
     }
 
+    private val _openedArtistFromNowPlaying = MutableStateFlow(false)
+    val openedArtistFromNowPlaying: StateFlow<Boolean> = _openedArtistFromNowPlaying.asStateFlow()
+
     fun openArtist(artist: com.example.model.Artist) {
         _selectedArtist.value = artist
     }
 
+    fun openArtistFromNowPlaying(artistName: String, track: Track) {
+        val targetName = artistName.trim().ifBlank { track.artist.trim() }
+        if (targetName.isBlank() || targetName.equals("Unknown Artist", ignoreCase = true)) {
+            showSnackbar("Artist information unavailable")
+            return
+        }
+
+        val currentArtists = allArtists.value
+        val exactMatch = currentArtists.firstOrNull { it.name.equals(targetName, ignoreCase = true) }
+        val mbidMatch = if (exactMatch == null && !track.musicBrainzArtistId.isNullOrBlank()) {
+            currentArtists.firstOrNull { a -> a.songs.any { it.musicBrainzArtistId == track.musicBrainzArtistId } }
+        } else null
+        val containsMatch = if (exactMatch == null && mbidMatch == null) {
+            currentArtists.firstOrNull { it.name.contains(targetName, ignoreCase = true) || targetName.contains(it.name, ignoreCase = true) }
+        } else null
+
+        val resolvedArtist = exactMatch ?: mbidMatch ?: containsMatch ?: run {
+            val songs = allTracks.value.filter {
+                it.artist.contains(targetName, ignoreCase = true) || it.albumArtist.contains(targetName, ignoreCase = true)
+            }.ifEmpty { listOf(track) }
+            com.example.model.Artist(
+                id = "artist_${targetName.hashCode()}",
+                name = targetName,
+                albumCount = songs.map { it.album }.distinct().size,
+                songCount = songs.size,
+                totalDurationSeconds = songs.sumOf { it.durationSeconds },
+                albums = emptyList(),
+                songs = songs
+            )
+        }
+
+        _openedArtistFromNowPlaying.value = true
+        _isNowPlayingExpanded.value = false
+        _selectedTab.value = DjTab.LOCAL
+        _selectedArtist.value = resolvedArtist
+    }
+
     fun closeArtist() {
         _selectedArtist.value = null
+        if (_openedArtistFromNowPlaying.value) {
+            _openedArtistFromNowPlaying.value = false
+            _isNowPlayingExpanded.value = true
+        }
+    }
+
+    fun toggleFavorite(track: Track) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val newRating = if (track.rating >= 4) 0 else 5
+            val updated = track.copy(rating = newRating)
+            trackDao.updateTrack(TrackEntity.fromTrack(updated))
+            withContext(Dispatchers.Main) {
+                showSnackbar(if (newRating >= 4) "Added to Favorites" else "Removed from Favorites")
+            }
+        }
+    }
+
+    fun playSomethingInCar(source: com.example.carmode.PlaySomethingSource = com.example.carmode.PlaySomethingSource.FAVORITES) {
+        viewModelScope.launch(Dispatchers.Default) {
+            val tracks = allTracks.value.filter { it.isAvailable }
+            if (tracks.isEmpty()) return@launch
+
+            val targetList = when (source) {
+                com.example.carmode.PlaySomethingSource.FAVORITES -> {
+                    val favorites = tracks.filter { it.rating >= 4 }
+                    if (favorites.isNotEmpty()) favorites else tracks
+                }
+                com.example.carmode.PlaySomethingSource.RECENTLY_ADDED -> {
+                    tracks.sortedByDescending { it.dateAdded }.take(50)
+                }
+                com.example.carmode.PlaySomethingSource.DRIVING_PLAYLIST -> {
+                    val allP = allPlaylists.value
+                    val drivingPlaylist = allP.firstOrNull { it.name.contains("Drive", ignoreCase = true) }
+                    if (drivingPlaylist != null && drivingPlaylist.tracks.isNotEmpty()) {
+                        drivingPlaylist.tracks
+                    } else {
+                        tracks
+                    }
+                }
+                com.example.carmode.PlaySomethingSource.UNPLAYED -> {
+                    val unplayed = tracks.filter { it.rating == 0 }
+                    if (unplayed.isNotEmpty()) unplayed else tracks
+                }
+                else -> tracks
+            }
+
+            val shuffled = if (carModeManager.smartDrivingShuffle.value) {
+                targetList.shuffled()
+            } else {
+                targetList.shuffled()
+            }
+
+            withContext(Dispatchers.Main) {
+                playTrackList(shuffled, shuffle = true)
+            }
+        }
     }
 
     fun openFolder(folder: com.example.model.TrackFolder) {

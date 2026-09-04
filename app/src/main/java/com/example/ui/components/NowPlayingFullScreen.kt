@@ -137,6 +137,7 @@ fun NowPlayingFullScreen(
     onToggleWaveformStyle: (() -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
     onOpenProperties: (Track) -> Unit = {},
+    onOpenArtist: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     // Intercept back button to smoothly close the full-screen page
@@ -168,6 +169,7 @@ fun NowPlayingFullScreen(
             onToggleWaveformStyle = onToggleWaveformStyle,
             onOpenSettings = onOpenSettings,
             onOpenProperties = onOpenProperties,
+            onOpenArtist = onOpenArtist,
             modifier = modifier
         )
         return
@@ -298,14 +300,12 @@ fun NowPlayingFullScreen(
                     horizontalArrangement = Arrangement.Center,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = track.artist,
-                        color = TextSecondary,
+                    ArtistCreditText(
+                        artistString = track.artist.ifBlank { "Unknown Artist" },
+                        textColor = TextSecondary,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.testTag("now_playing_artist")
+                        onOpenArtist = onOpenArtist
                     )
                     if (track.album.isNotBlank() && !track.album.equals("Unknown Album", ignoreCase = true)) {
                         Text(text = " • ", color = TextMuted, fontSize = 14.sp)
@@ -867,6 +867,7 @@ private fun ProNowPlayingFullScreenContent(
     onToggleWaveformStyle: (() -> Unit)?,
     onOpenSettings: () -> Unit,
     onOpenProperties: (Track) -> Unit,
+    onOpenArtist: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val totalSec = if (durationMs > 0) (durationMs / 1000).toInt() else track.durationSeconds.coerceAtLeast(1)
@@ -1110,14 +1111,13 @@ private fun ProNowPlayingFullScreenContent(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text(
-                                text = track.artist.ifBlank { "Unknown Artist" },
-                                color = theme.textSecondary,
+                            ArtistCreditText(
+                                artistString = track.artist.ifBlank { "Unknown Artist" },
+                                textColor = theme.textSecondary,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.testTag("now_playing_artist")
+                                onOpenArtist = onOpenArtist,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             if (track.album.isNotBlank() && !track.album.equals("Unknown Album", ignoreCase = true)) {
                                 Text(text = "•", color = theme.textMuted, fontSize = 11.sp)
@@ -1524,6 +1524,125 @@ private fun ProNowPlayingFullScreenContent(
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+}
+
+/**
+ * Data class representing an artist segment (either a clickable artist name or an acoustic delimiter like " feat. " or ", ").
+ */
+data class ArtistSegment(val text: String, val isArtist: Boolean)
+
+/**
+ * Splits an artist string into individual artist tokens and connecting delimiters.
+ * Handles common feature and collaboration markers: feat., ft., featuring, vs., with, &, ;, ,, /, and x.
+ */
+fun splitArtistSegments(artistString: String): List<ArtistSegment> {
+    val trimmed = artistString.trim()
+    if (trimmed.isBlank() || trimmed.equals("Unknown Artist", ignoreCase = true)) {
+        return listOf(ArtistSegment(trimmed.ifBlank { "Unknown Artist" }, isArtist = false))
+    }
+
+    val delimiterRegex = Regex("""(?i)(\s*(?:\b(?:featuring|feat|ft|vs|with|x)(?:\.|\b)|&|;|,|\/)\s*)""")
+    val matches = delimiterRegex.findAll(trimmed).toList()
+    if (matches.isEmpty()) {
+        return listOf(ArtistSegment(trimmed, isArtist = true))
+    }
+
+    val tokens = mutableListOf<ArtistSegment>()
+    var currentIndex = 0
+
+    for (match in matches) {
+        if (match.range.first > currentIndex) {
+            val artistPart = trimmed.substring(currentIndex, match.range.first).trim()
+            if (artistPart.isNotEmpty()) {
+                tokens.add(ArtistSegment(artistPart, isArtist = true))
+            }
+        }
+        tokens.add(ArtistSegment(match.value, isArtist = false))
+        currentIndex = match.range.last + 1
+    }
+
+    if (currentIndex < trimmed.length) {
+        val artistPart = trimmed.substring(currentIndex).trim()
+        if (artistPart.isNotEmpty()) {
+            tokens.add(ArtistSegment(artistPart, isArtist = true))
+        }
+    }
+
+    return tokens
+}
+
+/**
+ * Returns a clean list of individual artist names from a collaborative artist tag.
+ */
+fun splitArtistNames(artistString: String): List<String> {
+    return splitArtistSegments(artistString).filter { it.isArtist }.map { it.text }
+}
+
+/**
+ * Renders an artist credit line with individual clickable artist tokens.
+ */
+@Composable
+fun ArtistCreditText(
+    artistString: String,
+    textColor: androidx.compose.ui.graphics.Color,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    fontWeight: FontWeight = FontWeight.Medium,
+    onOpenArtist: ((String) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val segments = remember(artistString) { splitArtistSegments(artistString) }
+
+    if (segments.size <= 1) {
+        val name = segments.firstOrNull()?.text ?: artistString.ifBlank { "Unknown Artist" }
+        Text(
+            text = name,
+            color = textColor,
+            fontSize = fontSize,
+            fontWeight = fontWeight,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = modifier
+                .testTag("now_playing_artist")
+                .then(
+                    if (onOpenArtist != null && name.isNotBlank() && !name.equals("Unknown Artist", ignoreCase = true)) {
+                        Modifier.clickable { onOpenArtist(name) }
+                    } else Modifier
+                )
+        )
+    } else {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = modifier.testTag("now_playing_artist")
+        ) {
+            segments.forEach { segment ->
+                if (segment.isArtist) {
+                    Text(
+                        text = segment.text,
+                        color = textColor,
+                        fontSize = fontSize,
+                        fontWeight = fontWeight,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .then(
+                                if (onOpenArtist != null) {
+                                    Modifier.clickable { onOpenArtist(segment.text) }
+                                } else Modifier
+                            )
+                            .testTag("now_playing_artist_token_${segment.text}")
+                    )
+                } else {
+                    Text(
+                        text = segment.text,
+                        color = textColor.copy(alpha = 0.65f),
+                        fontSize = fontSize,
+                        fontWeight = FontWeight.Normal,
+                        maxLines = 1
+                    )
+                }
             }
         }
     }

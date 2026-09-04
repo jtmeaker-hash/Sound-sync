@@ -5,8 +5,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -242,7 +244,11 @@ fun MainDjScreen(
             SideNavigationDrawerContent(
                 onSelectDestination = { dest ->
                     coroutineScope.launch { drawerState.close() }
-                    activeSideDestination = dest
+                    if (dest == SideMenuDestination.CarMode) {
+                        viewModel.carModeManager.enterCarMode(manual = true)
+                    } else {
+                        activeSideDestination = dest
+                    }
                 },
                 onCloseDrawer = {
                     coroutineScope.launch { drawerState.close() }
@@ -285,6 +291,50 @@ fun MainDjScreen(
                         onResume = { viewModel.resumeScanService() },
                         onCancel = { viewModel.cancelScanService() }
                     )
+                }
+
+                // Library Background Metadata Analysis Banner
+                val analysisProgress by viewModel.analysisProgress.collectAsState()
+                AnimatedVisibility(visible = analysisProgress.isRunning) {
+                    Surface(
+                        color = if (analysisProgress.isPausedForPlayback) DjSurfaceDark else DjSurfaceElevated,
+                        border = BorderStroke(
+                            0.5.dp,
+                            if (analysisProgress.isPausedForPlayback) NeonAmber.copy(alpha = 0.5f) else DeckACyan.copy(alpha = 0.5f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                progress = {
+                                    if (analysisProgress.totalCount > 0) {
+                                        analysisProgress.processedCount.toFloat() / analysisProgress.totalCount.toFloat()
+                                    } else 0f
+                                },
+                                modifier = Modifier.size(16.dp),
+                                color = if (analysisProgress.isPausedForPlayback) NeonAmber else DeckACyan,
+                                strokeWidth = 2.dp
+                            )
+                            Text(
+                                text = if (analysisProgress.isPausedForPlayback) {
+                                    "Analysis throttled for audio playback (${analysisProgress.processedCount}/${analysisProgress.totalCount})"
+                                } else {
+                                    "Analysing library: ${analysisProgress.processedCount}/${analysisProgress.totalCount} • ${analysisProgress.currentTrackTitle}"
+                                },
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -607,9 +657,57 @@ fun MainDjScreen(
                         onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
                         onSetDisplayMode = { mode -> viewModel.setNowPlayingDisplayMode(mode) },
                         onOpenSettings = { showNowPlayingSettings = true },
-                        onOpenProperties = { track -> viewModel.openTrackProperties(track) }
+                        onOpenProperties = { track -> viewModel.openTrackProperties(track) },
+                        onOpenArtist = { artistName -> viewModel.openArtistFromNowPlaying(artistName, playingTrack!!) }
                     )
                 }
+            }
+
+            // Full-Screen Car Mode Dashboard
+            val isCarModeActive by viewModel.carModeManager.isCarModeActive.collectAsState()
+            AnimatedVisibility(
+                visible = isCarModeActive,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { it })
+            ) {
+                val currentQueue by viewModel.playbackQueue.collectAsState()
+                com.example.carmode.CarModeScreen(
+                    currentTrack = playingTrack,
+                    isPlaying = isPlaying,
+                    waveformData = waveformData,
+                    audioEngine = viewModel.audioEngine,
+                    carModeManager = viewModel.carModeManager,
+                    playbackQueue = currentQueue,
+                    isFavorite = (playingTrack?.rating ?: 0) >= 4,
+                    isShuffleEnabled = isShuffleEnabled,
+                    repeatMode = repeatMode,
+                    onToggleShuffle = { viewModel.toggleShuffle() },
+                    onToggleRepeat = { viewModel.toggleRepeatMode() },
+                    onToggleFavorite = {
+                        playingTrack?.let { viewModel.toggleFavorite(it) }
+                    },
+                    onPlaySomething = {
+                        viewModel.playSomethingInCar()
+                    },
+                    onExitCarMode = {
+                        viewModel.carModeManager.exitCarMode()
+                    },
+                    onTogglePlayPause = {
+                        viewModel.audioEngine.togglePlayPause()
+                    },
+                    onPreviousTrack = {
+                        viewModel.previousTrack()
+                    },
+                    onNextTrack = {
+                        viewModel.nextTrack()
+                    },
+                    onSeekToMs = { ms ->
+                        viewModel.seekToMs(ms)
+                    },
+                    onSelectQueueTrack = { track ->
+                        viewModel.playTrack(track)
+                    }
+                )
             }
 
             if (showNowPlayingSettings) {
@@ -992,7 +1090,8 @@ private fun PositionAwareNowPlaying(
     onToggleRepeat: () -> Unit = {},
     onSeekToMs: (Long) -> Unit, onToggleDisplayMode: () -> Unit,
     onSetDisplayMode: (com.example.model.NowPlayingDisplayMode) -> Unit,
-    onOpenSettings: () -> Unit, onOpenProperties: (com.example.model.Track) -> Unit
+    onOpenSettings: () -> Unit, onOpenProperties: (com.example.model.Track) -> Unit,
+    onOpenArtist: ((String) -> Unit)? = null
 ) {
     val currentPositionMs = audioEngine.currentPositionMs.collectAsState().value
     NowPlayingFullScreen(
@@ -1019,7 +1118,8 @@ private fun PositionAwareNowPlaying(
         onPreviousTrack = onPreviousTrack, onNextTrack = onNextTrack,
         onSeekToMs = onSeekToMs, onToggleDisplayMode = onToggleDisplayMode,
         onSetDisplayMode = onSetDisplayMode, onOpenSettings = onOpenSettings,
-        onOpenProperties = onOpenProperties
+        onOpenProperties = onOpenProperties,
+        onOpenArtist = onOpenArtist
     )
 }
 
@@ -1311,6 +1411,23 @@ private fun SideDestinationScreen(
                         },
                         onClose = onClose,
                         modifier = Modifier.fillMaxSize()
+                    )
+                }
+                SideMenuDestination.CarMode -> {
+                    LaunchedEffect(Unit) {
+                        onClose()
+                        viewModel.carModeManager.enterCarMode(manual = true)
+                    }
+                }
+                SideMenuDestination.CarModeSettings -> {
+                    com.example.carmode.CarModeSettingsScreen(
+                        carModeManager = viewModel.carModeManager,
+                        audioEngine = viewModel.audioEngine,
+                        onBack = onClose,
+                        onLaunchCarMode = {
+                            onClose()
+                            viewModel.carModeManager.enterCarMode(manual = true)
+                        }
                     )
                 }
             }

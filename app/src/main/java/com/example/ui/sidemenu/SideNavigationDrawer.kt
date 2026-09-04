@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -352,6 +353,16 @@ fun SideNavigationDrawerContent(
                                 onSelectDestination(SideMenuDestination.HaasSurround)
                             }
                         )
+                        DrawerActionItem(
+                            title = "Car Mode",
+                            subtitle = "Distraction-free, glanceable vehicle dashboard",
+                            icon = Icons.Default.DirectionsCar,
+                            accentColor = DeckACyan,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.CarMode)
+                            }
+                        )
                     }
                 }
 
@@ -477,6 +488,16 @@ fun SideNavigationDrawerContent(
                             onClick = {
                                 onCloseDrawer()
                                 onSelectDestination(SideMenuDestination.MusicBrainzSettings)
+                            }
+                        )
+                        DrawerActionItem(
+                            title = "Car Mode & Bluetooth",
+                            subtitle = "Vehicle pairing, driving profiles, and audio tuning",
+                            icon = Icons.Default.DirectionsCar,
+                            accentColor = DeckACyan,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.CarModeSettings)
                             }
                         )
                     }
@@ -873,7 +894,7 @@ private fun ProSideNavigationDrawerContent(
                 // ── 2. TOOLS ─────────────────────────────────────
                 ProCategoryHeader(
                     title = "TOOLS",
-                    badge = "6 TOOLS",
+                    badge = "7 TOOLS",
                     isExpanded = expandedMap["TOOLS"] == true,
                     onToggle = { expandedMap["TOOLS"] = !(expandedMap["TOOLS"] ?: false) }
                 )
@@ -937,6 +958,15 @@ private fun ProSideNavigationDrawerContent(
                                 onSelectDestination(SideMenuDestination.DynamicRangeMeter)
                             }
                         )
+                        ProDrawerItem(
+                            title = "Car Mode",
+                            subtitle = "Distraction-free glanceable vehicle dashboard",
+                            icon = Icons.Default.DirectionsCar,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.CarMode)
+                            }
+                        )
                     }
                 }
 
@@ -945,7 +975,7 @@ private fun ProSideNavigationDrawerContent(
                 // ── 3. AUDIO ─────────────────────────────────────
                 ProCategoryHeader(
                     title = "AUDIO",
-                    badge = "4 ITEMS",
+                    badge = "5 ITEMS",
                     isExpanded = expandedMap["AUDIO"] == true,
                     onToggle = { expandedMap["AUDIO"] = !(expandedMap["AUDIO"] ?: false) }
                 )
@@ -989,6 +1019,15 @@ private fun ProSideNavigationDrawerContent(
                             onClick = {
                                 onCloseDrawer()
                                 onSelectDestination(SideMenuDestination.PlaybackSettings)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "Car Mode & Bluetooth",
+                            subtitle = "Vehicle pairing, driving profiles, and audio tuning",
+                            icon = Icons.Default.DirectionsCar,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.CarModeSettings)
                             }
                         )
                     }

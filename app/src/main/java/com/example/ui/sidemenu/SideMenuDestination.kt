@@ -10,6 +10,7 @@ sealed class SideMenuDestination(val title: String) {
     object DynamicRangeMeter : SideMenuDestination("Dynamic Range Meter")
     object Eq : SideMenuDestination("Multipoint EQ")
     object HaasSurround : SideMenuDestination("Haas Surround")
+    object CarMode : SideMenuDestination("Car Mode")
 
     // Settings
     object ListeningStats : SideMenuDestination("Listening Statistics")
@@ -18,4 +19,5 @@ sealed class SideMenuDestination(val title: String) {
     object MusicBrainzSettings : SideMenuDestination("MusicBrainz & Metadata")
     object AppearanceSettings : SideMenuDestination("Appearance")
     object GitHubUpdates : SideMenuDestination("GitHub & App Updates")
+    object CarModeSettings : SideMenuDestination("Car Mode & Bluetooth")
 }

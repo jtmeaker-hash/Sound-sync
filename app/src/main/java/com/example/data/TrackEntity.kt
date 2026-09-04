@@ -14,7 +14,8 @@ import com.example.model.Track
         Index(value = ["contentFingerprint"]),
         Index(value = ["filePath"]),
         Index(value = ["crateId"]),
-        Index(value = ["dateAdded"])
+        Index(value = ["dateAdded"]),
+        Index(value = ["analysisState"])
     ]
 )
 data class TrackEntity(
@@ -70,7 +71,13 @@ data class TrackEntity(
     val notes: String = "",
     val composer: String = "",
     val isManualBpm: Boolean = false,
-    val isManualKey: Boolean = false
+    val isManualKey: Boolean = false,
+    val analysisState: String = "NOT_ANALYSED",
+    val analysisVersion: Int = 1,
+    val lastAnalysedAt: Long? = null,
+    val analysisFailureReason: String? = null,
+    val analysisRetryCount: Int = 0,
+    val fileModifiedTimestamp: Long = 0L
 ) {
     fun toTrack(): Track {
         val syncEnum = try { SyncState.valueOf(syncState) } catch (e: Exception) { SyncState.LOCAL_ONLY }
@@ -151,7 +158,13 @@ data class TrackEntity(
             notes = notes,
             composer = composer,
             isManualBpm = isManualBpm,
-            isManualKey = isManualKey
+            isManualKey = isManualKey,
+            analysisState = try { com.example.model.AnalysisState.valueOf(analysisState) } catch (e: Exception) { com.example.model.AnalysisState.NOT_ANALYSED },
+            analysisVersion = analysisVersion,
+            lastAnalysedAt = lastAnalysedAt,
+            analysisFailureReason = analysisFailureReason,
+            analysisRetryCount = analysisRetryCount,
+            fileModifiedTimestamp = fileModifiedTimestamp
         )
     }
 
@@ -209,7 +222,13 @@ data class TrackEntity(
                 notes = track.notes,
                 composer = track.composer,
                 isManualBpm = track.isManualBpm,
-                isManualKey = track.isManualKey
+                isManualKey = track.isManualKey,
+                analysisState = track.analysisState.name,
+                analysisVersion = track.analysisVersion,
+                lastAnalysedAt = track.lastAnalysedAt,
+                analysisFailureReason = track.analysisFailureReason,
+                analysisRetryCount = track.analysisRetryCount,
+                fileModifiedTimestamp = track.fileModifiedTimestamp
             )
         }
     }

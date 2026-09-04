@@ -65,6 +65,17 @@ class MainActivity : ComponentActivity() {
             SoundSyncTheme(themeMode = themeMode, libraryDensity = libraryDensity) {
                 activeViewModel = viewModel
 
+                val isCarModeActive by viewModel.carModeManager.isCarModeActive.collectAsState()
+                val keepScreenAwake by viewModel.carModeManager.keepScreenAwake.collectAsState()
+
+                LaunchedEffect(isCarModeActive, keepScreenAwake) {
+                    if (isCarModeActive && keepScreenAwake) {
+                        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                }
+
                 // Handle incoming OAuth callback URIs or shared song links
                 LaunchedEffect(Unit) {
                     processIncomingIntent(intent, viewModel)
@@ -149,7 +160,10 @@ class MainActivity : ComponentActivity() {
 
     private fun processIncomingIntent(incomingIntent: Intent?, viewModel: MainDjViewModel) {
         if (incomingIntent == null) return
-        if (incomingIntent.action == Intent.ACTION_SEND && incomingIntent.type?.startsWith("text/") == true) {
+        if (incomingIntent.action == "com.example.carmode.ACTION_LAUNCH_CAR_MODE") {
+            Log.d(TAG, "Received ACTION_LAUNCH_CAR_MODE intent from Bluetooth trigger")
+            viewModel.carModeManager.enterCarMode(manual = false)
+        } else if (incomingIntent.action == Intent.ACTION_SEND && incomingIntent.type?.startsWith("text/") == true) {
             val sharedText = incomingIntent.getStringExtra(Intent.EXTRA_TEXT)
                 ?: incomingIntent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
             val subject = incomingIntent.getStringExtra(Intent.EXTRA_SUBJECT)

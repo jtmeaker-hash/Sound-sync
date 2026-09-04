@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaybackSessionEntity::class,
         BulkOperationHistoryEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -230,6 +230,28 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val newTrackColumns = listOf(
+                    "analysisState TEXT NOT NULL DEFAULT 'NOT_ANALYSED'",
+                    "analysisVersion INTEGER NOT NULL DEFAULT 1",
+                    "lastAnalysedAt INTEGER",
+                    "analysisFailureReason TEXT",
+                    "analysisRetryCount INTEGER NOT NULL DEFAULT 0",
+                    "fileModifiedTimestamp INTEGER NOT NULL DEFAULT 0"
+                )
+                newTrackColumns.forEach { definition ->
+                    val colName = definition.substringBefore(' ')
+                    try {
+                        db.execSQL("ALTER TABLE tracks ADD COLUMN $colName $definition")
+                    } catch (_: Exception) {}
+                }
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_analysisState` ON `tracks` (`analysisState`)")
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -237,7 +259,16 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "soundsync_dj_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                    MIGRATION_5_6,
+                    MIGRATION_6_7,
+                    MIGRATION_7_8,
+                    MIGRATION_8_9
+                )
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance

@@ -81,4 +81,28 @@ interface TrackDao {
 
     @Query("SELECT COUNT(*) FROM tracks")
     suspend fun getTrackCount(): Int
+
+    @Query("SELECT * FROM tracks WHERE analysisState IN ('NOT_ANALYSED', 'QUEUED', 'PARTIAL') OR bpm <= 0.0 OR camelotKey = '' ORDER BY CASE WHEN analysisState = 'QUEUED' THEN 0 WHEN analysisState = 'NOT_ANALYSED' THEN 1 ELSE 2 END, dateAdded DESC LIMIT :limit")
+    suspend fun getTracksNeedingAnalysis(limit: Int): List<TrackEntity>
+
+    @Query("SELECT COUNT(*) FROM tracks WHERE analysisState IN ('NOT_ANALYSED', 'QUEUED')")
+    fun observePendingAnalysisCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM tracks WHERE analysisState = 'COMPLETE'")
+    fun observeCompletedAnalysisCount(): Flow<Int>
+
+    @Query("UPDATE tracks SET analysisState = :state, lastAnalysedAt = :lastAnalysedAt, analysisFailureReason = :reason, analysisRetryCount = :retryCount WHERE id = :id")
+    suspend fun updateTrackAnalysisStatus(id: String, state: String, lastAnalysedAt: Long?, reason: String?, retryCount: Int)
+
+    @Query("UPDATE tracks SET analysisState = 'QUEUED' WHERE analysisState != 'COMPLETE'")
+    suspend fun queueUnfinishedTracks()
+
+    @Query("UPDATE tracks SET analysisState = 'QUEUED' WHERE id IN (:ids)")
+    suspend fun queueTracksByIds(ids: List<String>)
+
+    @Query("UPDATE tracks SET analysisState = 'QUEUED'")
+    suspend fun markAllForReanalysis()
+
+    @Query("UPDATE tracks SET analysisState = 'QUEUED' WHERE bpm <= 0.0 OR camelotKey = '' OR artworkUrl IS NULL OR artworkUrl = ''")
+    suspend fun markMissingForAnalysis()
 }

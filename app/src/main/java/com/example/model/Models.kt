@@ -97,6 +97,15 @@ enum class MetadataProvenance(
     )
 }
 
+enum class AnalysisState {
+    NOT_ANALYSED,
+    QUEUED,
+    ANALYSING,
+    PARTIAL,
+    COMPLETE,
+    FAILED
+}
+
 data class Track(
     val id: String,
     val title: String,
@@ -152,7 +161,13 @@ data class Track(
     val notes: String = "", // DJ performance & mixing notes
     val composer: String = "",
     val isManualBpm: Boolean = false,
-    val isManualKey: Boolean = false
+    val isManualKey: Boolean = false,
+    val analysisState: AnalysisState = AnalysisState.NOT_ANALYSED,
+    val analysisVersion: Int = 1,
+    val lastAnalysedAt: Long? = null,
+    val analysisFailureReason: String? = null,
+    val analysisRetryCount: Int = 0,
+    val fileModifiedTimestamp: Long = 0L
 ) {
     val tagsList: List<String>
         get() = customTags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
