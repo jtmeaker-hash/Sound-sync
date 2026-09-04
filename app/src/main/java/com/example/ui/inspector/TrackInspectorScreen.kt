@@ -166,15 +166,18 @@ fun TrackInspectorScreen(
             audioEngine.currentTrack.collectAsState().value?.id == currentTrack.id
     val currentPositionMs = audioEngine.currentPositionMs.collectAsState().value
 
+    val isPro = SoundSyncTheme.isPro
+    val theme = SoundSyncTheme.current
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(DjObsidian)
+            .background(if (isPro) theme.background else DjObsidian)
     ) {
         // Top Navigation Bar
         Surface(
-            color = DjSurfaceDark,
-            border = androidx.compose.foundation.BorderStroke(0.5.dp, DjSurfaceBorder),
+            color = if (isPro) theme.surface else DjSurfaceDark,
+            border = androidx.compose.foundation.BorderStroke(0.5.dp, if (isPro) theme.divider else DjSurfaceBorder),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -186,11 +189,11 @@ fun TrackInspectorScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = DeckACyan)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = if (isPro) theme.accent else DeckACyan)
                     }
                     Column {
-                        Text("Track Inspector", fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 16.sp)
-                        Text(currentTrack.title, color = TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Track Inspector", fontWeight = FontWeight.Bold, color = if (isPro) theme.textPrimary else TextPrimary, fontSize = 16.sp)
+                        Text(currentTrack.title, color = if (isPro) theme.textSecondary else TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
 
@@ -208,11 +211,11 @@ fun TrackInspectorScreen(
                         Icon(
                             imageVector = if (isPlayingThisTrack) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = "Play/Pause",
-                            tint = if (isPlayingThisTrack) NeonAmber else DeckACyan
+                            tint = if (isPlayingThisTrack) NeonAmber else if (isPro) theme.accent else DeckACyan
                         )
                     }
                     IconButton(onClick = { showEditMetadataDialog = true }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit Metadata", tint = TextSecondary)
+                        Icon(Icons.Default.Edit, contentDescription = "Edit Metadata", tint = if (isPro) theme.textSecondary else TextSecondary)
                     }
                 }
             }
@@ -223,8 +226,8 @@ fun TrackInspectorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(if (isPro) 12.dp else 16.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isPro) 10.dp else 16.dp)
         ) {
             // ── 1. HEADER ──────────────────────────────────────────────────────────
             InspectorHeaderCard(
@@ -574,26 +577,29 @@ private fun InspectorHeaderCard(
     track: Track,
     onRatingChanged: (Int) -> Unit
 ) {
-    Card(
+    val isPro = SoundSyncTheme.isPro
+    val theme = SoundSyncTheme.current
+
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
-        shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+        color = if (isPro) theme.surface else DjSurfaceDark,
+        shape = RoundedCornerShape(if (isPro) 3.dp else 12.dp),
+        border = androidx.compose.foundation.BorderStroke(if (isPro) 0.5.dp else 1.dp, if (isPro) theme.divider else DjSurfaceBorder)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(if (isPro) 12.dp else 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (isPro) 12.dp else 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Artwork
             Box(
                 modifier = Modifier
-                    .size(90.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(DjSurfaceCard)
-                    .border(1.dp, DjSurfaceBorder, RoundedCornerShape(8.dp)),
+                    .size(if (isPro) 80.dp else 90.dp)
+                    .clip(RoundedCornerShape(if (isPro) 2.dp else 8.dp))
+                    .background(if (isPro) theme.surfaceSunken else DjSurfaceCard)
+                    .border(if (isPro) 0.5.dp else 1.dp, if (isPro) theme.divider else DjSurfaceBorder, RoundedCornerShape(if (isPro) 2.dp else 8.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 if (track.artworkUrl != null) {
@@ -1476,21 +1482,35 @@ private fun SectionCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     content: @Composable () -> Unit
 ) {
+    val theme = LocalSoundSyncTheme.current
+    val isPro = SoundSyncTheme.isPro
+    val containerColor = if (isPro) theme.surface else DjSurfaceDark
+    val borderColor = if (isPro) theme.divider else DjSurfaceBorder
+    val shape = if (isPro) RoundedCornerShape(3.dp) else RoundedCornerShape(10.dp)
+    val iconTint = if (isPro) theme.accent else DeckACyan
+    val titleColor = if (isPro) theme.textPrimary else TextPrimary
+
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
-        shape = RoundedCornerShape(10.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        shape = shape,
+        border = androidx.compose.foundation.BorderStroke(if (isPro) 0.5.dp else 1.dp, borderColor)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(if (isPro) 12.dp else 14.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isPro) 8.dp else 10.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(icon, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(16.dp))
-                Text(title, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = TextPrimary, letterSpacing = 1.sp)
+                Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
+                Text(
+                    title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    color = titleColor,
+                    letterSpacing = if (isPro) 0.5.sp else 1.sp
+                )
             }
             content()
         }
@@ -1503,9 +1523,21 @@ private fun InfoMetricItem(
     value: String,
     color: Color = TextPrimary
 ) {
+    val theme = LocalSoundSyncTheme.current
+    val isPro = SoundSyncTheme.isPro
+    val labelColor = if (isPro) theme.textMuted else TextMuted
+    val resolvedColor = if (isPro && color == TextPrimary) theme.textPrimary else color
     Column {
-        Text(label, fontSize = 9.sp, color = TextMuted, fontWeight = FontWeight.SemiBold)
-        Text(value, fontSize = 13.sp, color = color, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(label, fontSize = 9.sp, color = labelColor, fontWeight = FontWeight.SemiBold)
+        Text(
+            value,
+            fontSize = 13.sp,
+            color = resolvedColor,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontFamily = if (isPro) FontFamily.Monospace else FontFamily.Default
+        )
     }
 }
 

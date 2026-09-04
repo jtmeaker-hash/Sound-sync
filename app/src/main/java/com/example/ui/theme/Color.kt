@@ -7,12 +7,21 @@ import androidx.compose.ui.graphics.Color
  * spectrogram colours) intentionally remain constant because they carry meaning.
  */
 enum class ThemeMode {
+    DEFAULT,
+    PRO,
     CURRENT,
     DARK;
 
+    val isPro: Boolean get() = this == PRO
+
     companion object {
-        fun fromStoredValue(value: String?): ThemeMode =
-            if (value == DARK.name) DARK else CURRENT
+        fun fromStoredValue(value: String?): ThemeMode = when (value) {
+            PRO.name -> PRO
+            DEFAULT.name -> DEFAULT
+            CURRENT.name -> DEFAULT
+            DARK.name -> DARK
+            else -> DEFAULT
+        }
     }
 }
 
@@ -38,6 +47,17 @@ private val CurrentAppearancePalette = AppearancePalette(
     mutedText = Color(0xFF64748B)
 )
 
+private val ProAppearancePalette = AppearancePalette(
+    background = Color(0xFF111317),
+    surface = Color(0xFF181B21),
+    card = Color(0xFF1F232B),
+    elevated = Color(0xFF252A34),
+    border = Color(0xFF2B313C),
+    primaryText = Color(0xFFF0F2F5),
+    secondaryText = Color(0xFF8E95A2),
+    mutedText = Color(0xFF5E6573)
+)
+
 private val BloodRedAppearancePalette = AppearancePalette(
     background = Color(0xFF050505),
     surface = Color(0xFF101010),
@@ -53,10 +73,10 @@ private val BloodRedAppearancePalette = AppearancePalette(
 private var activeAppearancePalette = CurrentAppearancePalette
 
 internal fun setActiveAppearancePalette(mode: ThemeMode) {
-    activeAppearancePalette = if (mode == ThemeMode.DARK) {
-        BloodRedAppearancePalette
-    } else {
-        CurrentAppearancePalette
+    activeAppearancePalette = when (mode) {
+        ThemeMode.PRO -> ProAppearancePalette
+        ThemeMode.DARK -> BloodRedAppearancePalette
+        else -> CurrentAppearancePalette
     }
 }
 

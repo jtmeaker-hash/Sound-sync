@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Surface
@@ -27,13 +29,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.WaveformStyle
-import com.example.ui.theme.BloodRedPrimary
 import com.example.ui.theme.DeckACyan
-import com.example.ui.theme.DjObsidian
-import com.example.ui.theme.DjSurfaceBorder
-import com.example.ui.theme.DjSurfaceDark
-import com.example.ui.theme.DjSurfaceElevated
 import com.example.ui.theme.NeonAmber
+import com.example.ui.theme.ProLibraryDensity
+import com.example.ui.theme.SoundSyncTheme
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.ThemeMode
@@ -42,14 +41,21 @@ import com.example.ui.theme.ThemeMode
 fun AppearanceSettingsScreen(
     themeMode: ThemeMode,
     onSetThemeMode: (ThemeMode) -> Unit,
+    libraryDensity: ProLibraryDensity = ProLibraryDensity.COMPACT,
+    onSetLibraryDensity: (ProLibraryDensity) -> Unit = {},
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onSetWaveformStyle: (WaveformStyle) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val theme = SoundSyncTheme.current
+    val isDefault = (themeMode == ThemeMode.DEFAULT || themeMode == ThemeMode.CURRENT)
+    val isPro = (themeMode == ThemeMode.PRO)
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(DjObsidian)
+            .background(theme.background)
+            .verticalScroll(rememberScrollState())
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -58,18 +64,18 @@ fun AppearanceSettingsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("appearance_section_card"),
-            colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
-            shape = RoundedCornerShape(10.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+            colors = CardDefaults.cardColors(containerColor = theme.surface),
+            shape = RoundedCornerShape(theme.cornerMedium),
+            border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider)
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("SoundSync Appearance & Themes", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("SoundSync Appearance & Themes", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Text(
-                    "Choose the app shell colour scheme. Signal colors for waveforms, spectrograms, EQ bands, and Haas effects remain preserved and constant.",
-                    color = TextSecondary,
+                    "Switch between the classic SoundSync UI and the professional Rekordbox-inspired desktop UI language.",
+                    color = theme.textSecondary,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
                 )
@@ -79,22 +85,74 @@ fun AppearanceSettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     AppearanceOptionTile(
-                        title = "Default Cyan Theme",
-                        description = "Obsidian with deck cyan accents",
-                        selected = themeMode == ThemeMode.CURRENT,
+                        title = "Default",
+                        description = "Classic SoundSync obsidian dark shell with deck cyan accents",
+                        selected = isDefault,
                         accent = DeckACyan,
-                        onClick = { onSetThemeMode(ThemeMode.CURRENT) },
-                        modifier = Modifier.weight(1f)
+                        onClick = { onSetThemeMode(ThemeMode.DEFAULT) },
+                        modifier = Modifier.weight(1f),
+                        testTag = "appearance_option_default"
                     )
 
                     AppearanceOptionTile(
-                        title = "Blood-Red Dark Theme",
-                        description = "Pitch black with crimson red accents",
-                        selected = themeMode == ThemeMode.DARK,
-                        accent = BloodRedPrimary,
-                        onClick = { onSetThemeMode(ThemeMode.DARK) },
-                        modifier = Modifier.weight(1f)
+                        title = "Pro",
+                        description = "Rekordbox desktop audio language: dark charcoal, graphite panels & cool blue",
+                        selected = isPro,
+                        accent = Color(0xFF1E6CFF),
+                        onClick = { onSetThemeMode(ThemeMode.PRO) },
+                        modifier = Modifier.weight(1f),
+                        testTag = "appearance_option_pro"
                     )
+                }
+            }
+        }
+
+        // Library Density Card (Shown when Pro Theme is selected)
+        if (isPro) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("library_density_section_card"),
+                colors = CardDefaults.cardColors(containerColor = theme.surface),
+                shape = RoundedCornerShape(theme.cornerMedium),
+                border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("Pro Library Density", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(
+                        "Configure the row density of the Pro sortable music browser. Compact fits maximum tracks on screen, while Comfortable provides relaxed touch spacing.",
+                        color = theme.textSecondary,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        AppearanceOptionTile(
+                            title = "Compact",
+                            description = "Desktop-style dense rows, maximum visible tracks, small thumbnails, tight padding",
+                            selected = libraryDensity == ProLibraryDensity.COMPACT,
+                            accent = Color(0xFF1E6CFF),
+                            onClick = { onSetLibraryDensity(ProLibraryDensity.COMPACT) },
+                            modifier = Modifier.weight(1f),
+                            testTag = "density_option_compact"
+                        )
+
+                        AppearanceOptionTile(
+                            title = "Comfortable",
+                            description = "Slightly taller rows with easier touch targets, still denser than Default theme",
+                            selected = libraryDensity == ProLibraryDensity.COMFORTABLE,
+                            accent = Color(0xFF1E6CFF),
+                            onClick = { onSetLibraryDensity(ProLibraryDensity.COMFORTABLE) },
+                            modifier = Modifier.weight(1f),
+                            testTag = "density_option_comfortable"
+                        )
+                    }
                 }
             }
         }
@@ -104,18 +162,18 @@ fun AppearanceSettingsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("waveform_style_section_card"),
-            colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
-            shape = RoundedCornerShape(10.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+            colors = CardDefaults.cardColors(containerColor = theme.surface),
+            shape = RoundedCornerShape(theme.cornerMedium),
+            border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider)
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Waveform Display Style", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("Waveform Display Style", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Text(
-                    "Select how waveforms are rendered in Now Playing and DJ views. Both modes operate with real-time 60fps scrolling and strict audio synchronisation.",
-                    color = TextSecondary,
+                    "Select how waveforms are rendered in Now Playing and DJ views. Both modes operate with real-time continuous scrolling and strict audio synchronisation.",
+                    color = theme.textSecondary,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
                 )
@@ -128,7 +186,7 @@ fun AppearanceSettingsScreen(
                         title = "Detailed Waveform",
                         description = "High-resolution multi-band peaks with crisp transient needles & dynamic nuance",
                         selected = waveformStyle == WaveformStyle.DETAILED,
-                        accent = DeckACyan,
+                        accent = if (isPro) Color(0xFF1E6CFF) else DeckACyan,
                         onClick = { onSetWaveformStyle(WaveformStyle.DETAILED) },
                         modifier = Modifier.weight(1f),
                         testTag = "waveform_style_option_detailed"
@@ -159,14 +217,19 @@ private fun AppearanceOptionTile(
     modifier: Modifier = Modifier,
     testTag: String? = null
 ) {
+    val theme = SoundSyncTheme.current
+
     Surface(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(theme.cornerSmall))
             .clickable(onClick = onClick)
             .testTag(testTag ?: "appearance_option_${title.lowercase().replace(" ", "_")}"),
-        color = if (selected) accent.copy(alpha = 0.16f) else DjSurfaceElevated,
-        shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.5.dp, if (selected) accent else DjSurfaceBorder)
+        color = if (selected) accent.copy(alpha = 0.16f) else theme.surfaceRaised,
+        shape = RoundedCornerShape(theme.cornerSmall),
+        border = androidx.compose.foundation.BorderStroke(
+            if (selected) 1.5.dp else 1.dp,
+            if (selected) accent else theme.divider
+        )
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -184,15 +247,16 @@ private fun AppearanceOptionTile(
                 )
                 Text(
                     title,
-                    color = if (selected) TextPrimary else TextSecondary,
+                    color = if (selected) theme.textPrimary else theme.textSecondary,
                     fontSize = 12.sp,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
                 )
             }
             Text(
                 description,
-                color = TextSecondary,
-                fontSize = 9.5.sp
+                color = theme.textSecondary,
+                fontSize = 9.5.sp,
+                lineHeight = 13.sp
             )
         }
     }

@@ -60,8 +60,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: MainDjViewModel = viewModel()
             val themeMode by viewModel.themeMode.collectAsState()
+            val libraryDensity by viewModel.libraryDensity.collectAsState()
 
-            SoundSyncTheme(themeMode = themeMode) {
+            SoundSyncTheme(themeMode = themeMode, libraryDensity = libraryDensity) {
                 activeViewModel = viewModel
 
                 // Handle incoming OAuth callback URIs or shared song links

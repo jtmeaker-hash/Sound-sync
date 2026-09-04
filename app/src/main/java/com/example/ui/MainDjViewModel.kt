@@ -189,6 +189,18 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         prefs.edit().putString("theme_mode", mode.name).apply()
     }
 
+    private val _libraryDensity = MutableStateFlow(
+        com.example.ui.theme.ProLibraryDensity.fromStoredValue(
+            prefs.getString("library_density", com.example.ui.theme.ProLibraryDensity.COMPACT.name)
+        )
+    )
+    val libraryDensity: StateFlow<com.example.ui.theme.ProLibraryDensity> = _libraryDensity.asStateFlow()
+
+    fun setLibraryDensity(density: com.example.ui.theme.ProLibraryDensity) {
+        _libraryDensity.value = density
+        prefs.edit().putString("library_density", density.name).apply()
+    }
+
     private val _selectedTab = MutableStateFlow(DjTab.LOCAL)
     val selectedTab = _selectedTab.asStateFlow()
 

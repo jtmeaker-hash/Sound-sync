@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -62,6 +63,7 @@ import com.example.ui.theme.NeonGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.SoundSyncTheme
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -86,6 +88,25 @@ fun DjMiniPlayer(
     onOpenNowPlaying: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    if (SoundSyncTheme.isPro) {
+        ProDjMiniPlayer(
+            track = track,
+            displayMode = displayMode,
+            waveformData = waveformData,
+            isPlaying = isPlaying,
+            currentPositionMs = currentPositionMs,
+            durationMs = durationMs,
+            onTogglePlayPause = onTogglePlayPause,
+            onPreviousTrack = onPreviousTrack,
+            onNextTrack = onNextTrack,
+            onSeekToMs = onSeekToMs,
+            onToggleDisplayMode = onToggleDisplayMode,
+            onOpenNowPlaying = onOpenNowPlaying,
+            modifier = modifier
+        )
+        return
+    }
+
     val platformColor = when {
         track.platforms.contains(MusicPlatform.SPOTIFY) -> Color(0xFF1DB954)
         track.platforms.contains(MusicPlatform.SOUNDCLOUD) -> Color(0xFFFF5500)
@@ -356,3 +377,223 @@ private fun MiniWaveformProgressStrip(
         }
     }
 }
+
+/**
+ * Pro Workstation mini player bar.
+ * Features:
+ * - Fixed stable height strictly 70dp (never jumps or resizes when metadata arrives)
+ * - Restrained corner radius (3dp topStart / topEnd)
+ * - Dark charcoal/graphite surface with hairline divider
+ * - Tabular monospaced time readout and Camelot key
+ * - Restrained transport controls
+ */
+@Composable
+private fun ProDjMiniPlayer(
+    track: Track,
+    displayMode: NowPlayingDisplayMode,
+    waveformData: WaveformData?,
+    isPlaying: Boolean,
+    currentPositionMs: Long,
+    durationMs: Long,
+    onTogglePlayPause: () -> Unit,
+    onPreviousTrack: () -> Unit = {},
+    onNextTrack: () -> Unit = {},
+    onSeekToMs: (Long) -> Unit = {},
+    onToggleDisplayMode: () -> Unit = {},
+    onOpenNowPlaying: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    val theme = SoundSyncTheme.current
+    val safeDurationMs = if (durationMs > 0) durationMs else (track.durationSeconds.coerceAtLeast(1) * 1000L)
+    val curSec = (currentPositionMs / 1000).toInt()
+    val totalSec = (safeDurationMs / 1000).toInt()
+    val curM = curSec / 60
+    val curS = curSec % 60
+    val durM = totalSec / 60
+    val durS = totalSec % 60
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(70.dp)
+            .clickable { onOpenNowPlaying() }
+            .testTag("dj_mini_player"),
+        shape = RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp),
+        color = theme.surface,
+        border = BorderStroke(0.5.dp, theme.divider)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(70.dp)
+        ) {
+            // Live Mini Waveform Strip (fixed 14dp height)
+            MiniWaveformProgressStrip(
+                waveformData = waveformData,
+                currentPositionMs = currentPositionMs,
+                durationMs = safeDurationMs,
+                onSeekFraction = { frac ->
+                    onSeekToMs((safeDurationMs * frac).toLong())
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(14.dp)
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // Visual Thumbnail
+                Surface(
+                    shape = RoundedCornerShape(2.dp),
+                    color = theme.surfaceSunken,
+                    border = BorderStroke(0.5.dp, theme.divider),
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clickable { onToggleDisplayMode() }
+                        .testTag("mini_player_toggle_mode")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Crossfade(targetState = displayMode, label = "pro_mini_thumb_crossfade") { mode ->
+                            if (mode == NowPlayingDisplayMode.WAVEFORM) {
+                                Icon(
+                                    imageVector = Icons.Default.GraphicEq,
+                                    contentDescription = "Waveform Mode",
+                                    tint = theme.accent,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Album,
+                                    contentDescription = "Artwork Mode",
+                                    tint = theme.textSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Track Info & Badges
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onOpenNowPlaying() },
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = track.title.ifBlank { "Unknown Title" },
+                        color = theme.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(1.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = track.artist.ifBlank { "Unknown Artist" },
+                            color = theme.textSecondary,
+                            fontSize = 10.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Text("•", color = theme.textMuted, fontSize = 9.sp)
+                        Text(
+                            text = String.format(Locale.US, "%d:%02d / %d:%02d", curM, curS, durM, durS),
+                            color = theme.accent,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                        if (track.hasValidKey) {
+                            Surface(
+                                shape = RoundedCornerShape(2.dp),
+                                color = theme.surfaceRaised,
+                                border = BorderStroke(0.5.dp, theme.divider)
+                            ) {
+                                Text(
+                                    text = track.camelotKey.ifBlank { track.musicalKey },
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Controls: Prev | Play/Pause | Next | Expand
+                IconButton(
+                    onClick = onPreviousTrack,
+                    modifier = Modifier.size(30.dp).testTag("mini_prev_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipPrevious,
+                        contentDescription = "Previous Track",
+                        tint = theme.textSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(3.dp),
+                    color = if (isPlaying) theme.surfaceRaised else theme.accent,
+                    border = if (isPlaying) BorderStroke(1.dp, theme.accent) else null,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clickable { onTogglePlayPause() }
+                        .testTag("mini_play_pause_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = if (isPlaying) theme.accent else Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = onNextTrack,
+                    modifier = Modifier.size(30.dp).testTag("mini_next_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = "Next Track",
+                        tint = theme.textSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = onOpenNowPlaying,
+                    modifier = Modifier.size(30.dp).testTag("expand_now_playing_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.OpenInFull,
+                        contentDescription = "Open Full Player",
+                        tint = theme.textMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+

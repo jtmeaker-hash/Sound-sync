@@ -1,7 +1,10 @@
 package com.example.ui.library
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -84,13 +89,41 @@ import com.example.ui.theme.NeonPurple
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.SoundSyncTheme
+import com.example.ui.theme.LocalLibraryDensity
+import com.example.ui.theme.ProLibraryDensity
+import java.util.Locale
 
 enum class SongSortMode(val label: String) {
     TITLE_ASC("Title (A-Z)"),
+    TITLE_DESC("Title (Z-A)"),
     ARTIST_ASC("Artist (A-Z)"),
+    ARTIST_DESC("Artist (Z-A)"),
     ALBUM_ASC("Album (A-Z)"),
     BPM_DESC("BPM (High-Low)"),
-    DATE_DESC("Recently Added")
+    BPM_ASC("BPM (Low-High)"),
+    KEY_ASC("Key (A-Z)"),
+    KEY_DESC("Key (Z-A)"),
+    DURATION_DESC("Duration (Long-Short)"),
+    DURATION_ASC("Duration (Short-Long)"),
+    DATE_DESC("Recently Added");
+
+    fun sort(tracks: List<Track>): List<Track> {
+        return when (this) {
+            TITLE_ASC -> tracks.sortedBy { it.title.lowercase() }
+            TITLE_DESC -> tracks.sortedByDescending { it.title.lowercase() }
+            ARTIST_ASC -> tracks.sortedBy { it.artist.lowercase() }
+            ARTIST_DESC -> tracks.sortedByDescending { it.artist.lowercase() }
+            ALBUM_ASC -> tracks.sortedBy { it.album.lowercase() }
+            BPM_DESC -> tracks.sortedByDescending { it.bpm }
+            BPM_ASC -> tracks.sortedBy { it.bpm }
+            KEY_ASC -> tracks.sortedBy { it.camelotKey.ifBlank { it.musicalKey }.lowercase() }
+            KEY_DESC -> tracks.sortedByDescending { it.camelotKey.ifBlank { it.musicalKey }.lowercase() }
+            DURATION_DESC -> tracks.sortedByDescending { it.durationSeconds }
+            DURATION_ASC -> tracks.sortedBy { it.durationSeconds }
+            DATE_DESC -> tracks.sortedByDescending { it.dateAdded }
+        }
+    }
 }
 
 @Composable
@@ -126,13 +159,7 @@ fun SongsScreen(
             matchesAvailability && matchesQuery
         }
 
-        when (sortMode) {
-            SongSortMode.TITLE_ASC -> base.sortedBy { it.title.lowercase() }
-            SongSortMode.ARTIST_ASC -> base.sortedBy { it.artist.lowercase() }
-            SongSortMode.ALBUM_ASC -> base.sortedBy { it.album.lowercase() }
-            SongSortMode.BPM_DESC -> base.sortedByDescending { it.bpm }
-            SongSortMode.DATE_DESC -> base.sortedByDescending { it.dateAdded }
-        }
+        sortMode.sort(base)
     }
 
     Column(
@@ -427,17 +454,29 @@ fun SongsScreen(
                 }
             }
         } else {
+            val isPro = SoundSyncTheme.isPro
+            if (isPro) {
+                ProSongsTableHeader(
+                    sortMode = sortMode,
+                    onSortChange = { sortMode = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+            }
+
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(horizontal = if (isPro) 4.dp else 12.dp),
+                verticalArrangement = if (isPro) Arrangement.spacedBy(0.dp) else Arrangement.spacedBy(6.dp),
                 contentPadding = PaddingValues(bottom = 96.dp)
             ) {
-                items(filteredTracks, key = { it.id }) { track ->
+                itemsIndexed(filteredTracks, key = { _, track -> track.id }) { index, track ->
                     val isSelected = selectedTrackIds.contains(track.id)
                     SongTrackRow(
                         track = track,
+                        index = index,
                         isCurrent = currentPlayingTrack?.id == track.id,
                         isPlaying = isPlaying && currentPlayingTrack?.id == track.id,
                         isSelectionMode = selectedTrackIds.isNotEmpty(),
@@ -471,6 +510,7 @@ fun SongsScreen(
 @Composable
 fun SongTrackRow(
     track: Track,
+    index: Int? = null,
     isCurrent: Boolean,
     isPlaying: Boolean,
     isSelectionMode: Boolean = false,
@@ -482,6 +522,24 @@ fun SongTrackRow(
     onInspectProperties: () -> Unit,
     onInspectSpectrogram: () -> Unit
 ) {
+    if (SoundSyncTheme.isPro) {
+        ProSongTrackRow(
+            track = track,
+            index = index,
+            isCurrent = isCurrent,
+            isPlaying = isPlaying,
+            isSelectionMode = isSelectionMode,
+            isSelected = isSelected,
+            onToggleSelection = onToggleSelection,
+            onClick = onClick,
+            onAddToPlaylist = onAddToPlaylist,
+            onQueueTrack = onQueueTrack,
+            onInspectProperties = onInspectProperties,
+            onInspectSpectrogram = onInspectSpectrogram
+        )
+        return
+    }
+
     var showMenu by remember { mutableStateOf(false) }
 
     val formattedDuration = remember(track.durationSeconds) {
@@ -778,6 +836,469 @@ fun SongTrackRow(
                             onInspectProperties()
                         }
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Sortable desktop column header bar for Pro theme library browser.
+ * Inspired by Pioneer rekordbox workstation library columns:
+ * - # (Track index / chronological)
+ * - Art (Album art thumbnail)
+ * - Title (Sortable A-Z / Z-A)
+ * - Artist (Sortable A-Z / Z-A)
+ * - BPM (Sortable High-Low / Low-High)
+ * - Key (Sortable Musical / Camelot Key)
+ * - Time (Sortable Duration)
+ * - Quality (Format & Lossless)
+ */
+@Composable
+private fun ProSongsTableHeader(
+    sortMode: SongSortMode,
+    onSortChange: (SongSortMode) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val theme = SoundSyncTheme.current
+    Surface(
+        color = theme.surfaceSunken,
+        border = BorderStroke(0.5.dp, theme.divider),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // # column
+            Text(
+                text = "#",
+                color = if (sortMode == SongSortMode.DATE_DESC) theme.accent else theme.textMuted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .width(28.dp)
+                    .clickable { onSortChange(SongSortMode.DATE_DESC) }
+            )
+
+            // Artwork spacer
+            Spacer(modifier = Modifier.width(30.dp))
+
+            // Title Column (sortable)
+            Row(
+                modifier = Modifier
+                    .weight(2.4f)
+                    .clickable {
+                        onSortChange(if (sortMode == SongSortMode.TITLE_ASC) SongSortMode.TITLE_DESC else SongSortMode.TITLE_ASC)
+                    },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "TITLE",
+                    color = if (sortMode == SongSortMode.TITLE_ASC || sortMode == SongSortMode.TITLE_DESC) theme.accent else theme.textMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 0.8.sp
+                )
+                if (sortMode == SongSortMode.TITLE_ASC) Text(" ▲", color = theme.accent, fontSize = 9.sp)
+                if (sortMode == SongSortMode.TITLE_DESC) Text(" ▼", color = theme.accent, fontSize = 9.sp)
+            }
+
+            // Artist Column (sortable)
+            Row(
+                modifier = Modifier
+                    .weight(1.8f)
+                    .clickable {
+                        onSortChange(if (sortMode == SongSortMode.ARTIST_ASC) SongSortMode.ARTIST_DESC else SongSortMode.ARTIST_ASC)
+                    },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "ARTIST",
+                    color = if (sortMode == SongSortMode.ARTIST_ASC || sortMode == SongSortMode.ARTIST_DESC) theme.accent else theme.textMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 0.8.sp
+                )
+                if (sortMode == SongSortMode.ARTIST_ASC) Text(" ▲", color = theme.accent, fontSize = 9.sp)
+                if (sortMode == SongSortMode.ARTIST_DESC) Text(" ▼", color = theme.accent, fontSize = 9.sp)
+            }
+
+            // BPM Column (sortable)
+            Row(
+                modifier = Modifier
+                    .width(46.dp)
+                    .clickable {
+                        onSortChange(if (sortMode == SongSortMode.BPM_DESC) SongSortMode.BPM_ASC else SongSortMode.BPM_DESC)
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    text = "BPM",
+                    color = if (sortMode == SongSortMode.BPM_DESC || sortMode == SongSortMode.BPM_ASC) theme.accent else theme.textMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                if (sortMode == SongSortMode.BPM_DESC) Text("▼", color = theme.accent, fontSize = 8.sp)
+                if (sortMode == SongSortMode.BPM_ASC) Text("▲", color = theme.accent, fontSize = 8.sp)
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Key Column (sortable)
+            Row(
+                modifier = Modifier
+                    .width(36.dp)
+                    .clickable {
+                        onSortChange(if (sortMode == SongSortMode.KEY_ASC) SongSortMode.KEY_DESC else SongSortMode.KEY_ASC)
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "KEY",
+                    color = if (sortMode == SongSortMode.KEY_ASC || sortMode == SongSortMode.KEY_DESC) theme.accent else theme.textMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                if (sortMode == SongSortMode.KEY_ASC) Text("▲", color = theme.accent, fontSize = 8.sp)
+                if (sortMode == SongSortMode.KEY_DESC) Text("▼", color = theme.accent, fontSize = 8.sp)
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Time Column (sortable)
+            Row(
+                modifier = Modifier
+                    .width(42.dp)
+                    .clickable {
+                        onSortChange(if (sortMode == SongSortMode.DURATION_DESC) SongSortMode.DURATION_ASC else SongSortMode.DURATION_DESC)
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    text = "TIME",
+                    color = if (sortMode == SongSortMode.DURATION_DESC || sortMode == SongSortMode.DURATION_ASC) theme.accent else theme.textMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                if (sortMode == SongSortMode.DURATION_DESC) Text("▼", color = theme.accent, fontSize = 8.sp)
+                if (sortMode == SongSortMode.DURATION_ASC) Text("▲", color = theme.accent, fontSize = 8.sp)
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Quality Column
+            Text(
+                text = "QUAL",
+                color = theme.textMuted,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.width(36.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+
+            // ⋮ Menu spacer
+            Spacer(modifier = Modifier.width(30.dp))
+        }
+    }
+}
+
+/**
+ * Rectangular, high-density desktop row for Pro theme.
+ * Supports Compact (38dp) and Comfortable (48dp) row density modes.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ProSongTrackRow(
+    track: Track,
+    index: Int?,
+    isCurrent: Boolean,
+    isPlaying: Boolean,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelection: () -> Unit,
+    onClick: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onQueueTrack: (playNext: Boolean) -> Unit,
+    onInspectProperties: () -> Unit,
+    onInspectSpectrogram: () -> Unit
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    val theme = SoundSyncTheme.current
+    val density = LocalLibraryDensity.current
+
+    val rowHeight = if (density == ProLibraryDensity.COMPACT) 38.dp else 48.dp
+    val thumbSize = if (density == ProLibraryDensity.COMPACT) 26.dp else 34.dp
+    val titleSize = if (density == ProLibraryDensity.COMPACT) 12.sp else 13.5.sp
+    val subSize = if (density == ProLibraryDensity.COMPACT) 10.sp else 11.sp
+
+    val formattedDuration = remember(track.durationSeconds) {
+        val min = track.durationSeconds / 60
+        val sec = track.durationSeconds % 60
+        String.format(Locale.US, "%d:%02d", min, sec)
+    }
+
+    val isAvailable = track.isAvailable
+
+    val rowBg = when {
+        isSelected -> theme.selectedSurface
+        isCurrent -> theme.playingSurface
+        else -> Color.Transparent
+    }
+
+    Surface(
+        shape = RoundedCornerShape(theme.cornerSmall),
+        color = rowBg,
+        border = if (isSelected) BorderStroke(0.5.dp, theme.accent) else null,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(rowHeight)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onToggleSelection
+            )
+            .testTag("song_track_row_${track.id}")
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Subtle blue left edge indicator for current playing track or selected track
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .background(if (isCurrent || isSelected) theme.accent else Color.Transparent)
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Multi-select Checkbox
+                if (isSelectionMode) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { onToggleSelection() },
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = theme.accent,
+                            checkmarkColor = Color.White,
+                            uncheckedColor = theme.textMuted
+                        ),
+                        modifier = Modifier
+                            .size(26.dp)
+                            .padding(end = 4.dp)
+                    )
+                }
+
+                // # / Play Status indicator (width 28dp)
+                Box(
+                    modifier = Modifier.width(28.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (isCurrent) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Equalizer else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Playing" else "Paused",
+                            tint = theme.accent,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    } else {
+                        Text(
+                            text = if (index != null) "${index + 1}" else "",
+                            color = theme.textMuted,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                // Artwork Thumbnail (size thumbSize)
+                Box(
+                    modifier = Modifier
+                        .size(thumbSize)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(if (isCurrent) theme.surfaceRaised else theme.surfaceSunken)
+                        .border(0.5.dp, theme.divider, RoundedCornerShape(2.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (!isAvailable) {
+                        Icon(
+                            imageVector = Icons.Default.CloudOff,
+                            contentDescription = "Unavailable",
+                            tint = theme.textDisabled,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    } else {
+                        Text(
+                            text = track.format.take(3),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (track.qualityRating.isLossless) Color(0xFF30D158) else theme.accent,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Title (weight 2.4f)
+                Text(
+                    text = track.title,
+                    fontSize = titleSize,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                    color = if (!isAvailable) theme.textDisabled else if (isCurrent) theme.accent else theme.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(2.4f)
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Artist (weight 1.8f)
+                Text(
+                    text = track.artist,
+                    fontSize = subSize,
+                    color = if (!isAvailable) theme.textDisabled else theme.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1.8f)
+                )
+
+                // BPM (width 46dp)
+                Text(
+                    text = if (track.bpm > 0) String.format(Locale.US, "%.1f", track.bpm) else "—",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isCurrent) theme.accent else theme.textSecondary,
+                    modifier = Modifier.width(46.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Key (width 36dp)
+                val keyDisplay = track.camelotKey.ifBlank { track.musicalKey.ifBlank { "—" } }
+                Text(
+                    text = keyDisplay,
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF38BDF8),
+                    modifier = Modifier.width(36.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Time (width 42dp)
+                Text(
+                    text = formattedDuration,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = theme.textMuted,
+                    modifier = Modifier.width(42.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Quality Badge (width 36dp)
+                Surface(
+                    shape = RoundedCornerShape(2.dp),
+                    color = theme.surfaceRaised,
+                    border = BorderStroke(0.5.dp, theme.divider),
+                    modifier = Modifier.width(36.dp)
+                ) {
+                    Text(
+                        text = if (track.qualityRating.isLossless) "FLAC" else if (track.bitrateKbps > 0) "${track.bitrateKbps}" else track.format,
+                        fontSize = 8.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = if (track.qualityRating.isLossless) Color(0xFF30D158) else theme.textMuted,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(vertical = 1.dp)
+                    )
+                }
+
+                // ⋮ Options Menu Button
+                Box {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("track_menu_button_${track.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "Options",
+                            tint = theme.textMuted,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        modifier = Modifier.background(theme.surfaceRaised)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Add to Playlist", color = theme.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = theme.accent) },
+                            onClick = {
+                                showMenu = false
+                                onAddToPlaylist()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Play Next", color = theme.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.QueueMusic, contentDescription = null, tint = theme.accent) },
+                            onClick = {
+                                showMenu = false
+                                onQueueTrack(true)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Add to Queue", color = theme.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.Queue, contentDescription = null, tint = theme.textSecondary) },
+                            onClick = {
+                                showMenu = false
+                                onQueueTrack(false)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Analyse Spectrogram", color = theme.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = Color(0xFFA855F7)) },
+                            onClick = {
+                                showMenu = false
+                                onInspectSpectrogram()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Track Inspector", color = theme.accent, fontWeight = FontWeight.SemiBold) },
+                            leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = theme.accent) },
+                            onClick = {
+                                showMenu = false
+                                onInspectProperties()
+                            }
+                        )
+                    }
                 }
             }
         }

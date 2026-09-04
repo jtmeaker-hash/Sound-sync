@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -78,6 +79,7 @@ import com.example.ui.theme.NeonGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.SoundSyncTheme
 import com.example.util.AlbumArtHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -140,6 +142,35 @@ fun NowPlayingFullScreen(
     // Intercept back button to smoothly close the full-screen page
     BackHandler {
         onDismiss()
+    }
+
+    if (com.example.ui.theme.SoundSyncTheme.isPro) {
+        ProNowPlayingFullScreenContent(
+            track = track,
+            displayMode = displayMode,
+            waveformData = waveformData,
+            isWaveformLoading = isWaveformLoading,
+            isPlaying = isPlaying,
+            currentPositionMs = currentPositionMs,
+            durationMs = durationMs,
+            isShuffleEnabled = isShuffleEnabled,
+            repeatMode = repeatMode,
+            onToggleShuffle = onToggleShuffle,
+            onToggleRepeat = onToggleRepeat,
+            onDismiss = onDismiss,
+            onTogglePlayPause = onTogglePlayPause,
+            onPreviousTrack = onPreviousTrack,
+            onNextTrack = onNextTrack,
+            onSeekToMs = onSeekToMs,
+            onToggleDisplayMode = onToggleDisplayMode,
+            onSetDisplayMode = onSetDisplayMode,
+            waveformStyle = waveformStyle,
+            onToggleWaveformStyle = onToggleWaveformStyle,
+            onOpenSettings = onOpenSettings,
+            onOpenProperties = onOpenProperties,
+            modifier = modifier
+        )
+        return
     }
 
     val totalSec = if (durationMs > 0) (durationMs / 1000).toInt() else track.durationSeconds.coerceAtLeast(1)
@@ -801,3 +832,700 @@ private fun NowPlayingArtwork(
         }
     }
 }
+
+/**
+ * Utilitarian workstation audio layout for Pro theme.
+ * Inspired by Pioneer rekordbox workstation view:
+ * - Workstation header with tabular BPM and Musical Key readouts
+ * - Compact typography and audio spec badges
+ * - Full-track overview scrubber + zoomed live detailed waveform
+ * - Tabular monospaced elapsed and remaining time displays
+ * - Compact restrained transport controls
+ * - Detailed technical audio specs table
+ */
+@Composable
+private fun ProNowPlayingFullScreenContent(
+    track: Track,
+    displayMode: NowPlayingDisplayMode,
+    waveformData: WaveformData?,
+    isWaveformLoading: Boolean,
+    isPlaying: Boolean,
+    currentPositionMs: Long,
+    durationMs: Long,
+    isShuffleEnabled: Boolean,
+    repeatMode: com.example.ui.RepeatMode,
+    onToggleShuffle: () -> Unit,
+    onToggleRepeat: () -> Unit,
+    onDismiss: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onPreviousTrack: () -> Unit,
+    onNextTrack: () -> Unit,
+    onSeekToMs: (Long) -> Unit,
+    onToggleDisplayMode: () -> Unit,
+    onSetDisplayMode: (NowPlayingDisplayMode) -> Unit,
+    waveformStyle: WaveformStyle,
+    onToggleWaveformStyle: (() -> Unit)?,
+    onOpenSettings: () -> Unit,
+    onOpenProperties: (Track) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val totalSec = if (durationMs > 0) (durationMs / 1000).toInt() else track.durationSeconds.coerceAtLeast(1)
+    val curSec = (currentPositionMs / 1000).toInt().coerceIn(0, totalSec)
+    val remainingSec = (totalSec - curSec).coerceAtLeast(0)
+
+    val curMin = curSec / 60
+    val curS = curSec % 60
+    val curMsFrac = ((currentPositionMs % 1000) / 100).toInt()
+
+    val remMin = remainingSec / 60
+    val remS = remainingSec % 60
+    val remMsFrac = (((totalSec * 1000L - currentPositionMs).coerceAtLeast(0) % 1000) / 100).toInt()
+
+    val theme = SoundSyncTheme.current
+
+    Surface(
+        modifier = modifier
+            .fillMaxSize()
+            .testTag("now_playing_full_screen"),
+        color = theme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            // =========================================================================
+            // 1. PRO WORKSTATION TOP BAR
+            // =========================================================================
+            Surface(
+                color = theme.surface,
+                border = BorderStroke(0.5.dp, theme.divider),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("close_now_playing_screen")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Close Now Playing",
+                                tint = theme.textPrimary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        Column {
+                            Text(
+                                text = "NOW PLAYING",
+                                color = theme.textPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.2.sp,
+                                modifier = Modifier.testTag("now_playing_header_title")
+                            )
+                            Text(
+                                text = "WORKSTATION DECK",
+                                color = theme.textMuted,
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.sp
+                            )
+                        }
+                    }
+
+                    // Monospace DJ Readouts: BPM & Key
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // BPM Readout
+                        Surface(
+                            shape = RoundedCornerShape(2.dp),
+                            color = theme.surfaceSunken,
+                            border = BorderStroke(0.5.dp, theme.divider)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Text(
+                                    text = "BPM",
+                                    color = theme.textMuted,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = if (track.bpm > 0) String.format(Locale.US, "%.2f", track.bpm) else "---.--",
+                                    color = theme.accent,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+
+                        // Musical Key Readout
+                        Surface(
+                            shape = RoundedCornerShape(2.dp),
+                            color = theme.surfaceSunken,
+                            border = BorderStroke(0.5.dp, theme.divider)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Text(
+                                    text = "KEY",
+                                    color = theme.textMuted,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                val keyText = when {
+                                    track.camelotKey.isNotBlank() && track.camelotKey != "—" -> track.camelotKey
+                                    track.musicalKey.isNotBlank() && track.musicalKey != "—" -> track.musicalKey
+                                    else -> "---"
+                                }
+                                Text(
+                                    text = keyText,
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+
+                        IconButton(
+                            onClick = { onOpenProperties(track) },
+                            modifier = Modifier
+                                .size(34.dp)
+                                .testTag("now_playing_inspector_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Track Inspector",
+                                tint = theme.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onOpenSettings,
+                            modifier = Modifier
+                                .size(34.dp)
+                                .testTag("now_playing_settings_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = "Now Playing Settings",
+                                tint = theme.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // =========================================================================
+            // 2. SCROLLABLE WORKSTATION BODY
+            // =========================================================================
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // TRACK TITLE & ARTIST BAR
+                Surface(
+                    color = theme.surface,
+                    border = BorderStroke(0.5.dp, theme.divider),
+                    shape = RoundedCornerShape(3.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = track.title.ifBlank { "Unknown Title" },
+                                color = theme.textPrimary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("now_playing_title")
+                            )
+
+                            // Format / Lossless tag
+                            Surface(
+                                shape = RoundedCornerShape(2.dp),
+                                color = theme.surfaceRaised,
+                                border = BorderStroke(0.5.dp, theme.divider),
+                                modifier = Modifier.padding(start = 8.dp)
+                            ) {
+                                Text(
+                                    text = track.format.uppercase(),
+                                    color = if (track.qualityRating.isLossless) Color(0xFF30D158) else theme.accent,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(3.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = track.artist.ifBlank { "Unknown Artist" },
+                                color = theme.textSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("now_playing_artist")
+                            )
+                            if (track.album.isNotBlank() && !track.album.equals("Unknown Album", ignoreCase = true)) {
+                                Text(text = "•", color = theme.textMuted, fontSize = 11.sp)
+                                Text(
+                                    text = track.album,
+                                    color = theme.textMuted,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // VIEW SELECTOR TABS: WAVEFORM / ARTWORK
+                Surface(
+                    shape = RoundedCornerShape(2.dp),
+                    color = theme.surfaceSunken,
+                    border = BorderStroke(0.5.dp, theme.divider),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val isWaveform = displayMode == NowPlayingDisplayMode.WAVEFORM
+                        Surface(
+                            shape = RoundedCornerShape(2.dp),
+                            color = if (isWaveform) theme.surfaceRaised else Color.Transparent,
+                            border = if (isWaveform) BorderStroke(0.5.dp, theme.accent) else null,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(30.dp)
+                                .clickable { onSetDisplayMode(NowPlayingDisplayMode.WAVEFORM) }
+                                .testTag("toggle_waveform_mode")
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.GraphicEq,
+                                    contentDescription = "Waveform",
+                                    tint = if (isWaveform) theme.accent else theme.textMuted,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "WAVEFORM",
+                                    color = if (isWaveform) theme.textPrimary else theme.textMuted,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+
+                        val isArtwork = displayMode == NowPlayingDisplayMode.ARTWORK
+                        Surface(
+                            shape = RoundedCornerShape(2.dp),
+                            color = if (isArtwork) theme.surfaceRaised else Color.Transparent,
+                            border = if (isArtwork) BorderStroke(0.5.dp, theme.accent) else null,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(30.dp)
+                                .clickable { onSetDisplayMode(NowPlayingDisplayMode.ARTWORK) }
+                                .testTag("toggle_artwork_mode")
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Album,
+                                    contentDescription = "Artwork",
+                                    tint = if (isArtwork) theme.accent else theme.textMuted,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "ARTWORK",
+                                    color = if (isArtwork) theme.textPrimary else theme.textMuted,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // MAIN VISUAL: WAVEFORM WORKSTATION OR ALBUM ARTWORK
+                Crossfade(
+                    targetState = displayMode,
+                    label = "ProNowPlayingCrossfade",
+                    modifier = Modifier.fillMaxWidth()
+                ) { mode ->
+                    when (mode) {
+                        NowPlayingDisplayMode.WAVEFORM -> {
+                            RekordboxWaveformView(
+                                track = track,
+                                waveformData = waveformData,
+                                isPlaying = isPlaying,
+                                currentPositionMs = currentPositionMs,
+                                durationMs = durationMs,
+                                onSeekToMs = onSeekToMs,
+                                isLoading = isWaveformLoading,
+                                waveformStyle = waveformStyle,
+                                onToggleWaveformStyle = onToggleWaveformStyle,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        NowPlayingDisplayMode.ARTWORK -> {
+                            NowPlayingArtwork(
+                                track = track,
+                                isPlaying = isPlaying,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(240.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // TIME INDICATORS (Elapsed & Remaining with fractional tenths)
+                Surface(
+                    shape = RoundedCornerShape(2.dp),
+                    color = theme.surfaceSunken,
+                    border = BorderStroke(0.5.dp, theme.divider),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        // Elapsed
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text = String.format(Locale.US, "%02d:%02d", curMin, curS),
+                                color = theme.accent,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.testTag("current_time_text")
+                            )
+                            Text(
+                                text = String.format(Locale.US, ".%d", curMsFrac),
+                                color = theme.accent.copy(alpha = 0.7f),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        Text(
+                            text = "${track.format.uppercase()} ${if (track.bitrateKbps > 0) "${track.bitrateKbps}K" else ""}".trim(),
+                            color = theme.textMuted,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+
+                        // Remaining
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text = String.format(Locale.US, "-%02d:%02d", remMin, remS),
+                                color = if (remainingSec < 30) Color(0xFFFF3B30) else theme.textSecondary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.testTag("remaining_time_text")
+                            )
+                            Text(
+                                text = String.format(Locale.US, ".%d", remMsFrac),
+                                color = (if (remainingSec < 30) Color(0xFFFF3B30) else theme.textSecondary).copy(alpha = 0.7f),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // RESTRAINED PRO TRANSPORT CONTROLS
+                Surface(
+                    shape = RoundedCornerShape(3.dp),
+                    color = theme.surface,
+                    border = BorderStroke(0.5.dp, theme.divider),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        // Shuffle Button
+                        IconButton(
+                            onClick = onToggleShuffle,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("toggle_shuffle_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Shuffle,
+                                contentDescription = if (isShuffleEnabled) "Shuffle On" else "Shuffle Off",
+                                tint = if (isShuffleEnabled) theme.accent else theme.textMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        // Previous Track
+                        Surface(
+                            shape = RoundedCornerShape(2.dp),
+                            color = theme.surfaceRaised,
+                            border = BorderStroke(0.5.dp, theme.divider),
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            IconButton(
+                                onClick = onPreviousTrack,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("previous_track_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SkipPrevious,
+                                    contentDescription = "Previous Track",
+                                    tint = theme.textPrimary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+
+                        // Play/Pause Workstation Button
+                        Surface(
+                            shape = RoundedCornerShape(3.dp),
+                            color = if (isPlaying) Color(0xFF22262F) else theme.accent,
+                            border = BorderStroke(1.dp, if (isPlaying) theme.accent else Color.Transparent),
+                            modifier = Modifier
+                                .size(width = 64.dp, height = 44.dp)
+                                .clickable { onTogglePlayPause() }
+                                .testTag("play_pause_button")
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (isPlaying) "Pause" else "Play",
+                                    tint = if (isPlaying) theme.accent else Color.White,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                        }
+
+                        // Next Track
+                        Surface(
+                            shape = RoundedCornerShape(2.dp),
+                            color = theme.surfaceRaised,
+                            border = BorderStroke(0.5.dp, theme.divider),
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            IconButton(
+                                onClick = onNextTrack,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("next_track_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SkipNext,
+                                    contentDescription = "Next Track",
+                                    tint = theme.textPrimary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+
+                        // Repeat Button
+                        IconButton(
+                            onClick = onToggleRepeat,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("toggle_repeat_button")
+                        ) {
+                            Icon(
+                                imageVector = if (repeatMode == com.example.ui.RepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                                contentDescription = "Repeat: $repeatMode",
+                                tint = if (repeatMode != com.example.ui.RepeatMode.OFF) theme.accent else theme.textMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // TECHNICAL AUDIO SPECS WORKSTATION TABLE
+                Surface(
+                    shape = RoundedCornerShape(3.dp),
+                    color = theme.surface,
+                    border = BorderStroke(0.5.dp, theme.divider),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "AUDIO SPECIFICATIONS",
+                                color = theme.textMuted,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = if (track.isAvailable) "ONLINE" else "OFFLINE",
+                                color = if (track.isAvailable) Color(0xFF30D158) else Color(0xFFFF3B30),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Grid of specs
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("FORMAT", color = theme.textMuted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                                Text(track.format.uppercase(), color = theme.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("BITRATE", color = theme.textMuted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                                Text(if (track.bitrateKbps > 0) "${track.bitrateKbps} kbps" else "Lossless", color = theme.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("KEY / CAMELOT", color = theme.textMuted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                                Text("${track.musicalKey.ifBlank { "—" }} / ${track.camelotKey.ifBlank { "—" }}", color = theme.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("QUALITY", color = theme.textMuted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                                Text(track.qualityRating.label, color = if (track.qualityRating.isLossless) Color(0xFF30D158) else theme.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // QUICK ACTION: AUDIO EFFECTS & SETTINGS
+                OutlinedButton(
+                    onClick = onOpenSettings,
+                    shape = RoundedCornerShape(3.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = theme.textPrimary),
+                    border = BorderStroke(0.5.dp, theme.divider),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp)
+                        .testTag("open_audio_effects_settings_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = null,
+                        tint = theme.accent,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Audio Effects & DSP Settings",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = theme.textPrimary
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = theme.textMuted,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+}
+

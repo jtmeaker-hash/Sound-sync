@@ -1283,9 +1283,12 @@ private fun SideDestinationScreen(
                     )
                 }
                 SideMenuDestination.AppearanceSettings -> {
+                    val libraryDensity by viewModel.libraryDensity.collectAsState()
                     AppearanceSettingsScreen(
                         themeMode = themeMode,
                         onSetThemeMode = { viewModel.setThemeMode(it) },
+                        libraryDensity = libraryDensity,
+                        onSetLibraryDensity = { viewModel.setLibraryDensity(it) },
                         waveformStyle = waveformStyle,
                         onSetWaveformStyle = { viewModel.setWaveformStyle(it) }
                     )
