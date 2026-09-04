@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -392,6 +394,7 @@ fun PlaylistDetailScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlaylistTrackRow(
     position: Int,
@@ -511,9 +514,9 @@ private fun PlaylistTrackRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     if (!isAvailable) {
                         Text(
@@ -521,7 +524,9 @@ private fun PlaylistTrackRow(
                             fontSize = 9.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
-                            color = TextMuted
+                            color = TextMuted,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                     Text(
@@ -529,6 +534,7 @@ private fun PlaylistTrackRow(
                         fontSize = 11.sp,
                         color = if (!isAvailable) TextMuted.copy(alpha = 0.7f) else TextSecondary,
                         maxLines = 1,
+                        softWrap = false,
                         overflow = TextOverflow.Ellipsis
                     )
                     if (track.bpm > 0) {
@@ -536,7 +542,9 @@ private fun PlaylistTrackRow(
                             text = "${track.bpm.toInt()} BPM",
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
-                            color = DeckACyan
+                            color = DeckACyan,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                     MetadataProvenanceBadge(track = track, compact = true)

@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
@@ -23,6 +24,7 @@ import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media.session.MediaButtonReceiver
 import com.example.MainActivity
+import com.example.R
 import com.example.audio.DjAudioEngine
 import com.example.model.Track
 import com.example.util.AlbumArtHelper
@@ -235,9 +237,13 @@ class MediaPlaybackService : Service() {
             .putString(MediaMetadataCompat.METADATA_KEY_GENRE, track.genre)
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
 
-        if (currentArtwork != null) {
-            metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, currentArtwork)
-            metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtwork)
+        val art = currentArtwork ?: runCatching {
+            BitmapFactory.decodeResource(resources, R.drawable.soundsync_logo)
+        }.getOrNull()
+
+        if (art != null) {
+            metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
+            metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, art)
         }
 
         mediaSession.setMetadata(metadataBuilder.build())
@@ -291,7 +297,7 @@ class MediaPlaybackService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("SoundSync")
             .setContentText("SoundSync Media Playback")
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_notification_soundsync)
             .setContentIntent(contentPendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
@@ -377,7 +383,7 @@ class MediaPlaybackService : Service() {
             .setContentTitle(track.title)
             .setContentText(track.artist)
             .setSubText(track.album.ifBlank { "SoundSync DJ" })
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_notification_soundsync)
             .setContentIntent(contentPendingIntent)
             .setDeleteIntent(stopPendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -389,8 +395,11 @@ class MediaPlaybackService : Service() {
             .addAction(playPauseAction)
             .addAction(nextAction)
 
-        if (currentArtwork != null) {
-            builder.setLargeIcon(currentArtwork)
+        val art = currentArtwork ?: runCatching {
+            BitmapFactory.decodeResource(resources, R.drawable.soundsync_logo)
+        }.getOrNull()
+        if (art != null) {
+            builder.setLargeIcon(art)
         }
 
         return builder.build()

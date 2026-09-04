@@ -88,6 +88,9 @@ interface TrackDao {
     @Query("SELECT COUNT(*) FROM tracks WHERE analysisState IN ('NOT_ANALYSED', 'QUEUED')")
     fun observePendingAnalysisCount(): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM tracks WHERE analysisState IN ('NOT_ANALYSED', 'QUEUED', 'PARTIAL') OR bpm <= 0.0 OR camelotKey = ''")
+    suspend fun getPendingAnalysisCount(): Int
+
     @Query("SELECT COUNT(*) FROM tracks WHERE analysisState = 'COMPLETE'")
     fun observeCompletedAnalysisCount(): Flow<Int>
 

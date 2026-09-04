@@ -246,12 +246,14 @@ private fun CarModePortraitLayout(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // Top Bar: Exit button, Mode indicator, Queue button
+        // 1. Car Mode top controls
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -259,9 +261,10 @@ private fun CarModePortraitLayout(
                 onClick = onExit,
                 colors = ButtonDefaults.buttonColors(containerColor = cardColor),
                 shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier.height(44.dp)
             ) {
-                Icon(Icons.Default.Close, contentDescription = "Exit Car Mode", tint = textColor, modifier = Modifier.size(22.dp))
+                Icon(Icons.Default.Close, contentDescription = "Exit Car Mode", tint = textColor, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Exit", color = textColor, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
@@ -271,7 +274,9 @@ private fun CarModePortraitLayout(
                 color = cardColor,
                 shape = RoundedCornerShape(20.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2B313C)),
-                modifier = Modifier.clickable { onToggleDisplayMode() }
+                modifier = Modifier
+                    .clickable { onToggleDisplayMode() }
+                    .height(40.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
@@ -291,26 +296,26 @@ private fun CarModePortraitLayout(
             IconButton(
                 onClick = onOpenQueue,
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(44.dp)
                     .background(cardColor, CircleShape)
             ) {
-                Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue", tint = textColor, modifier = Modifier.size(24.dp))
+                Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue", tint = textColor, modifier = Modifier.size(22.dp))
             }
         }
 
-        // Center Visual: Artwork OR Waveform OR DJ Dashboard
+        // 2. Large artwork / waveform / visualization area (starts strictly below top bar, responsive size)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .padding(vertical = 12.dp),
+                .weight(1f, fill = false)
+                .padding(vertical = 6.dp),
             contentAlignment = Alignment.Center
         ) {
             when (displayMode) {
                 CarDisplayMode.ARTWORK -> {
                     Surface(
                         modifier = Modifier
-                            .fillMaxWidth(0.85f)
+                            .sizeIn(minWidth = 140.dp, minHeight = 140.dp, maxWidth = 260.dp, maxHeight = 260.dp)
                             .aspectRatio(1f)
                             .clip(RoundedCornerShape(16.dp)),
                         color = cardColor,
@@ -334,27 +339,27 @@ private fun CarModePortraitLayout(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .fillMaxHeight(),
+                            .heightIn(min = 140.dp, max = 220.dp),
                         verticalArrangement = Arrangement.Center
                     ) {
                         if (displayMode == CarDisplayMode.DJ_DASHBOARD) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(bottom = 12.dp),
+                                    .padding(bottom = 8.dp),
                                 horizontalArrangement = Arrangement.SpaceEvenly
                             ) {
                                 Text(
                                     text = if ((track?.bpm ?: 0.0) > 0) String.format(Locale.US, "%.1f BPM", track!!.bpm) else "--- BPM",
                                     color = Color(0xFF00E5FF),
-                                    fontSize = 24.sp,
+                                    fontSize = 22.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace
                                 )
                                 Text(
                                     text = track?.camelotKey?.ifBlank { track.musicalKey }?.ifBlank { "---" } ?: "---",
                                     color = Color(0xFF05FFA1),
-                                    fontSize = 24.sp,
+                                    fontSize = 22.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace
                                 )
@@ -365,46 +370,46 @@ private fun CarModePortraitLayout(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(160.dp)
+                                .height(150.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(cardColor)
                         ) {
-                        if (track != null) {
-                            RekordboxWaveformView(
-                                track = track,
-                                waveformData = waveformData,
-                                currentPositionMs = currentPositionMs,
-                                durationMs = durationMs,
-                                isPlaying = isPlaying,
-                                onSeekToMs = onSeekToMs,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
+                            if (track != null) {
+                                RekordboxWaveformView(
+                                    track = track,
+                                    waveformData = waveformData,
+                                    currentPositionMs = currentPositionMs,
+                                    durationMs = durationMs,
+                                    isPlaying = isPlaying,
+                                    onSeekToMs = onSeekToMs,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Track Information (Huge, Glanceable)
+        // 3. Large track title & Artist name
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = track?.title ?: "No Track Playing",
                 color = textColor,
-                fontSize = 26.sp,
+                fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = track?.artist ?: "Select music to begin",
                 color = mutedColor,
-                fontSize = 18.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -412,8 +417,8 @@ private fun CarModePortraitLayout(
             )
         }
 
-        // Progress Slider & Timers
-        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        // 4. Large progress / seek control + Elapsed & Duration
+        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
             val progress = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
             Slider(
                 value = progress,
@@ -426,44 +431,29 @@ private fun CarModePortraitLayout(
                 )
             )
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(formatTime(currentPositionMs), color = mutedColor, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
-                Text(formatTime(durationMs), color = mutedColor, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+                Text(formatTime(currentPositionMs), color = mutedColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                Text(formatTime(durationMs), color = mutedColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
             }
         }
 
-        // Primary Large Transport Controls (72dp - 84dp buttons)
+        // 5. Large previous / play-pause / next controls
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Favourite / Like
-            IconButton(
-                onClick = onToggleFavorite,
-                modifier = Modifier.size(56.dp)
-            ) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = "Like",
-                    tint = if (isFavorite) Color(0xFFFF334B) else textColor,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-
-            // Previous
             IconButton(
                 onClick = onPreviousTrack,
                 modifier = Modifier
                     .size(68.dp)
                     .background(cardColor, CircleShape)
             ) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", tint = textColor, modifier = Modifier.size(40.dp))
+                Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", tint = textColor, modifier = Modifier.size(42.dp))
             }
 
-            // Play / Pause Giant Button (84dp)
             IconButton(
                 onClick = onTogglePlayPause,
                 modifier = Modifier
@@ -478,73 +468,121 @@ private fun CarModePortraitLayout(
                 )
             }
 
-            // Next
             IconButton(
                 onClick = onNextTrack,
                 modifier = Modifier
                     .size(68.dp)
                     .background(cardColor, CircleShape)
             ) {
-                Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = textColor, modifier = Modifier.size(40.dp))
-            }
-
-            // Save For Later ("Car Finds")
-            IconButton(
-                onClick = onSaveForLater,
-                modifier = Modifier.size(56.dp)
-            ) {
-                Icon(Icons.Default.BookmarkBorder, contentDescription = "Save for Later", tint = textColor, modifier = Modifier.size(30.dp))
+                Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = textColor, modifier = Modifier.size(42.dp))
             }
         }
 
-        // Quick Bottom Actions: Smart Play, Shuffle, Repeat
+        // 6. Favourite / Save for Later ("Car Finds") controls
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 10.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = cardColor,
+                modifier = Modifier
+                    .height(44.dp)
+                    .clickable { onToggleFavorite() }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = "Favourite",
+                        tint = if (isFavorite) Color(0xFFFF334B) else textColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(if (isFavorite) "Favorited" else "Favorite", color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = cardColor,
+                modifier = Modifier
+                    .height(44.dp)
+                    .clickable { onSaveForLater() }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.BookmarkBorder,
+                        contentDescription = "Save for Later",
+                        tint = accentColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text("Save to Car Finds", color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
+            }
+        }
+
+        // 7. Secondary controls: Play Something, Shuffle, Repeat
+        Row(
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Smart "Play Something" button
             Button(
                 onClick = onPlaySomething,
                 colors = ButtonDefaults.buttonColors(containerColor = cardColor),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.height(42.dp)
             ) {
                 Icon(Icons.Default.Shuffle, contentDescription = null, tint = accentColor, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Play Something", color = textColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Shuffle toggle (with Smart Driving Shuffle indicator)
-                IconButton(
-                    onClick = onToggleShuffle,
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isShuffle) accentColor.copy(alpha = 0.25f) else cardColor,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isShuffle) accentColor else Color.Transparent),
                     modifier = Modifier
-                        .size(44.dp)
-                        .background(if (isShuffle) accentColor.copy(alpha = 0.2f) else Color.Transparent, CircleShape)
+                        .size(42.dp)
+                        .clickable { onToggleShuffle() }
                 ) {
-                    Icon(
-                        Icons.Default.Shuffle,
-                        contentDescription = "Shuffle",
-                        tint = if (isShuffle) accentColor else mutedColor,
-                        modifier = Modifier.size(22.dp)
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Shuffle,
+                            contentDescription = "Shuffle",
+                            tint = if (isShuffle) accentColor else mutedColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
 
-                // Repeat toggle
-                IconButton(
-                    onClick = onToggleRepeat,
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (repeatMode != com.example.ui.RepeatMode.OFF) accentColor.copy(alpha = 0.25f) else cardColor,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (repeatMode != com.example.ui.RepeatMode.OFF) accentColor else Color.Transparent),
                     modifier = Modifier
-                        .size(44.dp)
-                        .background(if (repeatMode != com.example.ui.RepeatMode.OFF) accentColor.copy(alpha = 0.2f) else Color.Transparent, CircleShape)
+                        .size(42.dp)
+                        .clickable { onToggleRepeat() }
                 ) {
-                    Icon(
-                        Icons.Default.Repeat,
-                        contentDescription = "Repeat",
-                        tint = if (repeatMode != com.example.ui.RepeatMode.OFF) accentColor else mutedColor,
-                        modifier = Modifier.size(22.dp)
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (repeatMode == com.example.ui.RepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                            contentDescription = "Repeat",
+                            tint = if (repeatMode != com.example.ui.RepeatMode.OFF) accentColor else mutedColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
         }

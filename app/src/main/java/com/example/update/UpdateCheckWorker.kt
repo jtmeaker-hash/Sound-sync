@@ -17,6 +17,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.example.BuildConfig
 import com.example.MainActivity
+import com.example.R
 import com.example.model.SemanticVersion
 import com.example.network.GitHubReleaseApiService
 import java.util.concurrent.TimeUnit
@@ -127,7 +128,7 @@ class UpdateCheckWorker(
         )
 
         val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setSmallIcon(R.drawable.ic_notification_soundsync)
             .setContentTitle("SoundSync Update Available: $versionTag")
             .setContentText("A new release ($versionTag) is available. Tap to open and update.")
             .setStyle(

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/src/main/res/drawable/app_icon_fg.jpg" alt="SoundSync" width="150" />
+  <img src="app/src/main/res/drawable/soundsync_logo.png" alt="SoundSync" width="150" />
 </p><h1 align="center">SoundSync</h1><p align="center">
   <strong>An Android music library, playback, analysis, and DJ utility app built with Kotlin and Jetpack Compose.</strong>
 </p><p align="center">

@@ -476,8 +476,14 @@ object SpectrogramEngine {
         }
 
         val slices = ArrayList<FloatArray>(NUM_TIME_SLICES)
-        val maxKhz = 24.0f
-        val cutoffBinIndex = ((cutoffKhz / maxKhz) * NUM_FREQ_BINS).toInt().coerceIn(20, NUM_FREQ_BINS - 1)
+        val minFreq = 20.0f
+        val maxFreq = 24000.0f
+        val binFrequencies = FloatArray(NUM_FREQ_BINS + 1)
+        val freqRatio = (maxFreq / minFreq).toDouble()
+        for (b in 0..NUM_FREQ_BINS) {
+            val ratio = b.toDouble() / NUM_FREQ_BINS.toDouble()
+            binFrequencies[b] = (minFreq * freqRatio.pow(ratio)).toFloat()
+        }
 
         for (t in 0 until NUM_TIME_SLICES) {
             val column = FloatArray(NUM_FREQ_BINS)
@@ -488,30 +494,31 @@ object SpectrogramEngine {
             val isCymbalCrash = (t % 64 == 0)
 
             for (f in 0 until NUM_FREQ_BINS) {
-                val freqKhz = (f.toFloat() / NUM_FREQ_BINS) * maxKhz
+                val freqHz = (binFrequencies[f] + binFrequencies[f + 1]) / 2.0f
+                val freqKhz = freqHz / 1000.0f
 
-                if (f > cutoffBinIndex) {
-                    column[f] = if (rating == AudioQualityRating.SUSPICIOUS_UPSCALED) 0.01f else 0.03f * random.nextFloat()
+                if (freqKhz > cutoffKhz) {
+                    column[f] = if (rating == AudioQualityRating.SUSPICIOUS_UPSCALED) 0.01f else (0.03f * random.nextFloat()).coerceIn(0.01f, 1.0f)
                 } else {
                     var energy = when {
-                        // Sub-bass and kick transients
-                        f < 16 -> if (isKick) 0.98f else 0.50f + 0.15f * sin(t * 0.1).toFloat()
-                        // Bass harmonics
-                        f < 45 -> 0.65f + 0.25f * sin((t * 0.35f + f * 0.8f).toDouble()).toFloat()
-                        // Midrange musical formants / chords
-                        f < 120 -> {
-                            val harmonicTone = if (f % 12 == 0 || f % 18 == 0) 0.35f else 0.0f
+                        // Sub-bass and kick transients (20 Hz - 120 Hz)
+                        freqHz < 120.0f -> if (isKick) 0.98f else 0.50f + 0.15f * sin(t * 0.1).toFloat()
+                        // Bass harmonics (120 Hz - 500 Hz)
+                        freqHz < 500.0f -> 0.65f + 0.25f * sin((t * 0.35f + f * 0.8f).toDouble()).toFloat()
+                        // Midrange musical formants / chords (500 Hz - 4000 Hz)
+                        freqHz < 4000.0f -> {
+                            val harmonicTone = if (f % 6 == 0 || f % 9 == 0) 0.35f else 0.0f
                             val snareEnergy = if (isSnare) 0.40f else 0.0f
                             0.45f + harmonicTone + snareEnergy
                         }
-                        // Presence and high-end percussion
-                        f < 200 -> {
+                        // Presence and high-end percussion (4000 Hz - 12000 Hz)
+                        freqHz < 12000.0f -> {
                             val hatEnergy = if (isHiHat) 0.55f else if (isCymbalCrash) 0.85f else 0.15f
                             0.30f + hatEnergy
                         }
-                        // Air frequencies
+                        // Air frequencies (12000 Hz to cutoff)
                         else -> {
-                            val rollOff = (1.0f - ((freqKhz - 18f) / (cutoffKhz - 18f).coerceAtLeast(1f))).coerceIn(0f, 1f)
+                            val rollOff = (1.0f - ((freqKhz - 12f) / (cutoffKhz - 12f).coerceAtLeast(1f))).coerceIn(0f, 1f)
                             0.28f * rollOff + (if (isCymbalCrash) 0.5f else 0.05f)
                         }
                     }

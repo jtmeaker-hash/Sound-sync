@@ -23,10 +23,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import com.example.ui.components.LibrarySearchBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,34 +74,15 @@ fun AlbumsScreen(
             .testTag("albums_screen")
     ) {
         // Search Header
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Search albums or artists...", fontSize = 13.sp, color = TextMuted) },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "Search",
-                    tint = TextSecondary,
-                    modifier = Modifier.size(18.dp)
-                )
-            },
-            singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = DeckACyan,
-                unfocusedBorderColor = DjSurfaceBorder,
-                focusedTextColor = TextPrimary,
-                unfocusedTextColor = TextPrimary,
-                cursorColor = DeckACyan,
-                unfocusedContainerColor = DjSurfaceDark,
-                focusedContainerColor = DjSurfaceDark
-            ),
-            shape = RoundedCornerShape(10.dp),
+        LibrarySearchBar(
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            placeholderText = "Search albums or artists...",
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
-                .height(48.dp)
-                .testTag("albums_search_input")
+                .height(48.dp),
+            testTag = "albums_search_input"
         )
 
         if (filteredAlbums.isEmpty()) {

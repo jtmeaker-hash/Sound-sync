@@ -648,41 +648,6 @@ fun NowPlayingFullScreen(
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
-
-                // 6. AUDIO EFFECTS & SETTINGS ACTION
-                OutlinedButton(
-                    onClick = onOpenSettings,
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                        .testTag("open_audio_effects_settings_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = null,
-                        tint = DeckACyan,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Audio Effects & Settings",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TextPrimary
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = TextSecondary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
             }
         }
     }
@@ -1486,41 +1451,6 @@ private fun ProNowPlayingFullScreenContent(
                             }
                         }
                     }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // QUICK ACTION: AUDIO EFFECTS & SETTINGS
-                OutlinedButton(
-                    onClick = onOpenSettings,
-                    shape = RoundedCornerShape(3.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = theme.textPrimary),
-                    border = BorderStroke(0.5.dp, theme.divider),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(38.dp)
-                        .testTag("open_audio_effects_settings_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = null,
-                        tint = theme.accent,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Audio Effects & DSP Settings",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = theme.textPrimary
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = theme.textMuted,
-                        modifier = Modifier.size(14.dp)
-                    )
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))

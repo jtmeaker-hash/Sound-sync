@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -98,13 +99,17 @@ fun MetadataProvenanceBadge(
     }
 
     Surface(
-        modifier = modifier.testTag("metadata_provenance_badge_${track.id}"),
+        modifier = modifier
+            .wrapContentWidth()
+            .testTag("metadata_provenance_badge_${track.id}"),
         shape = RoundedCornerShape(if (compact) 4.dp else 6.dp),
         color = style.bgColor,
         border = BorderStroke(0.75.dp, style.borderColor)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = if (compact) 4.dp else 6.dp, vertical = if (compact) 1.5.dp else 3.dp),
+            modifier = Modifier
+                .wrapContentWidth()
+                .padding(horizontal = if (compact) 4.dp else 6.dp, vertical = if (compact) 1.5.dp else 3.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
@@ -120,7 +125,9 @@ fun MetadataProvenanceBadge(
                 fontSize = if (compact) 8.5.sp else 10.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
-                letterSpacing = 0.3.sp
+                letterSpacing = 0.3.sp,
+                maxLines = 1,
+                softWrap = false
             )
         }
     }

@@ -6,8 +6,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -231,11 +234,16 @@ fun MainDjScreen(
     val coroutineScope = rememberCoroutineScope()
     var activeSideDestination by remember { mutableStateOf<SideMenuDestination?>(null) }
 
+    val isCarModeActive by viewModel.carModeManager.isCarModeActive.collectAsState()
+
     BackHandler(enabled = drawerState.isOpen) {
         coroutineScope.launch { drawerState.close() }
     }
     BackHandler(enabled = activeSideDestination != null) {
         activeSideDestination = null
+    }
+    BackHandler(enabled = isCarModeActive) {
+        viewModel.carModeManager.exitCarMode()
     }
 
     ModalNavigationDrawer(
@@ -261,111 +269,128 @@ fun MainDjScreen(
             containerColor = DjObsidian,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    DjTopAppBar(
-                        totalTracks = allTracks.size,
-                        currentTab = selectedTab,
-                        isScanning = isScanning,
-                        onOpenMenu = { coroutineScope.launch { drawerState.open() } },
-                        onOpenConfig = { viewModel.openApiConfigDialog() },
-                        onRescan = { viewModel.scanDeviceMediaStore() }
-                    )
+                if (!isCarModeActive) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        DjTopAppBar(
+                            totalTracks = allTracks.size,
+                            currentTab = selectedTab,
+                            isScanning = isScanning,
+                            onOpenMenu = { coroutineScope.launch { drawerState.open() } },
+                            onOpenConfig = { viewModel.openApiConfigDialog() },
+                            onRescan = { viewModel.scanDeviceMediaStore() }
+                        )
 
-                // Storage Permission Request Banner (if not granted)
-                if (!hasStoragePermission) {
-                    PermissionRequestBanner(onRequestPermission = onRequestStoragePermission)
-                }
+                        // Storage Permission Request Banner (if not granted)
+                        if (!hasStoragePermission) {
+                            PermissionRequestBanner(onRequestPermission = onRequestStoragePermission)
+                        }
 
-                // Scanning Progress Banner (foreground MediaStore or DocumentFile Background Service)
-                AnimatedVisibility(visible = isScanning || scanServiceState.isScanning || scanServiceState.isPaused) {
-                    val msg = when {
-                        scanServiceState.isPaused -> "DocumentFile Scan Paused: ${scanServiceState.filesIndexed} tracks indexed"
-                        scanServiceState.isScanning -> "DocumentFile Scan: [${scanServiceState.filesIndexed}/${scanServiceState.filesDiscovered}] ${scanServiceState.currentFile.ifBlank { scanServiceState.currentDirectory }}"
-                        else -> scanProgressMessage
-                    }
-                    ScanningProgressBanner(
-                        message = msg,
-                        isPaused = scanServiceState.isPaused,
-                        isBackgroundService = scanServiceState.isScanning || scanServiceState.isPaused,
-                        onPause = { viewModel.pauseScanService() },
-                        onResume = { viewModel.resumeScanService() },
-                        onCancel = { viewModel.cancelScanService() }
-                    )
-                }
-
-                // Library Background Metadata Analysis Banner
-                val analysisProgress by viewModel.analysisProgress.collectAsState()
-                AnimatedVisibility(visible = analysisProgress.isRunning) {
-                    Surface(
-                        color = if (analysisProgress.isPausedForPlayback) DjSurfaceDark else DjSurfaceElevated,
-                        border = BorderStroke(
-                            0.5.dp,
-                            if (analysisProgress.isPausedForPlayback) NeonAmber.copy(alpha = 0.5f) else DeckACyan.copy(alpha = 0.5f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            CircularProgressIndicator(
-                                progress = {
-                                    if (analysisProgress.totalCount > 0) {
-                                        analysisProgress.processedCount.toFloat() / analysisProgress.totalCount.toFloat()
-                                    } else 0f
-                                },
-                                modifier = Modifier.size(16.dp),
-                                color = if (analysisProgress.isPausedForPlayback) NeonAmber else DeckACyan,
-                                strokeWidth = 2.dp
+                        // Scanning Progress Banner (foreground MediaStore or DocumentFile Background Service)
+                        AnimatedVisibility(visible = isScanning || scanServiceState.isScanning || scanServiceState.isPaused) {
+                            val msg = when {
+                                scanServiceState.isPaused -> "DocumentFile Scan Paused: ${scanServiceState.filesIndexed} tracks indexed"
+                                scanServiceState.isScanning -> "DocumentFile Scan: [${scanServiceState.filesIndexed}/${scanServiceState.filesDiscovered}] ${scanServiceState.currentFile.ifBlank { scanServiceState.currentDirectory }}"
+                                else -> scanProgressMessage
+                            }
+                            ScanningProgressBanner(
+                                message = msg,
+                                isPaused = scanServiceState.isPaused,
+                                isBackgroundService = scanServiceState.isScanning || scanServiceState.isPaused,
+                                onPause = { viewModel.pauseScanService() },
+                                onResume = { viewModel.resumeScanService() },
+                                onCancel = { viewModel.cancelScanService() }
                             )
-                            Text(
-                                text = if (analysisProgress.isPausedForPlayback) {
-                                    "Analysis throttled for audio playback (${analysisProgress.processedCount}/${analysisProgress.totalCount})"
-                                } else {
-                                    "Analysing library: ${analysisProgress.processedCount}/${analysisProgress.totalCount} • ${analysisProgress.currentTrackTitle}"
-                                },
-                                color = TextSecondary,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
+                        }
+
+                        // Library Background Metadata Analysis Banner
+                        val analysisProgress by viewModel.analysisProgress.collectAsState()
+                        AnimatedVisibility(visible = analysisProgress.isRunning && (analysisProgress.totalCount > 0 || analysisProgress.currentTrackTitle.isNotBlank())) {
+                            Surface(
+                                color = if (analysisProgress.isPausedForPlayback) DjSurfaceDark else DjSurfaceElevated,
+                                border = BorderStroke(
+                                    0.5.dp,
+                                    if (analysisProgress.isPausedForPlayback) NeonAmber.copy(alpha = 0.5f) else DeckACyan.copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        progress = {
+                                            if (analysisProgress.totalCount > 0) {
+                                                (analysisProgress.processedCount.toFloat() / analysisProgress.totalCount.toFloat()).coerceIn(0f, 1f)
+                                            } else 0f
+                                        },
+                                        modifier = Modifier.size(16.dp),
+                                        color = if (analysisProgress.isPausedForPlayback) NeonAmber else DeckACyan,
+                                        strokeWidth = 2.dp
+                                    )
+                                    val bannerText = if (analysisProgress.isPausedForPlayback) {
+                                        if (analysisProgress.totalCount > 0) {
+                                            "Analysis throttled for audio playback (${analysisProgress.processedCount}/${analysisProgress.totalCount})"
+                                        } else {
+                                            "Analysis throttled for audio playback"
+                                        }
+                                    } else {
+                                        if (analysisProgress.totalCount > 0 && analysisProgress.currentTrackTitle.isNotBlank()) {
+                                            "Analysing library: ${analysisProgress.processedCount}/${analysisProgress.totalCount} • ${analysisProgress.currentTrackTitle}"
+                                        } else if (analysisProgress.totalCount > 0) {
+                                            "Analysing library: ${analysisProgress.processedCount}/${analysisProgress.totalCount}"
+                                        } else if (analysisProgress.currentTrackTitle.isNotBlank()) {
+                                            "Analysing library… • ${analysisProgress.currentTrackTitle}"
+                                        } else {
+                                            "Preparing library analysis…"
+                                        }
+                                    }
+                                    Text(
+                                        text = bannerText,
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
-            }
-        },
-        bottomBar = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                // Docked Mini-Player Bar (only displayed when full player is NOT expanded)
-                if (!isNowPlayingExpanded) {
-                    playingTrack?.let { track ->
-                        PositionAwareMiniPlayer(
-                            track = track,
-                            displayMode = nowPlayingDisplayMode,
-                            waveformData = waveformData,
-                            isPlaying = isPlaying,
-                            audioEngine = viewModel.audioEngine,
-                            onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
-                            onPreviousTrack = { viewModel.previousTrack() },
-                            onNextTrack = { viewModel.nextTrack() },
-                            onSeekToMs = { ms -> viewModel.seekToMs(ms) },
-                            onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
-                            onOpenNowPlaying = { viewModel.openNowPlaying() }
+            },
+            bottomBar = {
+                if (!isCarModeActive) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        // Docked Mini-Player Bar (only displayed when full player is NOT expanded)
+                        if (!isNowPlayingExpanded) {
+                            playingTrack?.let { track ->
+                                PositionAwareMiniPlayer(
+                                    track = track,
+                                    displayMode = nowPlayingDisplayMode,
+                                    waveformData = waveformData,
+                                    isPlaying = isPlaying,
+                                    audioEngine = viewModel.audioEngine,
+                                    onTogglePlayPause = { viewModel.audioEngine.togglePlayPause() },
+                                    onPreviousTrack = { viewModel.previousTrack() },
+                                    onNextTrack = { viewModel.nextTrack() },
+                                    onSeekToMs = { ms -> viewModel.seekToMs(ms) },
+                                    onToggleDisplayMode = { viewModel.toggleNowPlayingDisplayMode() },
+                                    onOpenNowPlaying = { viewModel.openNowPlaying() }
+                                )
+                            }
+                        }
+
+                        // Bottom Navigation (Local, SoundCloud, Spotify, Spectrogram, Settings)
+                        DjBottomNavigationBar(
+                            selectedTab = selectedTab,
+                            onTabSelected = { viewModel.selectTab(it) }
                         )
                     }
                 }
-
-                // Bottom Navigation (Local, SoundCloud, Spotify, Spectrogram, Settings)
-                DjBottomNavigationBar(
-                    selectedTab = selectedTab,
-                    onTabSelected = { viewModel.selectTab(it) }
-                )
             }
-        }
     ) { innerPadding ->
         Box(
             modifier = Modifier
@@ -664,7 +689,6 @@ fun MainDjScreen(
             }
 
             // Full-Screen Car Mode Dashboard
-            val isCarModeActive by viewModel.carModeManager.isCarModeActive.collectAsState()
             AnimatedVisibility(
                 visible = isCarModeActive,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
@@ -895,7 +919,11 @@ private fun DjTopAppBar(
                     modifier = Modifier.size(32.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.GraphicEq, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(18.dp))
+                        Image(
+                            painter = painterResource(id = R.drawable.soundsync_logo),
+                            contentDescription = "SoundSync Logo",
+                            modifier = Modifier.size(24.dp).clip(RoundedCornerShape(4.dp))
+                        )
                     }
                 }
 

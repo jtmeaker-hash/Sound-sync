@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -63,6 +64,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -117,262 +120,341 @@ fun SpectrogramAnalyzerView(
     var zoomLevel by remember { mutableIntStateOf(1) } // 1x, 2x, 4x, 8x
     var panRatio by remember { mutableFloatStateOf(0.0f) } // 0f..1f for horizontal inspection when zoomed
 
-    Column(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(DjObsidian)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Track Selection Carousel Ribbon
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                text = "SELECT AUDIO FILE TO AUDIT (HD SPEK / STUDIO STFT)",
-                color = TextMuted,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Black
-            )
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 2.dp)
-            ) {
-                items(allTracks) { track ->
-                    val isSelected = track.id == analyzedTrack?.id
-                    Surface(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable {
-                                onSelectTrack(track)
-                                panRatio = 0.0f
-                            },
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isSelected) DeckACyan.copy(alpha = 0.2f) else DjSurfaceCard,
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (isSelected) DeckACyan else DjSurfaceBorder
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            QualityPill(track.qualityRating)
-                            Text(
-                                text = track.title,
-                                color = if (isSelected) DeckACyan else TextPrimary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1
+        val viewportHeight = maxHeight
+        val graphHeight = if (viewportHeight != Dp.Infinity && viewportHeight > 400.dp) {
+            (viewportHeight * 0.40f).coerceIn(240.dp, 440.dp)
+        } else {
+            280.dp
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Track Selection Carousel Ribbon
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "SELECT AUDIO FILE TO AUDIT (HD SPEK / STUDIO STFT)",
+                    color = TextMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 2.dp)
+                ) {
+                    items(allTracks) { track ->
+                        val isSelected = track.id == analyzedTrack?.id
+                        Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    onSelectTrack(track)
+                                    panRatio = 0.0f
+                                },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) DeckACyan.copy(alpha = 0.2f) else DjSurfaceCard,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isSelected) DeckACyan else DjSurfaceBorder
                             )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                QualityPill(track.qualityRating)
+                                Text(
+                                    text = track.title,
+                                    color = if (isSelected) DeckACyan else TextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Spotify Track Notice
-        if (analyzedTrack != null && analyzedTrack.platforms.contains(MusicPlatform.SPOTIFY)) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1DB954))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF1DB954), modifier = Modifier.size(20.dp))
+            // Spotify Track Notice
+            if (analyzedTrack != null && analyzedTrack.platforms.contains(MusicPlatform.SPOTIFY)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1DB954))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF1DB954), modifier = Modifier.size(20.dp))
+                            Text(
+                                text = "Spectrogram unavailable for Spotify playback",
+                                color = Color(0xFF1DB954),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
                         Text(
-                            text = "Spectrogram unavailable for Spotify playback",
-                            color = Color(0xFF1DB954),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
+                            text = "Spotify streams are protected and decoded by the Spotify client service. Local acoustic STFT spectrogram analysis is available for all Local files and SoundCloud audio streams.",
+                            color = TextSecondary,
+                            fontSize = 12.sp
                         )
                     }
-                    Text(
-                        text = "Spotify streams are protected and decoded by the Spotify client service. Local acoustic STFT spectrogram analysis is available for all Local files and SoundCloud audio streams.",
-                        color = TextSecondary,
-                        fontSize = 12.sp
-                    )
                 }
-            }
-        } else if (errorMessage != null && analyzedTrack != null) {
-            // Inline Error Recovery Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("spectrogram_error_card"),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
-                border = androidx.compose.foundation.BorderStroke(1.dp, NeonRed)
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+            } else if (errorMessage != null && analyzedTrack != null) {
+                // Inline Error Recovery Card
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("spectrogram_error_card"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, NeonRed)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.Warning, contentDescription = null, tint = NeonRed, modifier = Modifier.size(22.dp))
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = NeonRed, modifier = Modifier.size(22.dp))
+                            Text(
+                                text = "Couldn't analyze this track",
+                                color = NeonRed,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
                         Text(
-                            text = "Couldn't analyze this track",
-                            color = NeonRed,
+                            text = errorMessage,
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = onRetryAnalysis,
+                                colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.testTag("spectrogram_retry_button")
+                            ) {
+                                Icon(Icons.Default.Replay, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Retry Analysis", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            } else if (isLoading) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(260.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator(color = DeckACyan, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = if (analysisProgressPercent > 0) "Computing HD Spectrogram... $analysisProgressPercent%" else "Calculating High-Definition STFT (1024 slices × 256 bins)...",
+                            color = DeckACyan,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { (analysisProgressPercent / 100f).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth(0.6f).height(4.dp),
+                            color = DeckACyan,
+                            trackColor = DjSurfaceDark
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Extracting high-resolution frequency bins & checking ultrasonic cutoff ceiling",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            } else if (analyzedTrack != null && spectrogramData != null) {
+                // Main High-Definition Spectrogram Heatmap Canvas Card
+                SpectrogramCanvasCard(
+                    track = analyzedTrack,
+                    analysis = spectrogramData,
+                    playbackProgress = playbackProgress,
+                    zoomLevel = zoomLevel,
+                    panRatio = panRatio,
+                    onZoomChange = { newZoom ->
+                        zoomLevel = newZoom
+                        panRatio = panRatio.coerceIn(0.0f, 1.0f)
+                    },
+                    onPanChange = { newPan -> panRatio = newPan.coerceIn(0.0f, 1.0f) },
+                    inspectX = inspectXRatio,
+                    inspectY = inspectYRatio,
+                    onInspectChange = { x, y ->
+                        inspectXRatio = x
+                        inspectYRatio = y
+                    },
+                    onSeek = { ratio -> onSeekToRatio(ratio) },
+                    graphHeight = graphHeight
+                )
+
+                // Dynamic Inspection Crosshair & Acoustic Metric Readout
+                val inspectedKhz = calculateFrequencyForYRatio(inspectYRatio)
+                val safeDuration = analyzedTrack.durationSeconds.coerceAtLeast(0)
+                val actualGlobalX = if (zoomLevel > 1) {
+                    val windowSize = 1.0f / zoomLevel
+                    (panRatio * (1.0f - windowSize) + inspectXRatio * windowSize).coerceIn(0f, 1f)
+                } else {
+                    inspectXRatio
+                }
+                val inspectedSec = (actualGlobalX * safeDuration).toInt()
+                val sliceIdx = (actualGlobalX * (spectrogramData.spectralSlices.size - 1)).toInt().coerceIn(0, spectrogramData.spectralSlices.size - 1)
+                val binIdx = ((1.0f - inspectYRatio) * (if (spectrogramData.spectralSlices.isNotEmpty()) spectrogramData.spectralSlices[0].size - 1 else 1)).toInt()
+                val sliceEnergy = if (spectrogramData.spectralSlices.isNotEmpty() && binIdx in 0 until spectrogramData.spectralSlices[sliceIdx].size) {
+                    spectrogramData.spectralSlices[sliceIdx][binIdx]
+                } else 0.5f
+                val inspectedDb = -72.0f + (sliceEnergy * 72.0f)
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = DjSurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "PROBE: ${String.format(Locale.US, "%.1f kHz", inspectedKhz)} • ${String.format(Locale.US, "%02d:%02d", inspectedSec / 60, inspectedSec % 60)} • ${String.format(Locale.US, "%.1f dB", inspectedDb)}",
+                            color = DeckACyan,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (zoomLevel > 1) "${zoomLevel}X ZOOM ACTIVE" else "TAP / DRAG TO PROBE",
+                            color = if (zoomLevel > 1) NeonAmber else TextMuted,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // Spectrogram Playback Control Strip
+                SpectrogramPlaybackControls(
+                    track = analyzedTrack,
+                    isPlaying = isPlaying,
+                    currentPositionSec = currentPositionSec,
+                    playbackProgress = playbackProgress,
+                    onTogglePlayPause = onTogglePlayPause,
+                    onSeekToRatio = onSeekToRatio
+                )
+
+                // Quality Verdict & Spectral Cutoff Verification Card
+                QualityAssessmentCard(
+                    track = analyzedTrack,
+                    analysis = spectrogramData,
+                    onLoadToDeck = { onLoadToDeck(analyzedTrack) }
+                )
+
+                // Audio Specs Metric Grid
+                AudioSpecsMetricGrid(track = analyzedTrack, analysis = spectrogramData)
+
+                // Metadata Provenance Breakdown (MusicBrainz Canonical Catalogue vs Local Audio DSP)
+                MetadataProvenanceCard(track = analyzedTrack, modifier = Modifier.fillMaxWidth())
+
+                // Sound Quality Education & Analysis Guide
+                SpectrogramGuideCard()
+            } else if (analyzedTrack != null) {
+                // Track selected but not yet analyzed
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("spectrogram_not_analyzed_card"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.GraphicEq,
+                            contentDescription = null,
+                            tint = DeckACyan,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Text(
+                            text = "Acoustic Spectrogram",
+                            color = TextPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp
                         )
-                    }
-                    Text(
-                        text = errorMessage,
-                        color = TextSecondary,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                        Text(
+                            text = "Generate a studio STFT acoustic spectrogram for '${analyzedTrack.title}' to inspect frequency cutoff, transients, and genuine bitrate.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
+                        )
                         Button(
                             onClick = onRetryAnalysis,
                             colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
                             shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.testTag("spectrogram_retry_button")
+                            modifier = Modifier.testTag("spectrogram_analyze_button")
                         ) {
-                            Icon(Icons.Default.Replay, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Retry Analysis", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("Analyze Spectrogram", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
                     }
                 }
-            }
-        } else if (isLoading) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(260.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
-                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxSize().padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    CircularProgressIndicator(color = DeckACyan, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = if (analysisProgressPercent > 0) "Computing HD Spectrogram... $analysisProgressPercent%" else "Calculating High-Definition STFT (1024 slices × 256 bins)...",
-                        color = DeckACyan,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { (analysisProgressPercent / 100f).coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth(0.6f).height(4.dp),
-                        color = DeckACyan,
-                        trackColor = DjSurfaceDark
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Extracting high-resolution frequency bins & checking ultrasonic cutoff ceiling",
-                        color = TextSecondary,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-        } else if (analyzedTrack != null && spectrogramData != null) {
-            // Main High-Definition Spectrogram Heatmap Canvas Card
-            SpectrogramCanvasCard(
-                track = analyzedTrack,
-                analysis = spectrogramData,
-                playbackProgress = playbackProgress,
-                zoomLevel = zoomLevel,
-                panRatio = panRatio,
-                onZoomChange = { newZoom ->
-                    zoomLevel = newZoom
-                    panRatio = panRatio.coerceIn(0.0f, 1.0f)
-                },
-                onPanChange = { newPan -> panRatio = newPan.coerceIn(0.0f, 1.0f) },
-                inspectX = inspectXRatio,
-                inspectY = inspectYRatio,
-                onInspectChange = { x, y ->
-                    inspectXRatio = x
-                    inspectYRatio = y
-                },
-                onSeek = { ratio -> onSeekToRatio(ratio) }
-            )
-
-            // Dynamic Inspection Crosshair & Acoustic Metric Readout
-            val inspectedKhz = calculateFrequencyForYRatio(inspectYRatio)
-            val safeDuration = analyzedTrack.durationSeconds.coerceAtLeast(0)
-            val actualGlobalX = if (zoomLevel > 1) {
-                val windowSize = 1.0f / zoomLevel
-                (panRatio * (1.0f - windowSize) + inspectXRatio * windowSize).coerceIn(0f, 1f)
             } else {
-                inspectXRatio
-            }
-            val inspectedSec = (actualGlobalX * safeDuration).toInt()
-            val sliceIdx = (actualGlobalX * (spectrogramData.spectralSlices.size - 1)).toInt().coerceIn(0, spectrogramData.spectralSlices.size - 1)
-            val binIdx = ((1.0f - inspectYRatio) * (if (spectrogramData.spectralSlices.isNotEmpty()) spectrogramData.spectralSlices[0].size - 1 else 1)).toInt()
-            val sliceEnergy = if (spectrogramData.spectralSlices.isNotEmpty() && binIdx in 0 until spectrogramData.spectralSlices[sliceIdx].size) {
-                spectrogramData.spectralSlices[sliceIdx][binIdx]
-            } else 0.5f
-            val inspectedDb = -72.0f + (sliceEnergy * 72.0f)
-
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = DjSurfaceDark,
-                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = DjSurfaceCard),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
                 ) {
-                    Text(
-                        text = "PROBE: ${String.format(Locale.US, "%.1f kHz", inspectedKhz)} • ${String.format(Locale.US, "%02d:%02d", inspectedSec / 60, inspectedSec % 60)} • ${String.format(Locale.US, "%.1f dB", inspectedDb)}",
-                        color = DeckACyan,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (zoomLevel > 1) "${zoomLevel}X ZOOM ACTIVE" else "TAP / DRAG TO PROBE",
-                        color = if (zoomLevel > 1) NeonAmber else TextMuted,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.Info, contentDescription = null, tint = TextMuted, modifier = Modifier.size(36.dp))
+                        Text("No Tracks Available", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("Import music into SoundSync to view acoustic spectrograms.", color = TextSecondary, fontSize = 12.sp)
+                    }
                 }
             }
-
-            // Spectrogram Playback Control Strip
-            SpectrogramPlaybackControls(
-                track = analyzedTrack,
-                isPlaying = isPlaying,
-                currentPositionSec = currentPositionSec,
-                playbackProgress = playbackProgress,
-                onTogglePlayPause = onTogglePlayPause,
-                onSeekToRatio = onSeekToRatio
-            )
-
-            // Quality Verdict & Spectral Cutoff Verification Card
-            QualityAssessmentCard(
-                track = analyzedTrack,
-                analysis = spectrogramData,
-                onLoadToDeck = { onLoadToDeck(analyzedTrack) }
-            )
-
-            // Audio Specs Metric Grid
-            AudioSpecsMetricGrid(track = analyzedTrack, analysis = spectrogramData)
-
-            // Metadata Provenance Breakdown (MusicBrainz Canonical Catalogue vs Local Audio DSP)
-            MetadataProvenanceCard(track = analyzedTrack, modifier = Modifier.fillMaxWidth())
-
-            // Sound Quality Education & Analysis Guide
-            SpectrogramGuideCard()
         }
     }
 }
@@ -389,7 +471,8 @@ private fun SpectrogramCanvasCard(
     inspectX: Float,
     inspectY: Float,
     onInspectChange: (Float, Float) -> Unit,
-    onSeek: (Float) -> Unit
+    onSeek: (Float) -> Unit,
+    graphHeight: Dp = 280.dp
 ) {
     // Generate high-definition ImageBitmap (1024 slices × 256 frequency bins = ~1 MB)
     val cachedBitmap = remember(analysis) {
@@ -491,23 +574,38 @@ private fun SpectrogramCanvasCard(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Spectrogram Display with Y-axis frequency ruler on the left (Expanded vertical height)
-            val graphHeight = 290.dp
+            // Spectrogram Display with Y-axis frequency ruler on the left (Logarithmic placement)
             Row(modifier = Modifier.fillMaxWidth().height(graphHeight)) {
-                // Frequency Ruler labels (22k, 20k, 16k, 10k, 5k, 1k, 100Hz, 20Hz)
-                Column(
-                    modifier = Modifier.padding(end = 4.dp).height(graphHeight),
-                    verticalArrangement = Arrangement.SpaceBetween,
-                    horizontalAlignment = Alignment.End
+                // Frequency Ruler labels (Logarithmically placed to match canvas grid lines)
+                val rulerMarkers = listOf(
+                    22.05f to "22k",
+                    16.0f to "16k",
+                    10.0f to "10k",
+                    5.0f to "5k",
+                    1.0f to "1k",
+                    0.1f to "100",
+                    0.02f to "20Hz"
+                )
+
+                Box(
+                    modifier = Modifier
+                        .padding(end = 4.dp)
+                        .height(graphHeight)
+                        .width(28.dp)
                 ) {
-                    Text("22k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                    Text("20k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                    Text("16k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                    Text("10k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                    Text("5k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                    Text("1k", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                    Text("100", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                    Text("20Hz", color = TextMuted, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    rulerMarkers.forEach { (khz, label) ->
+                        val yRatio = getYRatioForFrequency(khz)
+                        val yOffset = graphHeight * yRatio
+                        Text(
+                            text = label,
+                            color = TextMuted,
+                            fontSize = 8.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = (yOffset - 5.dp).coerceAtLeast(0.dp).coerceAtMost(graphHeight - 11.dp))
+                        )
+                    }
                 }
 
                 // Interactive Spectrogram Heatmap Canvas
@@ -581,13 +679,15 @@ private fun SpectrogramCanvasCard(
                             }
                         }
 
-                        // Standard Frequency Reference Lines (22.05k, 20.0k, 16.0k, 10.0k, 1.0k)
+                        // Standard Frequency Reference Lines
                         val freqMarkers = listOf(
                             22.05f to "22.05k (FLAC)",
                             20.0f to "20.0k (320k)",
                             16.0f to "16.0k (128k)",
                             10.0f to "10.0k",
-                            1.0f to "1.0k"
+                            5.0f to "5.0k",
+                            1.0f to "1.0k",
+                            0.1f to "100Hz"
                         )
 
                         freqMarkers.forEach { (khz, _) ->

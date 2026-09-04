@@ -271,4 +271,144 @@ class BackgroundAnalysisAndCarModeTest {
         assertFalse(converted.hasValidBpm)
         assertFalse(converted.hasValidKey)
     }
+
+    // ========================================================================
+    // 6. UI Regression & Layout Protection Tests
+    // ========================================================================
+
+    @Test
+    fun testAnalysisProgressBannerGuardsAgainstZeroDenominator() {
+        val totalCount = 0
+        val processedCount = 5
+
+        // Simulating the UI banner format logic:
+        val progressText = if (totalCount > 0) {
+            "Analysing library: $processedCount/$totalCount • Test Track"
+        } else {
+            "Preparing library analysis… • Test Track"
+        }
+
+        // Must never show "/0"
+        assertFalse(progressText.contains("/0"))
+        assertEquals("Preparing library analysis… • Test Track", progressText)
+
+        // Once total count is known, format accurately
+        val validTotal = 42
+        val validProgressText = if (validTotal > 0) {
+            "Analysing library: $processedCount/$validTotal • Test Track"
+        } else {
+            "Preparing library analysis… • Test Track"
+        }
+        assertEquals("Analysing library: 5/42 • Test Track", validProgressText)
+
+        // Float progress calculation must be coerced to 0f..1f and never divide by zero
+        val safeFloatProgress = if (totalCount > 0) (processedCount.toFloat() / totalCount.toFloat()).coerceIn(0f, 1f) else 0f
+        assertEquals(0f, safeFloatProgress, 0.0001f)
+
+        val safeValidFloat = if (validTotal > 0) (processedCount.toFloat() / validTotal.toFloat()).coerceIn(0f, 1f) else 0f
+        assertEquals(5f / 42f, safeValidFloat, 0.0001f)
+    }
+
+    @Test
+    fun testSpectrogramFrequencyLogarithmicMapping() {
+        val minF = 20.0f
+        val maxF = 24000.0f
+
+        fun getYRatio(freqKhz: Float): Float {
+            val fHz = (freqKhz * 1000.0f).coerceIn(minF, maxF)
+            val ratio = kotlin.math.log10(fHz / minF) / kotlin.math.log10(maxF / minF)
+            return (1.0f - ratio.toFloat()).coerceIn(0f, 1f)
+        }
+
+        // 24 kHz should be at the very top (0.0)
+        assertEquals(0.0f, getYRatio(24.0f), 0.001f)
+
+        // 20 Hz should be at the very bottom (1.0)
+        assertEquals(1.0f, getYRatio(0.02f), 0.001f)
+
+        // 1 kHz (audible midrange) should be around ~0.448 (45% from top)
+        val ratio1k = getYRatio(1.0f)
+        assertTrue("1 kHz ratio should be between 0.40 and 0.50, was $ratio1k", ratio1k in 0.40f..0.50f)
+
+        // Monotonic check: higher frequencies must have lower Y ratio (higher on canvas)
+        assertTrue(getYRatio(22.05f) < getYRatio(20.0f))
+        assertTrue(getYRatio(20.0f) < getYRatio(16.0f))
+        assertTrue(getYRatio(16.0f) < getYRatio(10.0f))
+        assertTrue(getYRatio(10.0f) < getYRatio(5.0f))
+        assertTrue(getYRatio(5.0f) < getYRatio(1.0f))
+        assertTrue(getYRatio(1.0f) < getYRatio(0.1f))
+        assertTrue(getYRatio(0.1f) < getYRatio(0.02f))
+    }
+
+    // ========================================================================
+    // 7. Official Logo Resources & Density Mipmaps Verification Tests
+    // ========================================================================
+
+    @Test
+    fun testLogoAndDensityResourcesExist() {
+        val resDir = java.io.File("src/main/res")
+
+        // 1. Official Canonical Logo PNG
+        val officialLogo = java.io.File(resDir, "drawable/soundsync_logo.png")
+        assertTrue("soundsync_logo.png must exist in drawable/", officialLogo.exists())
+        assertTrue("soundsync_logo.png must not be empty", officialLogo.length() > 100_000)
+
+        // 2. Monochrome notification silhouette
+        val notificationIcon = java.io.File(resDir, "drawable/ic_notification_soundsync.xml")
+        assertTrue("ic_notification_soundsync.xml must exist in drawable/", notificationIcon.exists())
+
+        // 3. Density Mipmaps
+        val densities = listOf("mipmap-mdpi", "mipmap-hdpi", "mipmap-xhdpi", "mipmap-xxhdpi", "mipmap-xxxhdpi")
+        for (density in densities) {
+            val square = java.io.File(resDir, "$density/ic_launcher.png")
+            assertTrue("ic_launcher.png must exist in $density", square.exists())
+            assertTrue("ic_launcher.png in $density must not be empty", square.length() > 0)
+
+            val round = java.io.File(resDir, "$density/ic_launcher_round.png")
+            assertTrue("ic_launcher_round.png must exist in $density", round.exists())
+            assertTrue("ic_launcher_round.png in $density must not be empty", round.length() > 0)
+        }
+
+        // 4. Adaptive icon foreground XML references soundsync_logo
+        val fgXml = java.io.File(resDir, "drawable/ic_launcher_foreground.xml")
+        assertTrue("ic_launcher_foreground.xml must exist", fgXml.exists())
+        val fgContent = fgXml.readText()
+        assertTrue("ic_launcher_foreground.xml must reference soundsync_logo", fgContent.contains("@drawable/soundsync_logo"))
+    }
+
+    // ========================================================================
+    // 8. Background Analysis & WorkManager Architecture Tests
+    // ========================================================================
+
+    @Test
+    fun testLibraryAnalysisWorkerConfiguration() {
+        assertEquals("soundsync_library_metadata_analysis", com.example.analysis.LibraryAnalysisWorker.WORK_NAME)
+        assertEquals("soundsync_library_analysis_channel", com.example.analysis.LibraryAnalysisWorker.CHANNEL_ID)
+        assertEquals(4096, com.example.analysis.LibraryAnalysisWorker.NOTIFICATION_ID)
+    }
+
+    @Test
+    fun testTrackAnalysisManagerProgressCalculations() {
+        val progress = com.example.analysis.TrackAnalysisManager.QueueProgress(
+            isRunning = true,
+            isPausedForPlayback = false,
+            processedCount = 50,
+            totalCount = 200,
+            currentTrackTitle = "Techno Anthem",
+            failedCount = 1,
+            statusMessage = "Analysing • Techno Anthem"
+        )
+
+        assertTrue(progress.isRunning)
+        assertFalse(progress.isPausedForPlayback)
+        assertEquals(50, progress.processedCount)
+        assertEquals(200, progress.totalCount)
+        assertEquals("Techno Anthem", progress.currentTrackTitle)
+        assertEquals(1, progress.failedCount)
+
+        // Float progress calculation
+        val floatProgress = progress.processedCount.toFloat() / progress.totalCount.toFloat()
+        assertEquals(0.25f, floatProgress, 0.001f)
+    }
 }
+

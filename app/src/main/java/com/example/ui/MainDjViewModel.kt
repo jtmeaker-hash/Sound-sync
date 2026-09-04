@@ -1460,6 +1460,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectTab(tab: DjTab) {
         _selectedTab.value = tab
+        if (tab == DjTab.SPECTROGRAM && _spectrogramData.value == null) {
+            val trackToAnalyze = _analyzedTrack.value ?: audioEngine.currentTrack.value ?: allTracks.value.firstOrNull()
+            if (trackToAnalyze != null) {
+                inspectTrackSpectrogram(trackToAnalyze, showTab = false)
+            }
+        }
     }
 
     fun setSearchQuery(query: String) {

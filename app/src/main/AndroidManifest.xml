@@ -65,6 +65,11 @@
             android:foregroundServiceType="dataSync" />
 
         <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
+        <service
             android:name=".service.MediaPlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">

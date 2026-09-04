@@ -9,9 +9,12 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import com.example.ui.components.LibrarySearchBar
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -240,33 +243,14 @@ fun SongsScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("Search songs, artists, albums...", fontSize = 13.sp, color = TextMuted) },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Search",
-                        tint = TextSecondary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = DeckACyan,
-                    unfocusedBorderColor = DjSurfaceBorder,
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary,
-                    cursorColor = DeckACyan,
-                    unfocusedContainerColor = DjSurfaceDark,
-                    focusedContainerColor = DjSurfaceDark
-                ),
-                shape = RoundedCornerShape(10.dp),
+            LibrarySearchBar(
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                placeholderText = "Search songs, artists, albums...",
                 modifier = Modifier
                     .weight(1f)
-                    .height(48.dp)
-                    .testTag("songs_search_input")
+                    .height(48.dp),
+                testTag = "songs_search_input"
             )
 
             Box {
@@ -506,7 +490,7 @@ fun SongsScreen(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun SongTrackRow(
     track: Track,
@@ -685,10 +669,10 @@ fun SongTrackRow(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // DJ Pills (BPM, Key, Quality, Disconnected)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                // DJ Pills (BPM, Key, Quality, Disconnected, Provenance)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     if (!isAvailable) {
                         Surface(
@@ -711,7 +695,9 @@ fun SongTrackRow(
                                     fontSize = 9.sp,
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
-                                    color = TextMuted
+                                    color = TextMuted,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }
@@ -728,6 +714,8 @@ fun SongTrackRow(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
                                 color = DeckACyan,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                             )
                         }
@@ -744,6 +732,8 @@ fun SongTrackRow(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
                                 color = DeckBPink,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                             )
                         }
@@ -759,6 +749,8 @@ fun SongTrackRow(
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = NeonGreen,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                             )
                         }
@@ -771,71 +763,76 @@ fun SongTrackRow(
             Spacer(modifier = Modifier.width(8.dp))
 
             // Duration & Menu
-            Text(
-                text = formattedDuration,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                color = TextSecondary
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = formattedDuration,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = TextSecondary,
+                    maxLines = 1
+                )
 
-            Box {
-                IconButton(
-                    onClick = { showMenu = true },
-                    modifier = Modifier.testTag("track_menu_button_${track.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Options",
-                        tint = TextSecondary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+                Box {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        modifier = Modifier.testTag("track_menu_button_${track.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "Options",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
 
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false },
-                    modifier = Modifier.background(DjSurfaceElevated)
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Add to Playlist", color = TextPrimary) },
-                        leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = DeckACyan) },
-                        onClick = {
-                            showMenu = false
-                            onAddToPlaylist()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Play Next", color = TextPrimary) },
-                        leadingIcon = { Icon(Icons.Default.QueueMusic, contentDescription = null, tint = DeckBPink) },
-                        onClick = {
-                            showMenu = false
-                            onQueueTrack(true)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Add to Queue", color = TextPrimary) },
-                        leadingIcon = { Icon(Icons.Default.Queue, contentDescription = null, tint = TextSecondary) },
-                        onClick = {
-                            showMenu = false
-                            onQueueTrack(false)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Analyse Spectrogram", color = TextPrimary) },
-                        leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = NeonPurple) },
-                        onClick = {
-                            showMenu = false
-                            onInspectSpectrogram()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Track Inspector", color = DeckACyan, fontWeight = FontWeight.SemiBold) },
-                        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = DeckACyan) },
-                        onClick = {
-                            showMenu = false
-                            onInspectProperties()
-                        }
-                    )
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        modifier = Modifier.background(DjSurfaceElevated)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Add to Playlist", color = TextPrimary) },
+                            leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = DeckACyan) },
+                            onClick = {
+                                showMenu = false
+                                onAddToPlaylist()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Play Next", color = TextPrimary) },
+                            leadingIcon = { Icon(Icons.Default.QueueMusic, contentDescription = null, tint = DeckBPink) },
+                            onClick = {
+                                showMenu = false
+                                onQueueTrack(true)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Add to Queue", color = TextPrimary) },
+                            leadingIcon = { Icon(Icons.Default.Queue, contentDescription = null, tint = TextSecondary) },
+                            onClick = {
+                                showMenu = false
+                                onQueueTrack(false)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Analyse Spectrogram", color = TextPrimary) },
+                            leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = NeonPurple) },
+                            onClick = {
+                                showMenu = false
+                                onInspectSpectrogram()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Track Inspector", color = DeckACyan, fontWeight = FontWeight.SemiBold) },
+                            leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = DeckACyan) },
+                            onClick = {
+                                showMenu = false
+                                onInspectProperties()
+                            }
+                        )
+                    }
                 }
             }
         }

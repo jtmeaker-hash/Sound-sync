@@ -5,9 +5,12 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -170,11 +173,10 @@ fun SideNavigationDrawerContent(
                             modifier = Modifier.size(34.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.GraphicEq,
-                                    contentDescription = null,
-                                    tint = DeckACyan,
-                                    modifier = Modifier.size(20.dp)
+                                Image(
+                                    painter = painterResource(id = R.drawable.soundsync_logo),
+                                    contentDescription = "SoundSync Logo",
+                                    modifier = Modifier.size(26.dp).clip(RoundedCornerShape(6.dp))
                                 )
                             }
                         }
@@ -353,16 +355,6 @@ fun SideNavigationDrawerContent(
                                 onSelectDestination(SideMenuDestination.HaasSurround)
                             }
                         )
-                        DrawerActionItem(
-                            title = "Car Mode",
-                            subtitle = "Distraction-free, glanceable vehicle dashboard",
-                            icon = Icons.Default.DirectionsCar,
-                            accentColor = DeckACyan,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.CarMode)
-                            }
-                        )
                     }
                 }
 
@@ -421,6 +413,16 @@ fun SideNavigationDrawerContent(
                     exit = shrinkVertically()
                 ) {
                     Column(modifier = Modifier.padding(start = 24.dp)) {
+                        DrawerActionItem(
+                            title = "Car Mode",
+                            subtitle = "Distraction-free, glanceable vehicle dashboard",
+                            icon = Icons.Default.DirectionsCar,
+                            accentColor = DeckACyan,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.CarMode)
+                            }
+                        )
                         DrawerActionItem(
                             title = "Crossfade & Transitions",
                             subtitle = "Track overlap duration (0-12s)",
@@ -758,11 +760,10 @@ private fun ProSideNavigationDrawerContent(
                             modifier = Modifier.size(30.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.GraphicEq,
-                                    contentDescription = null,
-                                    tint = theme.accent,
-                                    modifier = Modifier.size(18.dp)
+                                Image(
+                                    painter = painterResource(id = R.drawable.soundsync_logo),
+                                    contentDescription = "SoundSync Logo",
+                                    modifier = Modifier.size(24.dp).clip(RoundedCornerShape(3.dp))
                                 )
                             }
                         }
@@ -894,7 +895,7 @@ private fun ProSideNavigationDrawerContent(
                 // ── 2. TOOLS ─────────────────────────────────────
                 ProCategoryHeader(
                     title = "TOOLS",
-                    badge = "7 TOOLS",
+                    badge = "6 TOOLS",
                     isExpanded = expandedMap["TOOLS"] == true,
                     onToggle = { expandedMap["TOOLS"] = !(expandedMap["TOOLS"] ?: false) }
                 )
@@ -915,7 +916,7 @@ private fun ProSideNavigationDrawerContent(
                         )
                         ProDrawerItem(
                             title = "Tap BPM",
-                            subtitle = "Manual tap tempo calculator with outlier rejection",
+                            subtitle = "Real-time tempo calculator with statistical outlier rejection",
                             icon = Icons.Default.TouchApp,
                             onClick = {
                                 onCloseDrawer()
@@ -924,7 +925,7 @@ private fun ProSideNavigationDrawerContent(
                         )
                         ProDrawerItem(
                             title = "Key Converter",
-                            subtitle = "Standard notation to Camelot & harmonic mixing",
+                            subtitle = "Camelot, Open Key & Traditional harmonic circle",
                             icon = Icons.Default.MusicNote,
                             onClick = {
                                 onCloseDrawer()
@@ -933,7 +934,7 @@ private fun ProSideNavigationDrawerContent(
                         )
                         ProDrawerItem(
                             title = "RMS Meter",
-                            subtitle = "True PCM root-mean-square loudness meter",
+                            subtitle = "Calibrated dual-deck signal loudness monitor",
                             icon = Icons.Default.GraphicEq,
                             onClick = {
                                 onCloseDrawer()
@@ -958,15 +959,6 @@ private fun ProSideNavigationDrawerContent(
                                 onSelectDestination(SideMenuDestination.DynamicRangeMeter)
                             }
                         )
-                        ProDrawerItem(
-                            title = "Car Mode",
-                            subtitle = "Distraction-free glanceable vehicle dashboard",
-                            icon = Icons.Default.DirectionsCar,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.CarMode)
-                            }
-                        )
                     }
                 }
 
@@ -975,7 +967,7 @@ private fun ProSideNavigationDrawerContent(
                 // ── 3. AUDIO ─────────────────────────────────────
                 ProCategoryHeader(
                     title = "AUDIO",
-                    badge = "5 ITEMS",
+                    badge = "6 ITEMS",
                     isExpanded = expandedMap["AUDIO"] == true,
                     onToggle = { expandedMap["AUDIO"] = !(expandedMap["AUDIO"] ?: false) }
                 )
@@ -985,6 +977,15 @@ private fun ProSideNavigationDrawerContent(
                     exit = shrinkVertically()
                 ) {
                     Column(modifier = Modifier.padding(start = 8.dp)) {
+                        ProDrawerItem(
+                            title = "Car Mode",
+                            subtitle = "Distraction-free, glanceable vehicle dashboard",
+                            icon = Icons.Default.DirectionsCar,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.CarMode)
+                            }
+                        )
                         ProDrawerItem(
                             title = "Multipoint EQ",
                             subtitle = "3-band parametric DSP tone controls",

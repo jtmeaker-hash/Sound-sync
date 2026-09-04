@@ -2,6 +2,7 @@ package com.example.ui.library
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,10 +14,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QueueMusic
@@ -271,24 +275,20 @@ private fun CategorySelectorBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 LocalCategory.entries.forEach { category ->
                     val isSelected = selectedCategory == category
-                    val count = when (category) {
-                        LocalCategory.SONGS -> songCount
-                        LocalCategory.ALBUMS -> albumCount
-                        LocalCategory.ARTISTS -> artistCount
-                        LocalCategory.PLAYLISTS -> playlistCount
-                        LocalCategory.FOLDERS -> folderCount
-                    }
 
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = if (isSelected) DeckACyan else DjSurfaceDark,
                         modifier = Modifier
-                            .weight(1f)
+                            .wrapContentWidth()
                             .height(34.dp)
                             .clickable { onSelectCategory(category) }
                             .testTag("category_tab_${category.name.lowercase()}")
@@ -296,7 +296,7 @@ private fun CategorySelectorBar(
                         Row(
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 4.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp)
                         ) {
                             Icon(
                                 imageVector = when (category) {
@@ -310,12 +310,14 @@ private fun CategorySelectorBar(
                                 tint = if (isSelected) DjObsidian else TextSecondary,
                                 modifier = Modifier.size(14.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
                             Text(
                                 text = category.label,
                                 fontSize = 11.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) DjObsidian else TextSecondary
+                                color = if (isSelected) DjObsidian else TextSecondary,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
@@ -334,7 +336,7 @@ private fun CategorySelectorBar(
                     .testTag("open_folder_explorer_toggle_button")
             ) {
                 Icon(
-                    imageVector = Icons.Default.Folder,
+                    imageVector = Icons.Default.FolderOpen,
                     contentDescription = "Folder Explorer",
                     tint = DeckACyan,
                     modifier = Modifier.size(18.dp)

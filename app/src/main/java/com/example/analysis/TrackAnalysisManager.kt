@@ -166,6 +166,8 @@ class TrackAnalysisManager private constructor(
     fun triggerQueueProcessing() {
         if (!isBackgroundAnalysisEnabled) return
 
+        LibraryAnalysisWorker.enqueueWork(context)
+
         scope.launch {
             jobMutex.withLock {
                 if (analysisJob?.isActive == true) {
@@ -176,9 +178,49 @@ class TrackAnalysisManager private constructor(
         }
     }
 
-    private fun launchAnalysisLoop(): Job = scope.launch {
+    suspend fun getPendingCount(): Int = withContext(Dispatchers.IO) {
+        try {
+            trackDao.getPendingAnalysisCount()
+        } catch (_: Exception) {
+            0
+        }
+    }
+
+    suspend fun runAnalysisLoopSuspended(
+        onProgressUpdate: ((processed: Int, total: Int, currentTrackTitle: String) -> Unit)? = null
+    ) = withContext(Dispatchers.IO) {
+        val job = jobMutex.withLock {
+            if (analysisJob?.isActive == true) {
+                analysisJob
+            } else {
+                val j = launchAnalysisLoop(onProgressUpdate)
+                analysisJob = j
+                j
+            }
+        }
+        job?.join()
+    }
+
+    private fun launchAnalysisLoop(
+        onProgressUpdate: ((processed: Int, total: Int, currentTrackTitle: String) -> Unit)? = null
+    ): Job = scope.launch {
         Log.d(TAG, "Background library analysis loop started.")
         var consecutiveEmptyBatches = 0
+        var sessionProcessed = 0
+        var sessionTotal = 0
+        try {
+            sessionTotal = trackDao.getPendingAnalysisCount()
+        } catch (_: Exception) {}
+
+        _queueProgress.value = QueueProgress(
+            isRunning = true,
+            isPausedForPlayback = false,
+            processedCount = 0,
+            totalCount = sessionTotal,
+            currentTrackTitle = "",
+            failedCount = 0,
+            statusMessage = if (sessionTotal > 0) "Preparing library analysis…" else "Analysing library…"
+        )
 
         try {
             while (isActive) {
@@ -217,6 +259,12 @@ class TrackAnalysisManager private constructor(
                     }
                 }
 
+                // Refresh remaining count to keep sessionTotal accurate if new tracks were added
+                try {
+                    val remaining = trackDao.getPendingAnalysisCount()
+                    sessionTotal = maxOf(sessionTotal, sessionProcessed + remaining)
+                } catch (_: Exception) {}
+
                 // Retrieve priority track if requested
                 var currentEntity: TrackEntity? = null
                 val prioId = priorityTrackId
@@ -235,6 +283,8 @@ class TrackAnalysisManager private constructor(
                                 isRunning = false,
                                 isPausedForPlayback = false,
                                 currentTrackTitle = "",
+                                totalCount = sessionProcessed,
+                                processedCount = sessionProcessed,
                                 statusMessage = "Library analysis complete"
                             )
                             break
@@ -250,18 +300,25 @@ class TrackAnalysisManager private constructor(
                 _queueProgress.value = _queueProgress.value.copy(
                     isRunning = true,
                     isPausedForPlayback = isPlaying && analyseWhilePlayingMode == "REDUCED",
+                    totalCount = sessionTotal,
                     currentTrackTitle = track.title,
                     statusMessage = if (isPlaying) "Analysing (reduced priority) • ${track.title}" else "Analysing • ${track.title}"
                 )
 
                 // Process single track within DSP semaphore
                 val success = processSingleTrack(track)
+                sessionProcessed++
+                if (sessionTotal > 0 && sessionProcessed > sessionTotal) {
+                    sessionTotal = sessionProcessed
+                }
 
                 val prev = _queueProgress.value
                 _queueProgress.value = prev.copy(
-                    processedCount = prev.processedCount + 1,
+                    processedCount = sessionProcessed,
+                    totalCount = sessionTotal,
                     failedCount = if (success) prev.failedCount else prev.failedCount + 1
                 )
+                onProgressUpdate?.invoke(sessionProcessed, sessionTotal, track.title)
 
                 // Safe pacing interval
                 delay(if (isPlaying) 150 else 40)
@@ -274,7 +331,8 @@ class TrackAnalysisManager private constructor(
             _queueProgress.value = _queueProgress.value.copy(
                 isRunning = false,
                 isPausedForPlayback = false,
-                currentTrackTitle = ""
+                currentTrackTitle = "",
+                statusMessage = "Library analysis complete"
             )
         }
     }

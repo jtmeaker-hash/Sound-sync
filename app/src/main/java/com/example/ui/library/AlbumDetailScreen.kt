@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -259,6 +261,7 @@ fun AlbumDetailScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AlbumTrackRow(
     index: Int,
@@ -339,9 +342,9 @@ private fun AlbumTrackRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     if (!isAvailable) {
                         Text(
@@ -349,7 +352,9 @@ private fun AlbumTrackRow(
                             fontSize = 9.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
-                            color = TextMuted
+                            color = TextMuted,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                     if (track.bpm > 0) {
@@ -357,7 +362,9 @@ private fun AlbumTrackRow(
                             text = "${track.bpm.toInt()} BPM",
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
-                            color = DeckACyan
+                            color = DeckACyan,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                     if (track.musicalKey.isNotBlank()) {
@@ -365,13 +372,17 @@ private fun AlbumTrackRow(
                             text = track.musicalKey,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
-                            color = DeckBPink
+                            color = DeckBPink,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                     Text(
                         text = track.format,
                         fontSize = 10.sp,
-                        color = TextMuted
+                        color = TextMuted,
+                        maxLines = 1,
+                        softWrap = false
                     )
                     MetadataProvenanceBadge(track = track, compact = true)
                 }

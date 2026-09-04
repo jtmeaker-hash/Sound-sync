@@ -39,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -138,6 +139,7 @@ fun DjMiniPlayer(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(72.dp)
+                .clip(RoundedCornerShape(topStart = 15.dp, topEnd = 15.dp))
         ) {
             // Live Mini Waveform / Progress Strip
             MiniWaveformProgressStrip(
@@ -150,6 +152,7 @@ fun DjMiniPlayer(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(16.dp)
+                    .clip(RoundedCornerShape(topStart = 15.dp, topEnd = 15.dp))
             )
 
             Row(
@@ -322,6 +325,7 @@ private fun MiniWaveformProgressStrip(
 ) {
     Box(
         modifier = modifier
+            .clipToBounds()
             .background(Color(0xFF090B10))
             .pointerInput(durationMs) {
                 detectTapGestures { offset ->
@@ -426,6 +430,7 @@ private fun ProDjMiniPlayer(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(70.dp)
+                .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
         ) {
             // Live Mini Waveform Strip (fixed 14dp height)
             MiniWaveformProgressStrip(
@@ -438,6 +443,7 @@ private fun ProDjMiniPlayer(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(14.dp)
+                    .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
             )
 
             Row(
