@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MusicNote
@@ -40,6 +41,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.LocalCategory
 import com.example.ui.MainDjViewModel
+import com.example.ui.components.AudioQualityDialog
+import com.example.ui.components.MixWithThisDialog
+import com.example.ui.components.ParametricEqDialog
+import com.example.ui.components.QueueBottomSheet
+import com.example.ui.library.SmartCratesScreen
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DjObsidian
 import com.example.ui.theme.DjSurfaceBorder
@@ -75,6 +81,11 @@ fun LocalLibraryScreen(
     val showAddToPlaylistSheet by viewModel.showAddToPlaylistSheet.collectAsState()
     val showCreatePlaylistDialog by viewModel.showCreatePlaylistDialog.collectAsState()
 
+    val showQueueBottomSheet by viewModel.showQueueBottomSheet.collectAsState()
+    val showParametricEqDialog by viewModel.showParametricEqDialog.collectAsState()
+    val mixWithThisTrack by viewModel.mixWithThisTrack.collectAsState()
+    val inspectQualityTrack by viewModel.inspectQualityTrack.collectAsState()
+
     // Add to Playlist bottom sheet
     if (showAddToPlaylistSheet != null) {
         AddToPlaylistSheet(
@@ -101,6 +112,43 @@ fun LocalLibraryScreen(
                 viewModel.createPlaylist(name, initialTracks, exportToRockbox)
             },
             onDismiss = { viewModel.closeCreatePlaylistDialog() }
+        )
+    }
+
+    // Queue Bottom Sheet
+    if (showQueueBottomSheet) {
+        QueueBottomSheet(
+            queueManager = viewModel.persistentQueueManager,
+            onPlayTrack = { track -> viewModel.playTrack(track) },
+            onSaveQueueAsPlaylist = { name -> viewModel.saveQueueAsPlaylist(name) },
+            onDismiss = { viewModel.closeQueueBottomSheet() }
+        )
+    }
+
+    // Parametric EQ Dialog
+    if (showParametricEqDialog) {
+        ParametricEqDialog(
+            eqManager = viewModel.parametricEqManager,
+            onDismiss = { viewModel.closeParametricEqDialog() }
+        )
+    }
+
+    // Mix With This Dialog
+    if (mixWithThisTrack != null) {
+        MixWithThisDialog(
+            currentTrack = mixWithThisTrack!!,
+            allTracks = allTracks,
+            onPlayTrack = { track -> viewModel.playTrack(track) },
+            onQueueTrack = { track -> viewModel.queueTrack(track, false) },
+            onDismiss = { viewModel.closeMixWithThis() }
+        )
+    }
+
+    // Audio Quality Inspector Dialog
+    if (inspectQualityTrack != null) {
+        AudioQualityDialog(
+            track = inspectQualityTrack!!,
+            onDismiss = { viewModel.closeAudioQualityInspector() }
         )
     }
 
@@ -209,7 +257,9 @@ fun LocalLibraryScreen(
                             onInspectProperties = { track -> viewModel.openTrackProperties(track) },
                             onInspectSpectrogram = { track -> viewModel.inspectTrackSpectrogram(track, showTab = true) },
                             onStartScan = { viewModel.scanDeviceMediaStore() },
-                            onBulkEditTracks = { tracks -> viewModel.openBulkEditor(tracks) }
+                            onBulkEditTracks = { tracks -> viewModel.openBulkEditor(tracks) },
+                            onMixWithThis = { track -> viewModel.openMixWithThis(track) },
+                            onInspectQuality = { track -> viewModel.openAudioQualityInspector(track) }
                         )
                     }
                     LocalCategory.ALBUMS -> {
@@ -234,6 +284,14 @@ fun LocalLibraryScreen(
                             onRenamePlaylist = { playlist, newName -> viewModel.renamePlaylist(playlist.id, newName) },
                             onDeletePlaylist = { playlist -> viewModel.deletePlaylist(playlist.id) },
                             onExportToRockbox = { playlist -> viewModel.exportPlaylistToRockbox(playlist.id) }
+                        )
+                    }
+                    LocalCategory.SMART_CRATES -> {
+                        SmartCratesScreen(
+                            smartCrateManager = viewModel.smartCrateManager,
+                            allTracks = allTracks,
+                            onPlayTrack = { track -> viewModel.playTrack(track) },
+                            onQueueTrack = { track -> viewModel.queueTrack(track, false) }
                         )
                     }
                     LocalCategory.FOLDERS -> {
@@ -315,6 +373,7 @@ private fun CategorySelectorBar(
                                     LocalCategory.ALBUMS -> Icons.Default.Album
                                     LocalCategory.ARTISTS -> Icons.Default.Person
                                     LocalCategory.PLAYLISTS -> Icons.Default.QueueMusic
+                                    LocalCategory.SMART_CRATES -> Icons.Default.AutoAwesome
                                     LocalCategory.FOLDERS -> Icons.Default.Folder
                                 },
                                 contentDescription = null,

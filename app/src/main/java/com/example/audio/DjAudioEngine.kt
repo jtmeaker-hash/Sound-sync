@@ -285,6 +285,18 @@ class DjAudioEngine(private val context: Context) {
     private val _liveClippedSampleCount = MutableStateFlow(0L)
     val liveClippedSampleCount = _liveClippedSampleCount.asStateFlow()
 
+    val persistentQueueManager = com.example.player.PersistentQueueManager.getInstance(context)
+    val parametricEqManager = ParametricEqManager.getInstance(context)
+
+    private val playerPrefs = context.getSharedPreferences("soundsync_player_prefs", Context.MODE_PRIVATE)
+    private val _isGaplessPlaybackEnabled = MutableStateFlow(playerPrefs.getBoolean("gapless_playback_enabled", true))
+    val isGaplessPlaybackEnabled = _isGaplessPlaybackEnabled.asStateFlow()
+
+    fun setGaplessPlaybackEnabled(enabled: Boolean) {
+        _isGaplessPlaybackEnabled.value = enabled
+        playerPrefs.edit().putBoolean("gapless_playback_enabled", enabled).apply()
+    }
+
     @Volatile private var lastMetricsPublishTimeMs: Long = 0L
 
     fun resetClippingDetector() {
@@ -875,11 +887,10 @@ class DjAudioEngine(private val context: Context) {
                             if (filled > 0 && generationGate.isCurrent(session)) {
                                 val currentPtsMs = (renderedPositionUs / 1000L).coerceIn(0L, durationMs)
 
-                                // ── Crossfade late prep ─────────────────
-                                if (crossfadeDurationMs > 0L && _activeLoopBars.value == 0 &&
-                                    !crossfadeDecoderPrepared && !crossfadeStarted &&
-                                    currentPtsMs >= (durationMs - crossfadeDurationMs * 3).coerceAtLeast(0L)
-                                ) {
+                                // ── Crossfade / Gapless late prep ─────────────────
+                                val needPreload = (crossfadeDurationMs > 0L && currentPtsMs >= (durationMs - crossfadeDurationMs * 3).coerceAtLeast(0L)) ||
+                                        (_isGaplessPlaybackEnabled.value && currentPtsMs >= (durationMs - 3000L).coerceAtLeast(0L))
+                                if (_activeLoopBars.value == 0 && !crossfadeDecoderPrepared && !crossfadeStarted && needPreload) {
                                     val candidate = onNextTrackProvider?.invoke()
                                     if (candidate != null && candidate.id != track.id && isUriAccessible(candidate.filePath)) {
                                         runCatching {
@@ -945,10 +956,12 @@ class DjAudioEngine(private val context: Context) {
                                 }
 
                                 // ── Apply DSP chain ────────────────────
-                                if (_eqEnabled.value) {
+                                if (_eqEnabled.value && parametricEqManager.isEqEnabled.value) {
                                     dspEq.lowGain = _eqLow.value
                                     dspEq.midGain = _eqMid.value
                                     dspEq.highGain = _eqHigh.value
+                                    dspEq.setBands(parametricEqManager.currentBands.value)
+                                    dspEq.preampDb = parametricEqManager.preampDb.value
                                     dspEq.processStereo(pcmStereo, 0, filled)
                                 }
                                 if (haasEffect.isActive) {
@@ -1029,10 +1042,12 @@ class DjAudioEngine(private val context: Context) {
                     val nextFrames = (nextPcm?.size ?: 0) / 2
                     if (nextFrames > 0) {
                         System.arraycopy(nextPcm!!, 0, pcmStereo, 0, nextFrames * 2)
-                        if (_eqEnabled.value) {
+                        if (_eqEnabled.value && parametricEqManager.isEqEnabled.value) {
                             dspEq.lowGain = _eqLow.value
                             dspEq.midGain = _eqMid.value
                             dspEq.highGain = _eqHigh.value
+                            dspEq.setBands(parametricEqManager.currentBands.value)
+                            dspEq.preampDb = parametricEqManager.preampDb.value
                             dspEq.processStereo(pcmStereo, 0, nextFrames)
                         }
                         if (haasEffect.isActive) haasEffect.process(pcmStereo, 0, nextFrames, sampleRate)
@@ -1052,16 +1067,30 @@ class DjAudioEngine(private val context: Context) {
                     crossfadeNextDecoder = null
                 }
 
-                // ── Track completion ────────────────────────────────────
-                if (inputEos && outputEos && generationGate.isCurrent(session) && !completionInFlight) {
-                    completionInFlight = true
-                    _isPlaying.value = false
-                    decoderShouldPause = true
-                    runCatching { if (at.playState == AudioTrack.PLAYSTATE_PLAYING) at.pause() }
-                    publishThrottledPosition(durationMs, durationMs, force = true)
-                    runCatching { com.example.service.PlaybackStatsTracker.getInstance(context).onTrackCompletedNormally() }
-                    onNextTrackCallback?.invoke()
-                    break
+                // ── Seamless Gapless Transition or Track completion ─────
+                if (inputEos && outputEos && generationGate.isCurrent(session)) {
+                    if (_isGaplessPlaybackEnabled.value && crossfadeNextDecoder != null && crossfadeNextTrack != null && !crossfadeStarted) {
+                        crossfadeStarted = true
+                        val nextTrack = crossfadeNextTrack
+                        if (nextTrack != null) {
+                            _currentTrack.value = nextTrack
+                            internalPositionMs = 0L
+                            publishThrottledPosition(0L, nextTrack.durationSeconds.coerceAtLeast(1) * 1000L, force = true)
+                            onTrackStartedCallback?.invoke(nextTrack)
+                            continue
+                        }
+                    }
+
+                    if (!completionInFlight) {
+                        completionInFlight = true
+                        _isPlaying.value = false
+                        decoderShouldPause = true
+                        runCatching { if (at.playState == AudioTrack.PLAYSTATE_PLAYING) at.pause() }
+                        publishThrottledPosition(durationMs, durationMs, force = true)
+                        runCatching { com.example.service.PlaybackStatsTracker.getInstance(context).onTrackCompletedNormally() }
+                        onNextTrackCallback?.invoke()
+                        break
+                    }
                 }
             }
         } catch (e: Exception) {

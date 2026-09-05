@@ -81,6 +81,7 @@ enum class LocalCategory(val label: String, val iconName: String) {
     ALBUMS("Albums", "album"),
     ARTISTS("Artists", "person"),
     PLAYLISTS("Playlists", "queue_music"),
+    SMART_CRATES("Smart Crates", "auto_awesome"),
     FOLDERS("Folders", "folder")
 }
 
@@ -301,9 +302,43 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _showCreatePlaylistDialog = MutableStateFlow(false)
     val showCreatePlaylistDialog = _showCreatePlaylistDialog.asStateFlow()
 
+    // Step 2 Core Managers
+    val persistentQueueManager = com.example.player.PersistentQueueManager.getInstance(application)
+    val parametricEqManager = com.example.audio.ParametricEqManager.getInstance(application)
+    val smartCrateManager = com.example.smartcrate.SmartCrateManager.getInstance(application)
+
     // Playback Queue
     val playbackQueue = MutableStateFlow<List<Track>>(emptyList())
     val queueIndex = MutableStateFlow(0)
+
+    // Step 2 UI Dialog States
+    private val _showQueueBottomSheet = MutableStateFlow(false)
+    val showQueueBottomSheet = _showQueueBottomSheet.asStateFlow()
+    fun openQueueBottomSheet() { _showQueueBottomSheet.value = true }
+    fun closeQueueBottomSheet() { _showQueueBottomSheet.value = false }
+
+    private val _showParametricEqDialog = MutableStateFlow(false)
+    val showParametricEqDialog = _showParametricEqDialog.asStateFlow()
+    fun openParametricEqDialog() { _showParametricEqDialog.value = true }
+    fun closeParametricEqDialog() { _showParametricEqDialog.value = false }
+
+    private val _mixWithThisTrack = MutableStateFlow<Track?>(null)
+    val mixWithThisTrack = _mixWithThisTrack.asStateFlow()
+    fun openMixWithThis(track: Track) { _mixWithThisTrack.value = track }
+    fun closeMixWithThis() { _mixWithThisTrack.value = null }
+
+    private val _inspectQualityTrack = MutableStateFlow<Track?>(null)
+    val inspectQualityTrack = _inspectQualityTrack.asStateFlow()
+    fun openAudioQualityInspector(track: Track) { _inspectQualityTrack.value = track }
+    fun closeAudioQualityInspector() { _inspectQualityTrack.value = null }
+
+    fun saveQueueAsPlaylist(name: String, onComplete: ((String) -> Unit)? = null) {
+        viewModelScope.launch {
+            val id = persistentQueueManager.saveQueueAsPlaylist(db, name)
+            showSnackbar("Queue saved as playlist '$name'")
+            onComplete?.invoke(id)
+        }
+    }
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()

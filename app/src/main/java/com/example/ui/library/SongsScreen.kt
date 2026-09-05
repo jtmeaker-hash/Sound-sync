@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudOff
@@ -143,7 +144,9 @@ fun SongsScreen(
     onInspectProperties: (Track) -> Unit,
     onInspectSpectrogram: (Track) -> Unit,
     onStartScan: () -> Unit,
-    onBulkEditTracks: ((List<Track>) -> Unit)? = null
+    onBulkEditTracks: ((List<Track>) -> Unit)? = null,
+    onMixWithThis: ((Track) -> Unit)? = null,
+    onInspectQuality: ((Track) -> Unit)? = null
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SongSortMode.TITLE_ASC) }
@@ -482,7 +485,9 @@ fun SongsScreen(
                         onAddToPlaylist = { onAddToPlaylist(track) },
                         onQueueTrack = { playNext -> onQueueTrack(track, playNext) },
                         onInspectProperties = { onInspectProperties(track) },
-                        onInspectSpectrogram = { onInspectSpectrogram(track) }
+                        onInspectSpectrogram = { onInspectSpectrogram(track) },
+                        onMixWithThis = onMixWithThis?.let { fn -> { fn(track) } },
+                        onInspectQuality = onInspectQuality?.let { fn -> { fn(track) } }
                     )
                 }
             }
@@ -504,7 +509,9 @@ fun SongTrackRow(
     onAddToPlaylist: () -> Unit,
     onQueueTrack: (playNext: Boolean) -> Unit,
     onInspectProperties: () -> Unit,
-    onInspectSpectrogram: () -> Unit
+    onInspectSpectrogram: () -> Unit,
+    onMixWithThis: (() -> Unit)? = null,
+    onInspectQuality: (() -> Unit)? = null
 ) {
     if (SoundSyncTheme.isPro) {
         ProSongTrackRow(
@@ -519,7 +526,9 @@ fun SongTrackRow(
             onAddToPlaylist = onAddToPlaylist,
             onQueueTrack = onQueueTrack,
             onInspectProperties = onInspectProperties,
-            onInspectSpectrogram = onInspectSpectrogram
+            onInspectSpectrogram = onInspectSpectrogram,
+            onMixWithThis = onMixWithThis,
+            onInspectQuality = onInspectQuality
         )
         return
     }
@@ -824,6 +833,26 @@ fun SongTrackRow(
                                 onInspectSpectrogram()
                             }
                         )
+                        if (onMixWithThis != null) {
+                            DropdownMenuItem(
+                                text = { Text("Mix With This", color = TextPrimary) },
+                                leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = DeckACyan) },
+                                onClick = {
+                                    showMenu = false
+                                    onMixWithThis()
+                                }
+                            )
+                        }
+                        if (onInspectQuality != null) {
+                            DropdownMenuItem(
+                                text = { Text("Inspect Quality", color = TextPrimary) },
+                                leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = NeonGreen) },
+                                onClick = {
+                                    showMenu = false
+                                    onInspectQuality()
+                                }
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Track Inspector", color = DeckACyan, fontWeight = FontWeight.SemiBold) },
                             leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = DeckACyan) },
@@ -1030,7 +1059,9 @@ private fun ProSongTrackRow(
     onAddToPlaylist: () -> Unit,
     onQueueTrack: (playNext: Boolean) -> Unit,
     onInspectProperties: () -> Unit,
-    onInspectSpectrogram: () -> Unit
+    onInspectSpectrogram: () -> Unit,
+    onMixWithThis: (() -> Unit)? = null,
+    onInspectQuality: (() -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val theme = SoundSyncTheme.current
@@ -1287,6 +1318,26 @@ private fun ProSongTrackRow(
                                 onInspectSpectrogram()
                             }
                         )
+                        if (onMixWithThis != null) {
+                            DropdownMenuItem(
+                                text = { Text("Mix With This", color = theme.textPrimary) },
+                                leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = theme.accent) },
+                                onClick = {
+                                    showMenu = false
+                                    onMixWithThis()
+                                }
+                            )
+                        }
+                        if (onInspectQuality != null) {
+                            DropdownMenuItem(
+                                text = { Text("Inspect Quality", color = theme.textPrimary) },
+                                leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = Color(0xFF30D158)) },
+                                onClick = {
+                                    showMenu = false
+                                    onInspectQuality()
+                                }
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Track Inspector", color = theme.accent, fontWeight = FontWeight.SemiBold) },
                             leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = theme.accent) },

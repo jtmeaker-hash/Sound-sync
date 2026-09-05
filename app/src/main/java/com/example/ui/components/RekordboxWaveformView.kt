@@ -265,6 +265,62 @@ fun RekordboxWaveformView(
                             proVariant = proVariant
                         )
                     }
+                    WaveformStyle.FREQUENCY_COLOURED -> {
+                        drawDetailedScrollingWaveform(
+                            waveformData = validWaveformData,
+                            currentPositionMs = effectivePositionFloatMs,
+                            durationMs = safeDurationMs,
+                            visibleWindowSeconds = visibleWindowSeconds,
+                            trackBpm = track.bpm,
+                            textMeasurer = textMeasurer,
+                            is3BandProColoring = true,
+                            proVariant = proVariant
+                        )
+                    }
+                    WaveformStyle.CLASSIC_AMPLITUDE -> {
+                        drawClassicAmplitudeScrollingWaveform(
+                            waveformData = validWaveformData,
+                            currentPositionMs = effectivePositionFloatMs,
+                            durationMs = safeDurationMs,
+                            visibleWindowSeconds = visibleWindowSeconds,
+                            trackBpm = track.bpm,
+                            textMeasurer = textMeasurer,
+                            proVariant = proVariant
+                        )
+                    }
+                    WaveformStyle.SPECTRUM_INSPIRED -> {
+                        drawSpectrumInspiredScrollingWaveform(
+                            waveformData = validWaveformData,
+                            currentPositionMs = effectivePositionFloatMs,
+                            durationMs = safeDurationMs,
+                            visibleWindowSeconds = visibleWindowSeconds,
+                            trackBpm = track.bpm,
+                            textMeasurer = textMeasurer,
+                            proVariant = proVariant
+                        )
+                    }
+                    WaveformStyle.DJ_OVERVIEW -> {
+                        drawDjOverviewScrollingWaveform(
+                            waveformData = validWaveformData,
+                            currentPositionMs = effectivePositionFloatMs,
+                            durationMs = safeDurationMs,
+                            visibleWindowSeconds = visibleWindowSeconds,
+                            trackBpm = track.bpm,
+                            textMeasurer = textMeasurer,
+                            proVariant = proVariant
+                        )
+                    }
+                    WaveformStyle.MINIMAL -> {
+                        drawMinimalScrollingWaveform(
+                            waveformData = validWaveformData,
+                            currentPositionMs = effectivePositionFloatMs,
+                            durationMs = safeDurationMs,
+                            visibleWindowSeconds = visibleWindowSeconds,
+                            trackBpm = track.bpm,
+                            textMeasurer = textMeasurer,
+                            proVariant = proVariant
+                        )
+                    }
                 }
             }
 
@@ -1160,8 +1216,16 @@ private fun WaveformBottomToolbar(
                     )
                 }
 
-                // Waveform Style Mode Badge (Clickable to switch between Retro and Detailed)
-                val badgeColor = if (isPro) accent else (if (waveformStyle == WaveformStyle.DETAILED) DeckACyan else NeonAmber)
+                // Waveform Style Mode Badge (Clickable to switch between styles)
+                val badgeColor = if (isPro) accent else when (waveformStyle) {
+                    WaveformStyle.DETAILED -> DeckACyan
+                    WaveformStyle.RETRO -> NeonAmber
+                    WaveformStyle.CLASSIC_AMPLITUDE -> Color(0xFF64B5F6)
+                    WaveformStyle.FREQUENCY_COLOURED -> Color(0xFFFF5252)
+                    WaveformStyle.SPECTRUM_INSPIRED -> Color(0xFFE040FB)
+                    WaveformStyle.DJ_OVERVIEW -> Color(0xFFFFD600)
+                    WaveformStyle.MINIMAL -> Color(0xFFB0BEC5)
+                }
                 Surface(
                     shape = RoundedCornerShape(4.dp),
                     color = badgeColor.copy(alpha = 0.18f),
@@ -1179,7 +1243,7 @@ private fun WaveformBottomToolbar(
                         .testTag("toggle_waveform_style_badge")
                 ) {
                     Text(
-                        text = if (waveformStyle == WaveformStyle.DETAILED) "DETAILED" else "RETRO",
+                        text = waveformStyle.shortName.uppercase(),
                         color = badgeColor,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Black,
@@ -1225,3 +1289,228 @@ private fun WaveformBottomToolbar(
         }
     }
 }
+
+private fun DrawScope.drawClassicAmplitudeScrollingWaveform(
+    waveformData: WaveformData?,
+    currentPositionMs: Float,
+    durationMs: Long,
+    visibleWindowSeconds: Float,
+    trackBpm: Double,
+    textMeasurer: TextMeasurer,
+    proVariant: ProDarkVariant? = null
+) {
+    val width = size.width
+    val height = size.height
+    val centerY = height / 2f
+    val centerX = width / 2f
+    val maxPeakHeight = centerY * 0.90f
+
+    // Draw center line
+    drawLine(
+        color = Color(0x3364B5F6),
+        start = Offset(0f, centerY),
+        end = Offset(width, centerY),
+        strokeWidth = 1f
+    )
+
+    if (durationMs <= 0 || waveformData == null || waveformData.samplePoints <= 0) return
+
+    val msPerPixel = (visibleWindowSeconds * 1000f) / width
+    val totalSamples = waveformData.samplePoints
+    val msPerSample = durationMs.toFloat() / totalSamples.toFloat()
+
+    val barWidth = 2.0f
+    val stepPx = 2.5f
+    val barsCount = (width / stepPx).toInt()
+
+    for (b in 0 until barsCount) {
+        val screenX = b * stepPx
+        val targetMs = currentPositionMs + ((screenX - centerX) * msPerPixel)
+        if (targetMs < 0 || targetMs > durationMs) continue
+
+        val sampleIdx = (targetMs / msPerSample).toInt().coerceIn(0, totalSamples - 1)
+        val peak = waveformData.peaks.getOrElse(sampleIdx) { 0f }
+        val barHalfHeight = (peak * maxPeakHeight).coerceAtLeast(1.5f)
+
+        val isPast = screenX <= centerX
+        val color = if (isPast) Color(0xFF64B5F6) else Color(0xFF90CAF9).copy(alpha = 0.55f)
+
+        drawLine(
+            color = color,
+            start = Offset(screenX, centerY - barHalfHeight),
+            end = Offset(screenX, centerY + barHalfHeight),
+            strokeWidth = barWidth
+        )
+    }
+}
+
+private fun DrawScope.drawSpectrumInspiredScrollingWaveform(
+    waveformData: WaveformData?,
+    currentPositionMs: Float,
+    durationMs: Long,
+    visibleWindowSeconds: Float,
+    trackBpm: Double,
+    textMeasurer: TextMeasurer,
+    proVariant: ProDarkVariant? = null
+) {
+    val width = size.width
+    val height = size.height
+    val centerY = height / 2f
+    val centerX = width / 2f
+    val maxPeakHeight = centerY * 0.90f
+
+    if (durationMs <= 0 || waveformData == null || waveformData.samplePoints <= 0) return
+
+    val msPerPixel = (visibleWindowSeconds * 1000f) / width
+    val totalSamples = waveformData.samplePoints
+    val msPerSample = durationMs.toFloat() / totalSamples.toFloat()
+
+    val stepPx = 3f
+    val barsCount = (width / stepPx).toInt()
+
+    for (b in 0 until barsCount) {
+        val screenX = b * stepPx
+        val targetMs = currentPositionMs + ((screenX - centerX) * msPerPixel)
+        if (targetMs < 0 || targetMs > durationMs) continue
+
+        val sampleIdx = (targetMs / msPerSample).toInt().coerceIn(0, totalSamples - 1)
+        val low = waveformData.lowBand.getOrElse(sampleIdx) { 0f }
+        val mid = waveformData.midBand.getOrElse(sampleIdx) { 0f }
+        val high = waveformData.highBand.getOrElse(sampleIdx) { 0f }
+        val peak = waveformData.peaks.getOrElse(sampleIdx) { 0f }
+
+        val isPast = screenX <= centerX
+        val alpha = if (isPast) 0.95f else 0.45f
+
+        // Stacked spectral layers: Bass inner, Mids middle, Highs outer
+        val lowH = (low * maxPeakHeight * 0.5f).coerceAtLeast(1f)
+        val midH = (mid * maxPeakHeight * 0.75f).coerceAtLeast(lowH)
+        val highH = (peak * maxPeakHeight).coerceAtLeast(midH)
+
+        // Outer (Highs - Cyan/Purple)
+        drawLine(
+            color = Color(0xFFE040FB).copy(alpha = alpha * 0.8f),
+            start = Offset(screenX, centerY - highH),
+            end = Offset(screenX, centerY + highH),
+            strokeWidth = 2.2f
+        )
+        // Middle (Mids - Amber)
+        drawLine(
+            color = Color(0xFFFF9100).copy(alpha = alpha * 0.9f),
+            start = Offset(screenX, centerY - midH),
+            end = Offset(screenX, centerY + midH),
+            strokeWidth = 2.2f
+        )
+        // Inner (Lows - Deep Blue/Red)
+        drawLine(
+            color = Color(0xFF00E5FF).copy(alpha = alpha),
+            start = Offset(screenX, centerY - lowH),
+            end = Offset(screenX, centerY + lowH),
+            strokeWidth = 2.2f
+        )
+    }
+}
+
+private fun DrawScope.drawDjOverviewScrollingWaveform(
+    waveformData: WaveformData?,
+    currentPositionMs: Float,
+    durationMs: Long,
+    visibleWindowSeconds: Float,
+    trackBpm: Double,
+    textMeasurer: TextMeasurer,
+    proVariant: ProDarkVariant? = null
+) {
+    val width = size.width
+    val height = size.height
+    val centerY = height / 2f
+    val centerX = width / 2f
+    val maxPeakHeight = centerY * 0.92f
+
+    if (durationMs <= 0 || waveformData == null || waveformData.samplePoints <= 0) return
+
+    val msPerPixel = (visibleWindowSeconds * 1000f) / width
+    val totalSamples = waveformData.samplePoints
+    val msPerSample = durationMs.toFloat() / totalSamples.toFloat()
+
+    val stepPx = 2f
+    val barsCount = (width / stepPx).toInt()
+
+    for (b in 0 until barsCount) {
+        val screenX = b * stepPx
+        val targetMs = currentPositionMs + ((screenX - centerX) * msPerPixel)
+        if (targetMs < 0 || targetMs > durationMs) continue
+
+        val sampleIdx = (targetMs / msPerSample).toInt().coerceIn(0, totalSamples - 1)
+        val peak = waveformData.peaks.getOrElse(sampleIdx) { 0f }
+        val low = waveformData.lowBand.getOrElse(sampleIdx) { 0f }
+        val barHalfHeight = (peak * maxPeakHeight).coerceAtLeast(1.5f)
+
+        val isPast = screenX <= centerX
+        val color = if (isPast) {
+            if (low > 0.5f) Color(0xFFFFD600) else Color(0xFF00E5FF)
+        } else {
+            Color(0xFF37474F)
+        }
+
+        drawLine(
+            color = color,
+            start = Offset(screenX, centerY - barHalfHeight),
+            end = Offset(screenX, centerY + barHalfHeight),
+            strokeWidth = 1.8f
+        )
+    }
+}
+
+private fun DrawScope.drawMinimalScrollingWaveform(
+    waveformData: WaveformData?,
+    currentPositionMs: Float,
+    durationMs: Long,
+    visibleWindowSeconds: Float,
+    trackBpm: Double,
+    textMeasurer: TextMeasurer,
+    proVariant: ProDarkVariant? = null
+) {
+    val width = size.width
+    val height = size.height
+    val centerY = height / 2f
+    val centerX = width / 2f
+    val maxPeakHeight = centerY * 0.70f
+
+    // Clean center axis line
+    drawLine(
+        color = Color(0x22B0BEC5),
+        start = Offset(0f, centerY),
+        end = Offset(width, centerY),
+        strokeWidth = 1f
+    )
+
+    if (durationMs <= 0 || waveformData == null || waveformData.samplePoints <= 0) return
+
+    val msPerPixel = (visibleWindowSeconds * 1000f) / width
+    val totalSamples = waveformData.samplePoints
+    val msPerSample = durationMs.toFloat() / totalSamples.toFloat()
+
+    val stepPx = 3f
+    val barsCount = (width / stepPx).toInt()
+
+    for (b in 0 until barsCount) {
+        val screenX = b * stepPx
+        val targetMs = currentPositionMs + ((screenX - centerX) * msPerPixel)
+        if (targetMs < 0 || targetMs > durationMs) continue
+
+        val sampleIdx = (targetMs / msPerSample).toInt().coerceIn(0, totalSamples - 1)
+        val peak = waveformData.peaks.getOrElse(sampleIdx) { 0f }
+        val barHalfHeight = (peak * maxPeakHeight).coerceAtLeast(1.0f)
+
+        val isPast = screenX <= centerX
+        val color = if (isPast) Color(0xFFECEFF1) else Color(0xFF546E7A).copy(alpha = 0.5f)
+
+        drawLine(
+            color = color,
+            start = Offset(screenX, centerY - barHalfHeight),
+            end = Offset(screenX, centerY + barHalfHeight),
+            strokeWidth = 1.4f
+        )
+    }
+}
+
