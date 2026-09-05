@@ -363,9 +363,10 @@ fun CarModeSettingsScreen(
 
 @Composable
 private fun SectionHeader(title: String) {
+    val theme = LocalSoundSyncTheme.current
     Text(
         text = title,
-        color = Color(0xFF1E6CFF),
+        color = theme.accent,
         fontSize = 12.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = 1.sp,
@@ -378,6 +379,7 @@ private fun AddCarDeviceDialog(
     onDismiss: () -> Unit,
     onAddDevice: (String, String) -> Unit
 ) {
+    val theme = LocalSoundSyncTheme.current
     val context = LocalContext.current
     var customAddress by remember { mutableStateOf("") }
     var customName by remember { mutableStateOf("") }
@@ -426,7 +428,7 @@ private fun AddCarDeviceDialog(
                                     Text(name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                     Text(addr, color = Color(0xFF8E95A2), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                                 }
-                                Icon(Icons.Default.Add, contentDescription = null, tint = Color(0xFF1E6CFF))
+                                Icon(Icons.Default.Add, contentDescription = null, tint = theme.accent)
                             }
                         }
                     }
@@ -463,7 +465,10 @@ private fun AddCarDeviceDialog(
                             onAddDevice(customAddress, customName.ifBlank { "Vehicle" })
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E6CFF))
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = theme.accent,
+                        contentColor = theme.onAccent
+                    )
                 ) {
                     Text("Save Device")
                 }
@@ -508,7 +513,8 @@ private fun DrivingHistoryDialog(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text(session.carName, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    Text("${durationMinutes}m", color = Color(0xFF1E6CFF), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    val theme = LocalSoundSyncTheme.current
+                                    Text("${durationMinutes}m", color = theme.accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
                                 Text(dateFormat.format(Date(session.startedAt)), color = Color(0xFF8E95A2), fontSize = 11.sp)
                                 Text("${session.tracksPlayedCount} tracks played • ${session.tracksSkippedCount} skipped", color = Color(0xFF8E95A2), fontSize = 12.sp)
@@ -519,8 +525,9 @@ private fun DrivingHistoryDialog(
             }
         },
         confirmButton = {
+            val theme = LocalSoundSyncTheme.current
             TextButton(onClick = onDismiss) {
-                Text("Done", color = Color(0xFF1E6CFF), fontWeight = FontWeight.Bold)
+                Text("Done", color = theme.accent, fontWeight = FontWeight.Bold)
             }
         }
     )
@@ -536,6 +543,7 @@ private fun CarBluetoothDiagnosticsDialog(
     val isCarActive by carModeManager.isCarModeActive.collectAsState()
     val isPlaying by audioEngine.isPlaying.collectAsState()
     val currentTrack by audioEngine.currentTrack.collectAsState()
+    val theme = LocalSoundSyncTheme.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -554,7 +562,7 @@ private fun CarBluetoothDiagnosticsDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close", color = Color(0xFF1E6CFF), fontWeight = FontWeight.Bold)
+                Text("Close", color = theme.accent, fontWeight = FontWeight.Bold)
             }
         }
     )

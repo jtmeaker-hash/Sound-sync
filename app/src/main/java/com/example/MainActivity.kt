@@ -60,9 +60,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: MainDjViewModel = viewModel()
             val themeMode by viewModel.themeMode.collectAsState()
+            val proDarkVariant by viewModel.proDarkVariant.collectAsState()
             val libraryDensity by viewModel.libraryDensity.collectAsState()
 
-            SoundSyncTheme(themeMode = themeMode, libraryDensity = libraryDensity) {
+            SoundSyncTheme(
+                themeMode = themeMode,
+                proDarkVariant = proDarkVariant,
+                libraryDensity = libraryDensity
+            ) {
                 activeViewModel = viewModel
 
                 val isCarModeActive by viewModel.carModeManager.isCarModeActive.collectAsState()

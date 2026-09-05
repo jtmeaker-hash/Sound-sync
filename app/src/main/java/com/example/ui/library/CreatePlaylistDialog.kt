@@ -40,6 +40,7 @@ import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceCard
 import com.example.ui.theme.DjSurfaceElevated
 import com.example.ui.theme.NeonGreen
+import com.example.ui.theme.SoundSyncTheme
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -55,11 +56,20 @@ fun CreatePlaylistDialog(
     var playlistName by remember { mutableStateOf(initialName) }
     var exportToRockbox by remember { mutableStateOf(true) }
 
+    val theme = SoundSyncTheme.current
+    val isPro = SoundSyncTheme.isPro
+    val accent = if (isPro) theme.accent else DeckACyan
+    val onAccent = if (isPro) theme.onAccent else DjObsidian
+    val containerColor = if (isPro) theme.surfaceElevated else DjSurfaceCard
+    val borderColor = if (isPro) theme.divider else DjSurfaceBorder
+    val dialogCorner = if (isPro) theme.cornerMedium else 16.dp
+    val buttonCorner = if (isPro) theme.cornerSmall else 8.dp
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = DjSurfaceCard,
-            border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+            shape = RoundedCornerShape(dialogCorner),
+            color = containerColor,
+            border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("create_playlist_dialog")
@@ -76,7 +86,7 @@ fun CreatePlaylistDialog(
                     Icon(
                         imageVector = Icons.Default.QueueMusic,
                         contentDescription = null,
-                        tint = DeckACyan
+                        tint = accent
                     )
                     Text(
                         text = titleText,
@@ -95,11 +105,11 @@ fun CreatePlaylistDialog(
                     placeholder = { Text("e.g. Summer Festival Mix", color = TextMuted) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = DeckACyan,
-                        unfocusedBorderColor = DjSurfaceBorder,
+                        focusedBorderColor = accent,
+                        unfocusedBorderColor = borderColor,
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
-                        cursorColor = DeckACyan
+                        cursorColor = accent
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -118,9 +128,9 @@ fun CreatePlaylistDialog(
                         checked = exportToRockbox,
                         onCheckedChange = { exportToRockbox = it },
                         colors = CheckboxDefaults.colors(
-                            checkedColor = DeckACyan,
-                            checkmarkColor = DjObsidian,
-                            uncheckedColor = DjSurfaceBorder
+                            checkedColor = accent,
+                            checkmarkColor = onAccent,
+                            uncheckedColor = borderColor
                         ),
                         modifier = Modifier.testTag("rockbox_export_checkbox")
                     )
@@ -135,7 +145,7 @@ fun CreatePlaylistDialog(
                         Text(
                             text = "Stored in /Playlists/ with relative pathing",
                             fontSize = 11.sp,
-                            color = NeonGreen
+                            color = if (isPro) theme.accentSecondary else NeonGreen
                         )
                     }
                 }
@@ -149,8 +159,8 @@ fun CreatePlaylistDialog(
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
-                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+                        shape = RoundedCornerShape(buttonCorner),
                         modifier = Modifier.testTag("dialog_cancel_button")
                     ) {
                         Text("Cancel", color = TextSecondary)
@@ -166,10 +176,10 @@ fun CreatePlaylistDialog(
                         },
                         enabled = playlistName.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = DeckACyan,
-                            contentColor = DjObsidian
+                            containerColor = accent,
+                            contentColor = onAccent
                         ),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(buttonCorner),
                         modifier = Modifier.testTag("dialog_confirm_button")
                     ) {
                         Text(confirmButtonText, fontWeight = FontWeight.Bold)

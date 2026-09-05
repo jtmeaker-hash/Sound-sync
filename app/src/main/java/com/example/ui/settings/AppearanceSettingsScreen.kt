@@ -29,8 +29,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.WaveformStyle
+import com.example.ui.theme.BloodRedPrimary
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.NeonAmber
+import com.example.ui.theme.ProDarkVariant
 import com.example.ui.theme.ProLibraryDensity
 import com.example.ui.theme.SoundSyncTheme
 import com.example.ui.theme.TextPrimary
@@ -41,6 +43,8 @@ import com.example.ui.theme.ThemeMode
 fun AppearanceSettingsScreen(
     themeMode: ThemeMode,
     onSetThemeMode: (ThemeMode) -> Unit,
+    proDarkVariant: ProDarkVariant = ProDarkVariant.BLACK_WHITE,
+    onSetProDarkVariant: (ProDarkVariant) -> Unit = {},
     libraryDensity: ProLibraryDensity = ProLibraryDensity.COMPACT,
     onSetLibraryDensity: (ProLibraryDensity) -> Unit = {},
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
@@ -74,7 +78,7 @@ fun AppearanceSettingsScreen(
             ) {
                 Text("SoundSync Appearance & Themes", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Text(
-                    "Switch between the classic SoundSync UI and the professional Rekordbox-inspired desktop UI language.",
+                    "Switch between the classic SoundSync UI and the professional desktop audio workstation UI language.",
                     color = theme.textSecondary,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
@@ -96,13 +100,68 @@ fun AppearanceSettingsScreen(
 
                     AppearanceOptionTile(
                         title = "Pro",
-                        description = "Rekordbox desktop audio language: dark charcoal, graphite panels & cool blue",
+                        description = "Desktop DJ workstation UI: high-density controls, technical typography, and customizable dark variants",
                         selected = isPro,
-                        accent = Color(0xFF1E6CFF),
+                        accent = if (proDarkVariant == ProDarkVariant.BLACK_RED) BloodRedPrimary else Color.White,
                         onClick = { onSetThemeMode(ThemeMode.PRO) },
                         modifier = Modifier.weight(1f),
                         testTag = "appearance_option_pro"
                     )
+                }
+            }
+        }
+
+        // Pro Dark Colour Variant Card (Shown when Pro Theme is selected)
+        if (isPro) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("pro_dark_variant_section_card"),
+                colors = CardDefaults.cardColors(containerColor = theme.surface),
+                shape = RoundedCornerShape(theme.cornerMedium),
+                border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        "Pro Dark Colour Variant",
+                        color = theme.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        "Select the dark appearance variant for the Pro workstation. All variants retain the professional layout, controls, density, waveforms, and DJ tool styling.",
+                        color = theme.textSecondary,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        AppearanceOptionTile(
+                            title = "Black & White",
+                            description = "Monochrome technical dark: pitch-black background with crisp white typography and neutral-grey highlights",
+                            selected = proDarkVariant == ProDarkVariant.BLACK_WHITE,
+                            accent = Color.White,
+                            onClick = { onSetProDarkVariant(ProDarkVariant.BLACK_WHITE) },
+                            modifier = Modifier.weight(1f),
+                            testTag = "pro_variant_option_black_white"
+                        )
+
+                        AppearanceOptionTile(
+                            title = "Black & Red",
+                            description = "SoundSync performance dark: deep black surfaces with vivid crimson red accents and playback indicators",
+                            selected = proDarkVariant == ProDarkVariant.BLACK_RED,
+                            accent = BloodRedPrimary,
+                            onClick = { onSetProDarkVariant(ProDarkVariant.BLACK_RED) },
+                            modifier = Modifier.weight(1f),
+                            testTag = "pro_variant_option_black_red"
+                        )
+                    }
                 }
             }
         }
@@ -137,7 +196,7 @@ fun AppearanceSettingsScreen(
                             title = "Compact",
                             description = "Desktop-style dense rows, maximum visible tracks, small thumbnails, tight padding",
                             selected = libraryDensity == ProLibraryDensity.COMPACT,
-                            accent = Color(0xFF1E6CFF),
+                            accent = theme.accent,
                             onClick = { onSetLibraryDensity(ProLibraryDensity.COMPACT) },
                             modifier = Modifier.weight(1f),
                             testTag = "density_option_compact"
@@ -147,7 +206,7 @@ fun AppearanceSettingsScreen(
                             title = "Comfortable",
                             description = "Slightly taller rows with easier touch targets, still denser than Default theme",
                             selected = libraryDensity == ProLibraryDensity.COMFORTABLE,
-                            accent = Color(0xFF1E6CFF),
+                            accent = theme.accent,
                             onClick = { onSetLibraryDensity(ProLibraryDensity.COMFORTABLE) },
                             modifier = Modifier.weight(1f),
                             testTag = "density_option_comfortable"
@@ -186,7 +245,7 @@ fun AppearanceSettingsScreen(
                         title = "Detailed Waveform",
                         description = "High-resolution multi-band peaks with crisp transient needles & dynamic nuance",
                         selected = waveformStyle == WaveformStyle.DETAILED,
-                        accent = if (isPro) Color(0xFF1E6CFF) else DeckACyan,
+                        accent = if (isPro) theme.accent else DeckACyan,
                         onClick = { onSetWaveformStyle(WaveformStyle.DETAILED) },
                         modifier = Modifier.weight(1f),
                         testTag = "waveform_style_option_detailed"

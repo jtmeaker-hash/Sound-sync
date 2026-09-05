@@ -46,6 +46,7 @@ import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceCard
 import com.example.ui.theme.DjSurfaceDark
 import com.example.ui.theme.DjSurfaceElevated
+import com.example.ui.theme.SoundSyncTheme
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -259,13 +260,22 @@ private fun CategorySelectorBar(
     onSelectCategory: (LocalCategory) -> Unit,
     onOpenFolderExplorer: () -> Unit
 ) {
+    val theme = SoundSyncTheme.current
+    val isPro = SoundSyncTheme.isPro
+    val selectedBg = if (isPro) theme.accent else DeckACyan
+    val selectedContent = if (isPro) theme.onAccent else DjObsidian
+    val unselectedBg = if (isPro) theme.surfaceRaised else DjSurfaceDark
+    val chipCorner = if (isPro) theme.cornerSmall else 8.dp
+    val barCorner = if (isPro) theme.cornerMedium else 12.dp
+    val borderColor = if (isPro) theme.divider else DjSurfaceBorder
+
     Surface(
-        color = DjSurfaceDark,
-        border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+        color = if (isPro) theme.surface else DjSurfaceDark,
+        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(barCorner))
     ) {
         Row(
             modifier = Modifier
@@ -285,8 +295,9 @@ private fun CategorySelectorBar(
                     val isSelected = selectedCategory == category
 
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isSelected) DeckACyan else DjSurfaceDark,
+                        shape = RoundedCornerShape(chipCorner),
+                        color = if (isSelected) selectedBg else unselectedBg,
+                        border = if (isPro && !isSelected) androidx.compose.foundation.BorderStroke(0.5.dp, borderColor) else null,
                         modifier = Modifier
                             .wrapContentWidth()
                             .height(34.dp)
@@ -307,7 +318,7 @@ private fun CategorySelectorBar(
                                     LocalCategory.FOLDERS -> Icons.Default.Folder
                                 },
                                 contentDescription = null,
-                                tint = if (isSelected) DjObsidian else TextSecondary,
+                                tint = if (isSelected) selectedContent else TextSecondary,
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
@@ -315,7 +326,7 @@ private fun CategorySelectorBar(
                                 text = category.label,
                                 fontSize = 11.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) DjObsidian else TextSecondary,
+                                color = if (isSelected) selectedContent else TextSecondary,
                                 maxLines = 1,
                                 softWrap = false
                             )
@@ -331,14 +342,14 @@ private fun CategorySelectorBar(
                 onClick = onOpenFolderExplorer,
                 modifier = Modifier
                     .size(34.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(DjSurfaceElevated)
+                    .clip(RoundedCornerShape(chipCorner))
+                    .background(if (isPro) theme.surfaceElevated else DjSurfaceElevated)
                     .testTag("open_folder_explorer_toggle_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.FolderOpen,
                     contentDescription = "Folder Explorer",
-                    tint = DeckACyan,
+                    tint = if (isPro) theme.accent else DeckACyan,
                     modifier = Modifier.size(18.dp)
                 )
             }

@@ -73,11 +73,14 @@ fun CarModeScreen(
     var saveStatusMessage by remember { mutableStateOf<String?>(null) }
 
     // Color Palette optimized for driving readability and night anti-glare
-    val bgColor = if (isNightMode) Color(0xFF07080A) else Color(0xFF111317)
-    val cardColor = if (isNightMode) Color(0xFF0F1115) else Color(0xFF1B1E24)
-    val accentColor = Color(0xFF1E6CFF)
-    val textColor = Color(0xFFF1F5F9)
-    val mutedColor = Color(0xFF94A3B8)
+    val theme = SoundSyncTheme.current
+    val isPro = SoundSyncTheme.isPro
+    val bgColor = if (isNightMode) (if (isPro) theme.backgroundPrimary else Color(0xFF07080A)) else (if (isPro) theme.surface else Color(0xFF111317))
+    val cardColor = if (isNightMode) (if (isPro) theme.surface else Color(0xFF0F1115)) else (if (isPro) theme.surfaceElevated else Color(0xFF1B1E24))
+    val accentColor = if (isPro) theme.accent else Color(0xFF1E6CFF)
+    val onAccentColor = if (isPro) theme.onAccent else Color.White
+    val textColor = if (isPro) theme.textPrimary else Color(0xFFF1F5F9)
+    val mutedColor = if (isPro) theme.textSecondary else Color(0xFF94A3B8)
 
     LaunchedEffect(saveStatusMessage) {
         if (saveStatusMessage != null) {
@@ -183,13 +186,13 @@ fun CarModeScreen(
                 .padding(top = 16.dp)
         ) {
             Surface(
-                color = Color(0xFF1E6CFF),
+                color = accentColor,
                 shape = RoundedCornerShape(20.dp),
                 shadowElevation = 8.dp
             ) {
                 Text(
                     text = saveStatusMessage.orEmpty(),
-                    color = Color.White,
+                    color = onAccentColor,
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
@@ -844,11 +847,15 @@ private fun CarQueuePreviewDialog(
     onDismiss: () -> Unit,
     onSelectTrack: (Track) -> Unit
 ) {
+    val theme = SoundSyncTheme.current
+    val isPro = SoundSyncTheme.isPro
+    val dialogAccent = if (isPro) theme.accent else Color(0xFF1E6CFF)
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF181B21),
+        containerColor = if (isPro) theme.surfaceElevated else Color(0xFF181B21),
         title = {
-            Text("Upcoming Tracks", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Text("Upcoming Tracks", color = if (isPro) theme.textPrimary else Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
         },
         text = {
             Column(
@@ -856,12 +863,12 @@ private fun CarQueuePreviewDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (queue.isEmpty()) {
-                    Text("Queue is empty.", color = Color(0xFF8E95A2), fontSize = 14.sp)
+                    Text("Queue is empty.", color = if (isPro) theme.textMuted else Color(0xFF8E95A2), fontSize = 14.sp)
                 } else {
                     queue.take(5).forEachIndexed { idx, track ->
                         val isCurrent = track.id == currentTrack?.id
                         Surface(
-                            color = if (isCurrent) Color(0xFF1E6CFF).copy(alpha = 0.25f) else Color(0xFF22262F),
+                            color = if (isCurrent) dialogAccent.copy(alpha = 0.25f) else (if (isPro) theme.surfaceRaised else Color(0xFF22262F)),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -874,14 +881,14 @@ private fun CarQueuePreviewDialog(
                             ) {
                                 Text(
                                     text = if (isCurrent) "▶" else "${idx + 1}",
-                                    color = if (isCurrent) Color(0xFF1E6CFF) else Color(0xFF8E95A2),
+                                    color = if (isCurrent) dialogAccent else (if (isPro) theme.textMuted else Color(0xFF8E95A2)),
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp
                                 )
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = track.title,
-                                        color = Color.White,
+                                        color = if (isPro) theme.textPrimary else Color.White,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 14.sp,
                                         maxLines = 1,
@@ -889,7 +896,7 @@ private fun CarQueuePreviewDialog(
                                     )
                                     Text(
                                         text = track.artist,
-                                        color = Color(0xFF8E95A2),
+                                        color = if (isPro) theme.textSecondary else Color(0xFF8E95A2),
                                         fontSize = 12.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
@@ -903,7 +910,7 @@ private fun CarQueuePreviewDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close", color = Color(0xFF1E6CFF), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text("Close", color = dialogAccent, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
         }
     )

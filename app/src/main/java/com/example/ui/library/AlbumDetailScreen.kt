@@ -61,7 +61,9 @@ import com.example.model.Track
 import com.example.ui.components.MetadataProvenanceBadge
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
+import com.example.ui.theme.DjAccent
 import com.example.ui.theme.DjObsidian
+import com.example.ui.theme.DjOnAccent
 import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceCard
 import com.example.ui.theme.DjSurfaceDark
@@ -111,7 +113,7 @@ fun AlbumDetailScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint = DeckACyan
+                    tint = DjAccent
                 )
             }
 
@@ -148,7 +150,7 @@ fun AlbumDetailScreen(
                     Icon(
                         imageVector = Icons.Default.Album,
                         contentDescription = null,
-                        tint = DeckACyan,
+                        tint = DjAccent,
                         modifier = Modifier.size(44.dp)
                     )
                 }
@@ -167,7 +169,7 @@ fun AlbumDetailScreen(
                     Text(
                         text = album.artist,
                         fontSize = 14.sp,
-                        color = DeckACyan,
+                        color = DjAccent,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -191,8 +193,8 @@ fun AlbumDetailScreen(
             Button(
                 onClick = { onPlayAll(album.tracks, false) },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = DeckACyan,
-                    contentColor = DjObsidian
+                    containerColor = DjAccent,
+                    contentColor = DjOnAccent
                 ),
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier
@@ -230,7 +232,7 @@ fun AlbumDetailScreen(
                     .height(38.dp)
                     .testTag("album_add_to_playlist_button")
             ) {
-                Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = DjAccent, modifier = Modifier.size(16.dp))
             }
         }
 
@@ -286,10 +288,10 @@ private fun AlbumTrackRow(
 
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = if (isCurrent) DeckACyan.copy(alpha = 0.08f) else DjSurfaceDark.copy(alpha = if (isAvailable) 1f else 0.45f),
+        color = if (isCurrent) DjAccent.copy(alpha = 0.08f) else DjSurfaceDark.copy(alpha = if (isAvailable) 1f else 0.45f),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            if (isCurrent) DeckACyan.copy(alpha = 0.5f) else DjSurfaceBorder.copy(alpha = if (isAvailable) 0.5f else 0.25f)
+            if (isCurrent) DjAccent.copy(alpha = 0.5f) else DjSurfaceBorder.copy(alpha = if (isAvailable) 0.5f else 0.25f)
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -318,7 +320,7 @@ private fun AlbumTrackRow(
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Equalizer else Icons.Default.PlayArrow,
                         contentDescription = null,
-                        tint = DeckACyan,
+                        tint = DjAccent,
                         modifier = Modifier.size(16.dp)
                     )
                 } else {
@@ -338,7 +340,7 @@ private fun AlbumTrackRow(
                     text = track.title,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    color = if (!isAvailable) TextMuted else if (isCurrent) DeckACyan else TextPrimary,
+                    color = if (!isAvailable) TextMuted else if (isCurrent) DjAccent else TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -362,7 +364,7 @@ private fun AlbumTrackRow(
                             text = "${track.bpm.toInt()} BPM",
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
-                            color = DeckACyan,
+                            color = DjAccent,
                             maxLines = 1,
                             softWrap = false
                         )
@@ -415,7 +417,7 @@ private fun AlbumTrackRow(
                 ) {
                     DropdownMenuItem(
                         text = { Text("Add to Playlist", color = TextPrimary) },
-                        leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = DeckACyan) },
+                        leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = DjAccent) },
                         onClick = {
                             showMenu = false
                             onAddToPlaylist()
@@ -446,8 +448,8 @@ private fun AlbumTrackRow(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Track Inspector", color = DeckACyan, fontWeight = FontWeight.SemiBold) },
-                        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = DeckACyan) },
+                        text = { Text("Track Inspector", color = DjAccent, fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = DjAccent) },
                         onClick = {
                             showMenu = false
                             onInspectProperties()

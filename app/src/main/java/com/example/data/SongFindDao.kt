@@ -25,8 +25,14 @@ interface SongFindDao {
     @Query("SELECT COUNT(*) FROM song_finds WHERE url = :url")
     suspend fun countByUrl(url: String): Int
 
+    @Query("SELECT * FROM song_finds ORDER BY createdAt DESC")
+    suspend fun getAllSongFindsSync(): List<SongFindEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSongFind(songFind: SongFindEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSongFinds(songFinds: List<SongFindEntity>)
 
     @Update
     suspend fun updateSongFind(songFind: SongFindEntity)

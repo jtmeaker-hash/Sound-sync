@@ -47,6 +47,7 @@ import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceCard
 import com.example.ui.theme.DjSurfaceElevated
 import com.example.ui.theme.NeonGreen
+import com.example.ui.theme.SoundSyncTheme
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -61,18 +62,24 @@ fun AddToPlaylistSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val theme = SoundSyncTheme.current
+    val isPro = SoundSyncTheme.isPro
+    val accent = if (isPro) theme.accent else DeckACyan
+    val sheetContainer = if (isPro) theme.surface else DjSurfaceCard
+    val elevatedColor = if (isPro) theme.surfaceElevated else DjSurfaceElevated
+    val borderColor = if (isPro) theme.divider else DjSurfaceBorder
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = DjSurfaceCard,
+        containerColor = sheetContainer,
         dragHandle = {
             Box(
                 modifier = Modifier
                     .padding(vertical = 12.dp)
                     .size(width = 40.dp, height = 4.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(DjSurfaceBorder)
+                    .background(borderColor)
             )
         }
     ) {
@@ -124,8 +131,9 @@ fun AddToPlaylistSheet(
             // New Playlist Action Row
             Surface(
                 onClick = onCreateNewPlaylist,
-                shape = RoundedCornerShape(12.dp),
-                color = DjSurfaceElevated,
+                shape = RoundedCornerShape(if (isPro) theme.cornerMedium else 12.dp),
+                color = elevatedColor,
+                border = if (isPro) androidx.compose.foundation.BorderStroke(1.dp, borderColor) else null,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("create_new_playlist_row")
@@ -140,13 +148,13 @@ fun AddToPlaylistSheet(
                         modifier = Modifier
                             .size(44.dp)
                             .clip(CircleShape)
-                            .background(DeckACyan.copy(alpha = 0.15f)),
+                            .background(accent.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "New Playlist",
-                            tint = DeckACyan,
+                            tint = accent,
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -158,7 +166,7 @@ fun AddToPlaylistSheet(
                             text = "New Playlist",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = DeckACyan
+                            color = accent
                         )
                         Text(
                             text = "Create a new Rockbox-compatible playlist",
@@ -220,10 +228,19 @@ private fun PlaylistItemRow(
     playlist: Playlist,
     onClick: () -> Unit
 ) {
+    val theme = SoundSyncTheme.current
+    val isPro = SoundSyncTheme.isPro
+    val accent = if (isPro) theme.accent else DeckACyan
+    val rowColor = if (isPro) theme.surfaceRaised else DjObsidian
+    val rowCorner = if (isPro) theme.cornerSmall else 10.dp
+    val iconBg = if (isPro) theme.surfaceElevated else DjSurfaceElevated
+    val borderColor = if (isPro) theme.divider else DjSurfaceBorder
+
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(10.dp),
-        color = DjObsidian,
+        shape = RoundedCornerShape(rowCorner),
+        color = rowColor,
+        border = if (isPro) androidx.compose.foundation.BorderStroke(0.5.dp, borderColor) else null,
         modifier = Modifier
             .fillMaxWidth()
             .testTag("playlist_row_${playlist.id}")
@@ -237,14 +254,14 @@ private fun PlaylistItemRow(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(DjSurfaceElevated),
+                    .clip(RoundedCornerShape(if (isPro) theme.cornerSmall else 8.dp))
+                    .background(iconBg),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.QueueMusic,
                     contentDescription = null,
-                    tint = if (playlist.isRockboxCompatible) DeckACyan else TextSecondary,
+                    tint = if (playlist.isRockboxCompatible) accent else TextSecondary,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -273,7 +290,7 @@ private fun PlaylistItemRow(
                         Text(
                             text = "• Rockbox Ready",
                             fontSize = 11.sp,
-                            color = NeonGreen,
+                            color = if (isPro) theme.accentSecondary else NeonGreen,
                             fontWeight = FontWeight.SemiBold
                         )
                     }

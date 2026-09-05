@@ -21,21 +21,15 @@ class AudioEmbeddedMetadataReaderTest {
         val empty = EmbeddedAudioMetadata()
         assertFalse(empty.hasBpm)
         assertFalse(empty.hasKey)
-        assertFalse(empty.hasEmbeddedMusicBrainz)
 
         val withData = EmbeddedAudioMetadata(
             title = "Digital Love",
             artist = "Daft Punk",
             bpm = 125.0,
-            musicalKey = "8A",
-            musicBrainzRecordingId = "mbid-recording-123",
-            musicBrainzReleaseId = "mbid-release-456"
+            musicalKey = "8A"
         )
         assertTrue(withData.hasBpm)
         assertTrue(withData.hasKey)
-        assertTrue(withData.hasEmbeddedMusicBrainz)
-        assertEquals("mbid-recording-123", withData.musicBrainzRecordingId)
-        assertEquals("mbid-release-456", withData.musicBrainzReleaseId)
         assertEquals(125.0, withData.bpm ?: 0.0, 0.001)
         assertEquals("8A", withData.musicalKey)
     }
@@ -46,7 +40,6 @@ class AudioEmbeddedMetadataReaderTest {
         val result = AudioEmbeddedMetadataReader.read(context, "")
         assertFalse(result.hasBpm)
         assertFalse(result.hasKey)
-        assertFalse(result.hasEmbeddedMusicBrainz)
     }
 
     @Test
@@ -59,6 +52,5 @@ class AudioEmbeddedMetadataReaderTest {
         val resultNonExistent = AudioEmbeddedMetadataReader.read(context, "/nonexistent/path/track.mp3")
         assertFalse(resultNonExistent.hasBpm)
         assertFalse(resultNonExistent.hasKey)
-        assertFalse(resultNonExistent.hasEmbeddedMusicBrainz)
     }
 }

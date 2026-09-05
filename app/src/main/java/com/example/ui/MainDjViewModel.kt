@@ -92,6 +92,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val playlistDao = db.playlistDao()
 
     val songFindRepository = com.example.data.SongFindRepository(db.songFindDao())
+    val backupManager = com.example.backup.SoundSyncBackupManager.getInstance(application)
     val songFinds: StateFlow<List<com.example.model.SongFind>> = songFindRepository.allSongFinds.stateIn(
         viewModelScope,
         SharingStarted.Lazily,
@@ -100,11 +101,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _pendingShare = MutableStateFlow<com.example.model.PendingSongFind?>(null)
     val pendingShare: StateFlow<com.example.model.PendingSongFind?> = _pendingShare.asStateFlow()
 
-    val musicBrainzClient = com.example.metadata.MusicBrainzClient(com.example.metadata.OkHttpMusicBrainzTransport())
-    val musicMetadataEnrichmentService = com.example.metadata.MusicMetadataEnrichmentService(
-        musicBrainzClient = musicBrainzClient,
-        audioAnalyzer = com.example.metadata.LocalPcmAudioAnalyzer(application)
-    )
+    val metadataResolver = com.example.metadata.MetadataResolver(application)
+    val localAudioAnalyzer = com.example.metadata.LocalPcmAudioAnalyzer(application)
 
     val spotifyRepository = com.example.network.spotify.SpotifyRepository(application)
     val soundCloudRepository = com.example.network.soundcloud.SoundCloudRepository(application)
@@ -128,7 +126,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val metadataSettings: StateFlow<com.example.metadata.MetadataSettings> = MutableStateFlow(
         com.example.metadata.MetadataSettings(
             enrichmentEnabled = prefs.getBoolean("metadata_enrichment_enabled", true),
-            musicBrainzEnabled = prefs.getBoolean("metadata_musicbrainz_enabled", true),
+            appleSearchEnabled = prefs.getBoolean("metadata_apple_search_enabled", true),
+            theAudioDbEnabled = prefs.getBoolean("metadata_theaudiodb_enabled", true),
             bpmAnalysisEnabled = prefs.getBoolean("metadata_bpm_enabled", true),
             keyAnalysisEnabled = prefs.getBoolean("metadata_key_enabled", true),
             writeToFileEnabled = prefs.getBoolean("metadata_write_file_enabled", false),
@@ -174,7 +173,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         metadataSettingsState.value = update(metadataSettingsState.value)
         prefs.edit()
             .putBoolean("metadata_enrichment_enabled", metadataSettingsState.value.enrichmentEnabled)
-            .putBoolean("metadata_musicbrainz_enabled", metadataSettingsState.value.musicBrainzEnabled)
+            .putBoolean("metadata_apple_search_enabled", metadataSettingsState.value.appleSearchEnabled)
+            .putBoolean("metadata_theaudiodb_enabled", metadataSettingsState.value.theAudioDbEnabled)
             .putBoolean("metadata_bpm_enabled", metadataSettingsState.value.bpmAnalysisEnabled)
             .putBoolean("metadata_key_enabled", metadataSettingsState.value.keyAnalysisEnabled)
             .putBoolean("metadata_write_file_enabled", metadataSettingsState.value.writeToFileEnabled)
@@ -186,7 +186,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setEnrichmentEnabled(value: Boolean) = updateMetadataSettings { it.copy(enrichmentEnabled = value) }
-    fun setMusicBrainzEnabled(value: Boolean) = updateMetadataSettings { it.copy(musicBrainzEnabled = value) }
+    fun setAppleSearchEnabled(value: Boolean) = updateMetadataSettings { it.copy(appleSearchEnabled = value) }
+    fun setTheAudioDbEnabled(value: Boolean) = updateMetadataSettings { it.copy(theAudioDbEnabled = value) }
     fun setBpmAnalysisEnabled(value: Boolean) = updateMetadataSettings { it.copy(bpmAnalysisEnabled = value) }
     fun setKeyAnalysisEnabled(value: Boolean) = updateMetadataSettings { it.copy(keyAnalysisEnabled = value) }
     fun setWriteToFileEnabled(value: Boolean) = updateMetadataSettings { it.copy(writeToFileEnabled = value) }
@@ -197,6 +198,18 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun setThemeMode(mode: ThemeMode) {
         _themeMode.value = mode
         prefs.edit().putString("theme_mode", mode.name).apply()
+    }
+
+    private val _proDarkVariant = MutableStateFlow(
+        com.example.ui.theme.ProDarkVariant.fromStoredValue(
+            prefs.getString("pro_dark_variant", com.example.ui.theme.ProDarkVariant.BLACK_WHITE.name)
+        )
+    )
+    val proDarkVariant: StateFlow<com.example.ui.theme.ProDarkVariant> = _proDarkVariant.asStateFlow()
+
+    fun setProDarkVariant(variant: com.example.ui.theme.ProDarkVariant) {
+        _proDarkVariant.value = variant
+        prefs.edit().putString("pro_dark_variant", variant.name).apply()
     }
 
     private val _libraryDensity = MutableStateFlow(
@@ -763,6 +776,30 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         registerMediaReceiver()
         trackAnalysisManager.triggerQueueProcessing()
         com.example.analysis.LibraryAnalysisWorker.enqueueWork(application)
+        setupAutoBackupObserver()
+    }
+
+    private fun setupAutoBackupObserver() {
+        viewModelScope.launch(Dispatchers.IO) {
+            var initialTracksEmitted = false
+            trackDao.getAllTracks().collect {
+                if (!initialTracksEmitted) {
+                    initialTracksEmitted = true
+                } else {
+                    backupManager.notifyDataChanged()
+                }
+            }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            var initialFindsEmitted = false
+            songFindRepository.allSongFinds.collect {
+                if (!initialFindsEmitted) {
+                    initialFindsEmitted = true
+                } else {
+                    backupManager.notifyDataChanged()
+                }
+            }
+        }
     }
 
     fun triggerStorageRefresh() {
@@ -1101,8 +1138,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 if (wasScanning && !state.isScanning && state.isCompleted) {
                     refreshStorageSourcesList()
                     showSnackbar("Background scan finished: ${state.totalIndexedInLastRun} audio tracks indexed successfully!")
-                    if (state.totalIndexedInLastRun > 0 && metadataSettings.value.enrichmentEnabled && metadataSettings.value.musicBrainzEnabled) {
-                        scheduleBackgroundMusicBrainzEnrichment()
+                    if (state.totalIndexedInLastRun > 0 && metadataSettings.value.enrichmentEnabled && metadataSettings.value.appleSearchEnabled) {
+                        scheduleBackgroundMetadataEnrichment()
                     }
                 }
                 wasScanning = state.isScanning
@@ -1583,14 +1620,14 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
         val currentArtists = allArtists.value
         val exactMatch = currentArtists.firstOrNull { it.name.equals(targetName, ignoreCase = true) }
-        val mbidMatch = if (exactMatch == null && !track.musicBrainzArtistId.isNullOrBlank()) {
-            currentArtists.firstOrNull { a -> a.songs.any { it.musicBrainzArtistId == track.musicBrainzArtistId } }
+        val catalogMatch = if (exactMatch == null && track.appleArtistId != null) {
+            currentArtists.firstOrNull { a -> a.songs.any { it.appleArtistId == track.appleArtistId } }
         } else null
-        val containsMatch = if (exactMatch == null && mbidMatch == null) {
+        val containsMatch = if (exactMatch == null && catalogMatch == null) {
             currentArtists.firstOrNull { it.name.contains(targetName, ignoreCase = true) || targetName.contains(it.name, ignoreCase = true) }
         } else null
 
-        val resolvedArtist = exactMatch ?: mbidMatch ?: containsMatch ?: run {
+        val resolvedArtist = exactMatch ?: catalogMatch ?: containsMatch ?: run {
             val songs = allTracks.value.filter {
                 it.artist.contains(targetName, ignoreCase = true) || it.albumArtist.contains(targetName, ignoreCase = true)
             }.ifEmpty { listOf(track) }
@@ -2144,25 +2181,51 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun resolveBpmAndKeyForTrack(track: Track) {
         val settings = metadataSettings.value
         val needsBpmOrKey = (!track.hasValidBpm && settings.bpmAnalysisEnabled) || (!track.hasValidKey && settings.keyAnalysisEnabled)
-        val needsMusicBrainz = settings.musicBrainzEnabled && !track.isMusicBrainzEnriched
-        if (!needsBpmOrKey && !needsMusicBrainz) return
+        val needsMetadata = settings.appleSearchEnabled && !track.isAppleIdentified
+        if (!needsBpmOrKey && !needsMetadata) return
 
         viewModelScope.launch(Dispatchers.IO) {
-            val verified = musicMetadataEnrichmentService.enrich(
-                track = track,
-                musicBrainzEnabled = settings.musicBrainzEnabled,
-                bpmAnalysisEnabled = settings.bpmAnalysisEnabled,
-                keyAnalysisEnabled = settings.keyAnalysisEnabled
-            )
-            val updatedTrack = applyEnrichedMetadata(track, verified)
-            trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
+            var updated = track
+            if (needsMetadata) {
+                try {
+                    val res = metadataResolver.resolveTrackMetadata(updated, forceRefresh = false, embedArtworkToFile = settings.writeToFileEnabled)
+                    updated = res.updatedTrack
+                } catch (e: Exception) {
+                    Log.w("MainDjViewModel", "Metadata resolution error for '${track.title}': ${e.message}")
+                }
+            }
+            if (needsBpmOrKey) {
+                try {
+                    val dsp = localAudioAnalyzer.analyze(updated)
+                    if (settings.bpmAnalysisEnabled && (dsp.bpm ?: 0.0) > 0.0) {
+                        updated = updated.copy(
+                            bpm = dsp.bpm ?: updated.bpm,
+                            bpmConfidence = dsp.bpmConfidence,
+                            bpmAnalysisVersion = "v2_dsp",
+                            bpmLastAnalyzed = System.currentTimeMillis()
+                        )
+                    }
+                    if (settings.keyAnalysisEnabled && !dsp.musicalKey.isNullOrBlank()) {
+                        updated = updated.copy(
+                            musicalKey = dsp.musicalKey.orEmpty(),
+                            camelotKey = dsp.camelotKey.orEmpty(),
+                            keyConfidence = dsp.keyConfidence,
+                            keyAnalysisVersion = "v2_dsp",
+                            keyLastAnalyzed = System.currentTimeMillis()
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.w("MainDjViewModel", "DSP analysis error for '${track.title}': ${e.message}")
+                }
+            }
+            trackDao.updateTrack(TrackEntity.fromTrack(updated))
             if (audioEngine.currentTrack.value?.id == track.id) {
                 withContext(Dispatchers.Main) {
-                    audioEngine.updateCurrentTrackMetadata(updatedTrack)
+                    audioEngine.updateCurrentTrackMetadata(updated)
                 }
             }
             if (_inspectingTrackForProperties.value?.id == track.id) {
-                _inspectingTrackForProperties.value = updatedTrack
+                _inspectingTrackForProperties.value = updated
             }
         }
     }
@@ -2788,107 +2851,53 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun applyEnrichedMetadata(track: Track, enriched: com.example.metadata.EnrichedTrackMetadata): Track {
-        val effectiveTitle = if (com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalTitle(track.title)) {
-            if (track.title.equals(enriched.title, ignoreCase = true) && enriched.title.isNotBlank()) {
-                enriched.title
-            } else {
-                track.title
-            }
-        } else {
-            enriched.title.ifBlank { track.title }
-        }
-
-        val effectiveArtist = if (com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalArtist(track.artist)) {
-            track.artist
-        } else {
-            enriched.artist.ifBlank { track.artist }
-        }
-
-        val effectiveAlbum = if (com.example.metadata.MusicMetadataEnrichmentService.shouldRetainOriginalAlbum(track.album)) {
-            track.album
-        } else {
-            enriched.album.ifBlank { track.album }
-        }
-
-        return track.copy(
-            title = effectiveTitle,
-            artist = effectiveArtist,
-            album = effectiveAlbum,
-            albumArtist = enriched.albumArtist.ifBlank { track.albumArtist },
-            genre = enriched.genre ?: track.genre,
-            releaseDate = enriched.releaseDate ?: track.releaseDate,
-            releaseYear = enriched.releaseYear ?: track.releaseYear,
-            trackNumber = enriched.trackNumber ?: track.trackNumber,
-            discNumber = enriched.discNumber ?: track.discNumber,
-            recordLabel = enriched.recordLabel ?: track.recordLabel,
-            barcode = enriched.barcode ?: track.barcode,
-            isrc = enriched.isrc ?: track.isrc,
-            musicBrainzRecordingId = enriched.musicBrainzRecordingId ?: track.musicBrainzRecordingId,
-            musicBrainzArtistId = enriched.musicBrainzArtistId ?: track.musicBrainzArtistId,
-            musicBrainzReleaseId = enriched.musicBrainzReleaseId ?: track.musicBrainzReleaseId,
-            musicBrainzReleaseGroupId = enriched.musicBrainzReleaseGroupId ?: track.musicBrainzReleaseGroupId,
-            musicBrainzMatchConfidence = if (enriched.musicBrainzConfidence > 0) enriched.musicBrainzConfidence else track.musicBrainzMatchConfidence,
-            musicBrainzLastChecked = enriched.musicBrainzLastChecked ?: track.musicBrainzLastChecked,
-            artworkUrl = enriched.artworkUrl ?: track.artworkUrl,
-            bpm = enriched.bpm ?: track.bpm,
-            bpmConfidence = if (enriched.bpm != null) enriched.bpmConfidence else track.bpmConfidence,
-            bpmAnalysisVersion = enriched.bpmAnalysisVersion ?: track.bpmAnalysisVersion,
-            bpmLastAnalyzed = enriched.bpmLastAnalyzed ?: track.bpmLastAnalyzed,
-            musicalKey = enriched.musicalKey ?: track.musicalKey,
-            camelotKey = enriched.camelotKey ?: track.camelotKey,
-            keyConfidence = if (enriched.musicalKey != null) enriched.keyConfidence else track.keyConfidence,
-            keyAnalysisVersion = enriched.keyAnalysisVersion ?: track.keyAnalysisVersion,
-            keyLastAnalyzed = enriched.keyLastAnalyzed ?: track.keyLastAnalyzed,
-            isAiTagged = true
-        )
-    }
-
     private var backgroundEnrichmentJob: Job? = null
 
-    fun scheduleBackgroundMusicBrainzEnrichment() {
+    fun scheduleBackgroundMetadataEnrichment() {
         val settings = metadataSettings.value
-        if (!settings.enrichmentEnabled || !settings.musicBrainzEnabled) return
+        if (!settings.enrichmentEnabled || !settings.appleSearchEnabled) return
         if (backgroundEnrichmentJob?.isActive == true) return
 
         backgroundEnrichmentJob = viewModelScope.launch(Dispatchers.IO) {
             val unenrichedTracks = trackDao.getAllTracksSync()
-                .filter { !it.toTrack().isMusicBrainzEnriched }
+                .filter { !it.toTrack().isAppleIdentified }
                 .take(30)
             if (unenrichedTracks.isEmpty()) return@launch
-            Log.d("MainDjViewModel", "Starting background MusicBrainz catalog enrichment for ${unenrichedTracks.size} tracks...")
+            Log.d("MainDjViewModel", "Starting background Apple catalog enrichment for ${unenrichedTracks.size} tracks...")
             for (entity in unenrichedTracks) {
                 if (!isActive) break
                 val currentSettings = metadataSettings.value
-                if (!currentSettings.enrichmentEnabled || !currentSettings.musicBrainzEnabled) break
+                if (!currentSettings.enrichmentEnabled || !currentSettings.appleSearchEnabled) break
                 val track = entity.toTrack()
                 try {
-                    val enriched = musicMetadataEnrichmentService.enrich(
+                    val result = metadataResolver.resolveTrackMetadata(
                         track = track,
-                        musicBrainzEnabled = true,
-                        bpmAnalysisEnabled = false,
-                        keyAnalysisEnabled = false
+                        forceRefresh = false,
+                        embedArtworkToFile = currentSettings.writeToFileEnabled
                     )
-                    if (enriched.musicBrainzRecordingId != null || enriched.musicBrainzReleaseId != null) {
-                        val updated = applyEnrichedMetadata(track, enriched)
-                        trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                    if (result.updatedTrack.appleTrackId != null) {
+                        trackDao.updateTrack(TrackEntity.fromTrack(result.updatedTrack))
                     }
                 } catch (e: Exception) {
-                    Log.d("MainDjViewModel", "Background MB enrichment skipped for ${track.title}: ${e.message}")
+                    Log.d("MainDjViewModel", "Background enrichment skipped for ${track.title}: ${e.message}")
                 }
             }
         }
     }
 
-    fun enrichTrackWithMusicBrainz(track: Track) {
+    fun enrichTrackWithAppleMetadata(track: Track) {
         viewModelScope.launch {
             _isTaggingInProgress.value = true
-            _taggingProgressMessage.value = "Looking up MusicBrainz catalog for '${track.title}'..."
+            _taggingProgressMessage.value = "Searching Apple iTunes catalogue for '${track.title}'..."
             try {
-                val enriched = withContext(Dispatchers.IO) {
-                    musicMetadataEnrichmentService.enrich(track, musicBrainzEnabled = true)
+                val result = withContext(Dispatchers.IO) {
+                    metadataResolver.resolveTrackMetadata(
+                        track = track,
+                        forceRefresh = true,
+                        embedArtworkToFile = metadataSettings.value.writeToFileEnabled
+                    )
                 }
-                val updated = applyEnrichedMetadata(track, enriched)
+                val updated = result.updatedTrack
                 withContext(Dispatchers.IO) {
                     trackDao.updateTrack(TrackEntity.fromTrack(updated))
                 }
@@ -2900,11 +2909,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 if (_inspectingTrackForProperties.value?.id == track.id) {
                     _inspectingTrackForProperties.value = updated
                 }
-                val mbId = updated.musicBrainzRecordingId?.take(8) ?: "Matched"
-                showSnackbar("MusicBrainz catalog enriched '${updated.title}' ($mbId)")
+                val appleId = updated.appleTrackId?.toString() ?: "Identified"
+                showSnackbar("Apple catalogue enriched '${updated.title}' ($appleId)")
             } catch (e: Exception) {
-                Log.e("MainDjViewModel", "MusicBrainz enrichment failed", e)
-                showSnackbar("MusicBrainz lookup failed: ${e.message}")
+                Log.e("MainDjViewModel", "Apple Search enrichment failed", e)
+                showSnackbar("Apple Search failed: ${e.message}")
             } finally {
                 _isTaggingInProgress.value = false
             }
@@ -2915,19 +2924,23 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             _isTaggingInProgress.value = true
             val currentTracks = allTracks.value
-            _taggingProgressMessage.value = "Enriching catalog with MusicBrainz & stem analysis across ${currentTracks.size} tracks..."
+            _taggingProgressMessage.value = "Enriching catalog with Apple Search & TheAudioDB across ${currentTracks.size} tracks..."
 
             val updatedEntities = mutableListOf<TrackEntity>()
             for ((index, track) in currentTracks.withIndex()) {
-                _taggingProgressMessage.value = "MusicBrainz (${index + 1}/${currentTracks.size}): ${track.title}"
-                val enriched = try {
+                _taggingProgressMessage.value = "Apple Search (${index + 1}/${currentTracks.size}): ${track.title}"
+                val resolved = try {
                     withContext(Dispatchers.IO) {
-                        musicMetadataEnrichmentService.enrich(track)
+                        metadataResolver.resolveTrackMetadata(
+                            track = track,
+                            forceRefresh = false,
+                            embedArtworkToFile = metadataSettings.value.writeToFileEnabled
+                        )
                     }
                 } catch (e: Exception) {
                     null
                 }
-                var updated = if (enriched != null) applyEnrichedMetadata(track, enriched) else track
+                var updated = resolved?.updatedTrack ?: track
                 if (!updated.hasValidBpm || updated.genre.isBlank()) {
                     updated = AiAutoTagger.autoTagTrack(updated)
                 }
@@ -2939,19 +2952,23 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             _isTaggingInProgress.value = false
-            showSnackbar("Successfully enriched ${updatedEntities.size} tracks with MusicBrainz catalog, Key & BPM!")
+            showSnackbar("Successfully enriched ${updatedEntities.size} tracks with Apple catalog & TheAudioDB artwork!")
         }
     }
 
     fun autoTagSingleTrack(track: Track) {
         viewModelScope.launch {
             _isTaggingInProgress.value = true
-            _taggingProgressMessage.value = "Enriching '${track.title}' with MusicBrainz & AI stems..."
+            _taggingProgressMessage.value = "Enriching '${track.title}' with Apple Search & TheAudioDB..."
             try {
-                val enriched = withContext(Dispatchers.IO) {
-                    musicMetadataEnrichmentService.enrich(track)
+                val resolved = withContext(Dispatchers.IO) {
+                    metadataResolver.resolveTrackMetadata(
+                        track = track,
+                        forceRefresh = true,
+                        embedArtworkToFile = metadataSettings.value.writeToFileEnabled
+                    )
                 }
-                var updated = applyEnrichedMetadata(track, enriched)
+                var updated = resolved.updatedTrack
                 if (!updated.hasValidBpm || updated.genre.isBlank()) {
                     updated = AiAutoTagger.autoTagTrack(updated)
                 }
@@ -2966,7 +2983,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 if (_inspectingTrackForProperties.value?.id == track.id) {
                     _inspectingTrackForProperties.value = updated
                 }
-                showSnackbar("Updated MusicBrainz metadata & Camelot key for '${updated.title}'")
+                showSnackbar("Updated Apple metadata & artwork for '${updated.title}'")
             } catch (e: Exception) {
                 Log.e("MainDjViewModel", "Auto tag failed, falling back to local tagger", e)
                 val fallback = AiAutoTagger.autoTagTrack(track)
@@ -2976,7 +2993,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 if (_inspectingTrackForProperties.value?.id == track.id) {
                     _inspectingTrackForProperties.value = fallback
                 }
-                showSnackbar("Auto-tagged '${fallback.title}'")
+                showSnackbar("Applied local DJ tags for '${track.title}'")
             } finally {
                 _isTaggingInProgress.value = false
             }

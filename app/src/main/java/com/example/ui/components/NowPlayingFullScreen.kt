@@ -1335,7 +1335,7 @@ private fun ProNowPlayingFullScreenContent(
                         // Play/Pause Workstation Button
                         Surface(
                             shape = RoundedCornerShape(3.dp),
-                            color = if (isPlaying) Color(0xFF22262F) else theme.accent,
+                            color = if (isPlaying) theme.surfaceRaised else theme.accent,
                             border = BorderStroke(1.dp, if (isPlaying) theme.accent else Color.Transparent),
                             modifier = Modifier
                                 .size(width = 64.dp, height = 44.dp)
@@ -1349,7 +1349,7 @@ private fun ProNowPlayingFullScreenContent(
                                 Icon(
                                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                                     contentDescription = if (isPlaying) "Pause" else "Play",
-                                    tint = if (isPlaying) theme.accent else Color.White,
+                                    tint = if (isPlaying) theme.accent else theme.onAccent,
                                     modifier = Modifier.size(26.dp)
                                 )
                             }

@@ -17,8 +17,7 @@ import kotlin.math.min
 /**
  * Authoritative embedded audio metadata reader.
  *
- * Extracts standard metadata alongside embedded MusicBrainz catalog tags
- * (MBIDs for recording, release, artist, release group, plus ISRC, barcode,
+ * Extracts standard metadata (title, artist, album, genre, ISRC, barcode,
  * label, BPM, musical key, and track numbers) from:
  * 1. MediaMetadataRetriever (standard platform extractor)
  * 2. Raw ID3v2 frames (ID3v2.2, ID3v2.3, ID3v2.4)
@@ -44,17 +43,11 @@ data class EmbeddedAudioMetadata(
     val bpm: Double? = null,
     val musicalKey: String? = null,
     val camelotKey: String? = null,
-    val musicBrainzRecordingId: String? = null,
-    val musicBrainzReleaseId: String? = null,
-    val musicBrainzArtistId: String? = null,
-    val musicBrainzReleaseGroupId: String? = null,
-    val musicBrainzReleaseTrackId: String? = null,
     val releaseCountry: String? = null,
     val releaseStatus: String? = null
 ) {
     val hasBpm: Boolean get() = bpm != null && bpm in 30.0..300.0
     val hasKey: Boolean get() = !musicalKey.isNullOrBlank() && musicalKey != "—" && musicalKey != "-" && !musicalKey.equals("Unknown", ignoreCase = true)
-    val hasEmbeddedMusicBrainz: Boolean get() = !musicBrainzRecordingId.isNullOrBlank() || !musicBrainzReleaseId.isNullOrBlank()
 }
 
 object AudioEmbeddedMetadataReader {
@@ -198,11 +191,6 @@ object AudioEmbeddedMetadataReader {
         var isrc: String? = null
         var bpm: Double? = null
         var musicalKey: String? = null
-        var musicBrainzRecordingId: String? = null
-        var musicBrainzReleaseId: String? = null
-        var musicBrainzArtistId: String? = null
-        var musicBrainzReleaseGroupId: String? = null
-        var musicBrainzReleaseTrackId: String? = null
         var releaseCountry: String? = null
         var releaseStatus: String? = null
 
@@ -257,20 +245,6 @@ object AudioEmbeddedMetadataReader {
                         val rawKey = decodeTextFrame(framePayload).trim()
                         if (rawKey.isNotBlank()) musicalKey = rawKey
                     }
-                    "UFID" -> {
-                        // UFID structure: null-terminated Owner identifier, followed by Identifier
-                        val zeroIdx = framePayload.indexOf(0.toByte())
-                        if (zeroIdx > 0) {
-                            val owner = String(framePayload, 0, zeroIdx, StandardCharsets.ISO_8859_1)
-                            if (owner.contains("musicbrainz.org", ignoreCase = true)) {
-                                val idLen = framePayload.size - (zeroIdx + 1)
-                                if (idLen > 0) {
-                                    val id = String(framePayload, zeroIdx + 1, idLen, StandardCharsets.ISO_8859_1).trim()
-                                    if (id.isNotBlank()) musicBrainzRecordingId = id
-                                }
-                            }
-                        }
-                    }
                     "TXXX" -> {
                         // User-defined text frame: encoding (1 byte) + description + 0x00 + value
                         val txxx = decodeTxxxFrame(framePayload)
@@ -278,15 +252,10 @@ object AudioEmbeddedMetadataReader {
                             val desc = txxx.first.trim().lowercase(Locale.ROOT)
                             val value = txxx.second.trim()
                             when {
-                                desc == "musicbrainz track id" || desc == "musicbrainz recording id" -> musicBrainzRecordingId = value
-                                desc == "musicbrainz album id" -> musicBrainzReleaseId = value
-                                desc == "musicbrainz artist id" -> musicBrainzArtistId = value
-                                desc == "musicbrainz release group id" -> musicBrainzReleaseGroupId = value
-                                desc == "musicbrainz release track id" -> musicBrainzReleaseTrackId = value
                                 desc == "barcode" -> barcode = value
                                 desc == "initialkey" -> if (musicalKey.isNullOrBlank()) musicalKey = value
-                                desc == "musicbrainz album release country" -> releaseCountry = value
-                                desc == "musicbrainz album status" -> releaseStatus = value
+                                desc == "releasecountry" -> releaseCountry = value
+                                desc == "releasestatus" -> releaseStatus = value
                             }
                         }
                     }
@@ -312,11 +281,6 @@ object AudioEmbeddedMetadataReader {
             bpm = bpm,
             musicalKey = musicalKey?.takeIf(String::isNotBlank),
             camelotKey = camelot,
-            musicBrainzRecordingId = musicBrainzRecordingId?.takeIf(String::isNotBlank),
-            musicBrainzReleaseId = musicBrainzReleaseId?.takeIf(String::isNotBlank),
-            musicBrainzArtistId = musicBrainzArtistId?.takeIf(String::isNotBlank),
-            musicBrainzReleaseGroupId = musicBrainzReleaseGroupId?.takeIf(String::isNotBlank),
-            musicBrainzReleaseTrackId = musicBrainzReleaseTrackId?.takeIf(String::isNotBlank),
             releaseCountry = releaseCountry?.takeIf(String::isNotBlank),
             releaseStatus = releaseStatus?.takeIf(String::isNotBlank)
         )
@@ -380,10 +344,6 @@ object AudioEmbeddedMetadataReader {
         var isrc: String? = null
         var bpm: Double? = null
         var musicalKey: String? = null
-        var musicBrainzRecordingId: String? = null
-        var musicBrainzReleaseId: String? = null
-        var musicBrainzArtistId: String? = null
-        var musicBrainzReleaseGroupId: String? = null
 
         var count = 0
         while (count < userCommentListLen && buffer.remaining() >= 4) {
@@ -415,10 +375,6 @@ object AudioEmbeddedMetadataReader {
                     "BARCODE" -> barcode = value
                     "BPM" -> bpm = value.filter { it.isDigit() || it == '.' }.toDoubleOrNull()?.takeIf { it in 30.0..300.0 }
                     "KEY", "INITIALKEY" -> musicalKey = value
-                    "MUSICBRAINZ_TRACKID" -> musicBrainzRecordingId = value
-                    "MUSICBRAINZ_ALBUMID" -> musicBrainzReleaseId = value
-                    "MUSICBRAINZ_ARTISTID" -> musicBrainzArtistId = value
-                    "MUSICBRAINZ_RELEASEGROUPID" -> musicBrainzReleaseGroupId = value
                 }
             }
         }
@@ -440,11 +396,7 @@ object AudioEmbeddedMetadataReader {
             isrc = isrc?.takeIf(String::isNotBlank),
             bpm = bpm,
             musicalKey = musicalKey?.takeIf(String::isNotBlank),
-            camelotKey = camelot,
-            musicBrainzRecordingId = musicBrainzRecordingId?.takeIf(String::isNotBlank),
-            musicBrainzReleaseId = musicBrainzReleaseId?.takeIf(String::isNotBlank),
-            musicBrainzArtistId = musicBrainzArtistId?.takeIf(String::isNotBlank),
-            musicBrainzReleaseGroupId = musicBrainzReleaseGroupId?.takeIf(String::isNotBlank)
+            camelotKey = camelot
         )
     }
 
@@ -532,11 +484,6 @@ object AudioEmbeddedMetadataReader {
             bpm = stream.bpm ?: retriever.bpm,
             musicalKey = musicalKey,
             camelotKey = camelotKey,
-            musicBrainzRecordingId = stream.musicBrainzRecordingId ?: retriever.musicBrainzRecordingId,
-            musicBrainzReleaseId = stream.musicBrainzReleaseId ?: retriever.musicBrainzReleaseId,
-            musicBrainzArtistId = stream.musicBrainzArtistId ?: retriever.musicBrainzArtistId,
-            musicBrainzReleaseGroupId = stream.musicBrainzReleaseGroupId ?: retriever.musicBrainzReleaseGroupId,
-            musicBrainzReleaseTrackId = stream.musicBrainzReleaseTrackId ?: retriever.musicBrainzReleaseTrackId,
             releaseCountry = stream.releaseCountry ?: retriever.releaseCountry,
             releaseStatus = stream.releaseStatus ?: retriever.releaseStatus
         )

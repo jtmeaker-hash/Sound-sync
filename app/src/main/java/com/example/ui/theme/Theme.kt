@@ -25,6 +25,11 @@ object SoundSyncTheme {
         @ReadOnlyComposable
         get() = LocalSoundSyncTheme.current.isPro
 
+    val proVariant: ProDarkVariant
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalProDarkVariant.current
+
     val libraryDensity: ProLibraryDensity
         @Composable
         @ReadOnlyComposable
@@ -36,32 +41,34 @@ object SoundSyncTheme {
     @Composable
     operator fun invoke(
         themeMode: ThemeMode = ThemeMode.DEFAULT,
+        proDarkVariant: ProDarkVariant = ProDarkVariant.BLACK_WHITE,
         libraryDensity: ProLibraryDensity = ProLibraryDensity.COMPACT,
         content: @Composable () -> Unit,
     ) {
-        setActiveAppearancePalette(themeMode)
+        setActiveAppearancePalette(themeMode, proDarkVariant)
 
         val spec = when (themeMode) {
-            ThemeMode.PRO -> ProThemeSpec
+            ThemeMode.PRO -> getProThemeSpec(proDarkVariant)
             ThemeMode.DARK -> DefaultThemeSpec.copy(
                 background = Color(0xFF050505),
                 surface = Color(0xFF101010),
-                accent = BloodRedPrimary
+                accent = BloodRedPrimary,
+                onAccent = Color.White
             )
             else -> DefaultThemeSpec
         }
 
         val colorScheme = darkColorScheme(
             primary = spec.accent,
-            onPrimary = if (spec.isPro) Color.White else (if (themeMode == ThemeMode.DARK) Color.White else DjObsidian),
+            onPrimary = spec.onAccent,
             primaryContainer = spec.surfaceRaised,
             onPrimaryContainer = spec.accent,
-            secondary = if (spec.isPro) spec.accentHover else DeckBPink,
-            onSecondary = Color.White,
+            secondary = spec.accentHover,
+            onSecondary = spec.onAccent,
             secondaryContainer = spec.surfaceRaised,
-            onSecondaryContainer = if (spec.isPro) spec.accent else DeckBPink,
-            tertiary = if (spec.isPro) spec.accentMuted else NeonGreen,
-            onTertiary = if (spec.isPro) spec.textPrimary else DjObsidian,
+            onSecondaryContainer = spec.accent,
+            tertiary = spec.accentMuted,
+            onTertiary = spec.textPrimary,
             background = spec.background,
             onBackground = spec.textPrimary,
             surface = spec.surface,
@@ -89,7 +96,8 @@ object SoundSyncTheme {
 
         CompositionLocalProvider(
             LocalSoundSyncTheme provides spec,
-            LocalLibraryDensity provides libraryDensity
+            LocalLibraryDensity provides libraryDensity,
+            LocalProDarkVariant provides proDarkVariant
         ) {
             MaterialTheme(
                 colorScheme = colorScheme,
@@ -106,8 +114,14 @@ object SoundSyncTheme {
 @Composable
 fun SoundSyncTheme(
     themeMode: ThemeMode = ThemeMode.DEFAULT,
+    proDarkVariant: ProDarkVariant = ProDarkVariant.BLACK_WHITE,
     libraryDensity: ProLibraryDensity = ProLibraryDensity.COMPACT,
     content: @Composable () -> Unit,
 ) {
-    SoundSyncTheme.invoke(themeMode = themeMode, libraryDensity = libraryDensity, content = content)
+    SoundSyncTheme.invoke(
+        themeMode = themeMode,
+        proDarkVariant = proDarkVariant,
+        libraryDensity = libraryDensity,
+        content = content
+    )
 }

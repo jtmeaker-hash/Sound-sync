@@ -507,13 +507,6 @@ class AudioScanService : Service() {
             recordLabel = embedded.recordLabel,
             barcode = embedded.barcode,
             isrc = embedded.isrc,
-            musicBrainzRecordingId = embedded.musicBrainzRecordingId,
-            musicBrainzReleaseId = embedded.musicBrainzReleaseId,
-            musicBrainzArtistId = embedded.musicBrainzArtistId,
-            musicBrainzReleaseGroupId = embedded.musicBrainzReleaseGroupId,
-            musicBrainzMatchConfidence = if (embedded.hasEmbeddedMusicBrainz) 1.0 else 0.0,
-            musicBrainzLastChecked = if (embedded.hasEmbeddedMusicBrainz) System.currentTimeMillis() else null,
-            artworkUrl = embedded.musicBrainzReleaseId?.let { "https://coverartarchive.org/release/$it/front-500" },
             contentFingerprint = fingerprint
         )
     }

@@ -4,7 +4,9 @@ import android.content.Context
 
 data class MetadataSettings(
     val enrichmentEnabled: Boolean = true,
-    val musicBrainzEnabled: Boolean = true,
+    val appleSearchEnabled: Boolean = true,
+    val theAudioDbEnabled: Boolean = true,
+    val storefrontCountry: String = "AU",
     val bpmAnalysisEnabled: Boolean = true,
     val keyAnalysisEnabled: Boolean = true,
     val writeToFileEnabled: Boolean = false,
@@ -44,7 +46,9 @@ class MetadataSettingsStore(private val context: Context) {
         )
         return MetadataSettings(
             enrichmentEnabled = prefs.getBoolean(KEY_ENABLED, true),
-            musicBrainzEnabled = prefs.getBoolean(KEY_MUSICBRAINZ, true),
+            appleSearchEnabled = prefs.getBoolean(KEY_APPLE_SEARCH, true),
+            theAudioDbEnabled = prefs.getBoolean(KEY_THEAUDIODB, true),
+            storefrontCountry = prefs.getString(KEY_STOREFRONT, "AU") ?: "AU",
             bpmAnalysisEnabled = prefs.getBoolean(KEY_BPM, true),
             keyAnalysisEnabled = prefs.getBoolean(KEY_KEY, true),
             writeToFileEnabled = prefs.getBoolean(KEY_WRITE_TO_FILE, false),
@@ -59,7 +63,9 @@ class MetadataSettingsStore(private val context: Context) {
         val (min, max) = MetadataSettings.clampBpmRange(settings.bpmMin, settings.bpmMax)
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_ENABLED, settings.enrichmentEnabled)
-            .putBoolean(KEY_MUSICBRAINZ, settings.musicBrainzEnabled)
+            .putBoolean(KEY_APPLE_SEARCH, settings.appleSearchEnabled)
+            .putBoolean(KEY_THEAUDIODB, settings.theAudioDbEnabled)
+            .putString(KEY_STOREFRONT, settings.storefrontCountry)
             .putBoolean(KEY_BPM, settings.bpmAnalysisEnabled)
             .putBoolean(KEY_KEY, settings.keyAnalysisEnabled)
             .putBoolean(KEY_WRITE_TO_FILE, settings.writeToFileEnabled)
@@ -73,7 +79,9 @@ class MetadataSettingsStore(private val context: Context) {
     private companion object {
         const val PREFS_NAME = "soundsync_metadata_settings"
         const val KEY_ENABLED = "enrichment_enabled"
-        const val KEY_MUSICBRAINZ = "musicbrainz_enabled"
+        const val KEY_APPLE_SEARCH = "apple_search_enabled"
+        const val KEY_THEAUDIODB = "theaudiodb_enabled"
+        const val KEY_STOREFRONT = "apple_storefront_country"
         const val KEY_BPM = "bpm_analysis_enabled"
         const val KEY_KEY = "key_analysis_enabled"
         const val KEY_WRITE_TO_FILE = "write_to_file_enabled"

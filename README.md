@@ -52,22 +52,21 @@ Waveform, spectrogram, and audio analysis
 
 Metadata enrichment
 
-SoundSync uses MusicBrainz as the primary external catalogue for canonical track identity and release metadata.
+SoundSync uses the Apple iTunes Search API as the primary external catalogue for canonical track identification and textual metadata, paired with TheAudioDB v1 API for dedicated album cover artwork.
 
 Metadata enrichment can include:
 
 - Track title
 - Artist and artist credits
-- Album/release information
-- MusicBrainz recording, artist, release, and release-group IDs
-- ISRC
-- Release date/year
+- Album/collection information
+- Apple Track, Collection, and Artist IDs
+- TheAudioDB Album and Artist IDs
+- Release date and year
 - Track and disc number
-- Label
-- Barcode
-- Country and release status
-- Genre/tags when available
-- Cover artwork through MusicBrainz-linked release data / Cover Art Archive
+- Record label
+- Barcode and ISRC
+- Primary genre and tags
+- High-resolution square cover artwork through TheAudioDB (atomically cached and safely injected without re-encoding audio)
 
 BPM and musical key are intentionally handled through local audio analysis or existing persisted values rather than being blindly replaced by remote catalogue data.
 
@@ -131,7 +130,7 @@ SoundSync features a streamlined dual navigation architecture:
    - **DJ Tools**: Metronome, Tap BPM, Key Converter, RMS Meter, Clipping Detector, Dynamic Range Meter, Multipoint EQ, Haas Surround.
    - **Streaming**: Spotify & SoundCloud configuration.
    - **Playback & Audio**: Adjustable crossfade, repeat modes, and shuffle controls.
-   - **Library & Storage**: Storage sources, MusicBrainz metadata enrichment settings, MediaStore scanner, and cache cleanup.
+   - **Library & Storage**: Storage sources, Apple & TheAudioDB metadata enrichment settings, MediaStore scanner, and cache cleanup.
    - **App & Interface**: Theme selection (Obsidian DJ Dark / Light / System) and GitHub Updates manager.
 
 Requirements
@@ -262,7 +261,7 @@ SoundSync is currently built around:
 - Coil
 - WorkManager
 - Storage Access Framework / DocumentFile
-- MusicBrainz and Cover Art Archive integration
+- Apple iTunes Search and TheAudioDB integration
 - GitHub Actions for CI and release builds
 - Robolectric / AndroidX testing
 
@@ -272,7 +271,7 @@ app/src/main/java/com/example/
 ├── analysis/      # Duplicate detection, tagging and analysis services
 ├── audio/         # Playback engine, waveform, spectrogram, EQ and Haas DSP
 ├── data/          # Room database, DAOs and entities
-├── metadata/      # Embedded metadata, MusicBrainz and local audio analysis
+├── metadata/      # Apple search, TheAudioDB artwork, parser, scorer and cache
 ├── network/       # GitHub, Spotify, SoundCloud and Google Drive networking
 ├── service/       # Audio scanning and background media playback
 ├── storage/       # Local scanning, SAF, M3U/Rockbox and file utilities

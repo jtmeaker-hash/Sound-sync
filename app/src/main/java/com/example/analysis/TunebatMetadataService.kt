@@ -195,11 +195,7 @@ object TunebatMetadataService {
         return try {
             val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, filePathOrUri)
             if (embedded.hasBpm || embedded.hasKey) {
-                val sourceLabel = if (embedded.hasEmbeddedMusicBrainz) {
-                    "Embedded MusicBrainz Tags"
-                } else {
-                    "Embedded ID3 / File Tags"
-                }
+                val sourceLabel = "Embedded ID3 / File Tags"
                 VerifiedMetadata(
                     bpm = embedded.bpm ?: 0.0,
                     musicalKey = embedded.camelotKey ?: embedded.musicalKey.orEmpty(),
@@ -276,8 +272,7 @@ object TunebatMetadataService {
     }
 
     /**
-     * Queries external Tunebat / MusicBrainz / Acoustic registry with strict conservative matching.
-     * Takes title, artist, album, duration, and version/remix descriptors into account.
+     * Reserved for external registry lookup if enabled.
      */
     private suspend fun queryExternalTunebatDatabase(
         title: String,
@@ -285,45 +280,6 @@ object TunebatMetadataService {
         album: String,
         durationSeconds: Int
     ): VerifiedMetadata? = withContext(Dispatchers.IO) {
-        if (title.isBlank() || title.equals("Unknown", ignoreCase = true)) return@withContext null
-
-        try {
-            val identity = com.example.metadata.LocalTrackIdentity(
-                title = title,
-                artist = artist,
-                album = album,
-                durationSeconds = durationSeconds
-            )
-            val client = com.example.metadata.MusicBrainzClient(com.example.metadata.OkHttpMusicBrainzTransport())
-            val recording = client.findRecording(identity) ?: return@withContext null
-
-            var bpmVal = 0.0
-            var keyVal = ""
-
-            for (tagName in recording.tags) {
-                if (tagName.endsWith("bpm", ignoreCase = true)) {
-                    val candidate = tagName.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: 0.0
-                    if (candidate in 30.0..300.0) bpmVal = candidate
-                }
-                if (tagName.startsWith("key:", ignoreCase = true)) {
-                    keyVal = tagName.removePrefix("key:").trim()
-                }
-            }
-
-            val normalizedKey = normalizeCamelotKey(keyVal)
-            if (bpmVal > 0.0 || normalizedKey.isNotBlank()) {
-                return@withContext VerifiedMetadata(
-                    bpm = bpmVal,
-                    musicalKey = normalizedKey,
-                    bpmConfidence = if (bpmVal > 0.0) 0.94f else 0.0f,
-                    keyConfidence = if (normalizedKey.isNotBlank()) 0.92f else 0.0f,
-                    source = "Tunebat / MusicBrainz Registry",
-                    isConfirmed = true
-                )
-            }
-        } catch (e: Exception) {
-            Log.d(TAG, "queryExternalTunebatDatabase error: ${e.message}")
-        }
         null
     }
 

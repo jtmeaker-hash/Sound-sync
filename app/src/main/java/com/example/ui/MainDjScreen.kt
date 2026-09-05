@@ -116,6 +116,7 @@ import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
 import com.example.ui.theme.SoundCloudOrange
+import com.example.ui.theme.SoundSyncTheme
 import com.example.ui.theme.SpotifyGreen
 import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceCard
@@ -1026,9 +1027,12 @@ private fun DjBottomNavigationBar(
             Triple(DjTab.SPECTROGRAM, "Spectrum", Icons.Default.GraphicEq)
         )
 
+        val isPro = SoundSyncTheme.isPro
+        val proAccent = SoundSyncTheme.current.accent
+
         tabs.forEach { (tab, title, icon) ->
             val isSelected = selectedTab == tab
-            val tabColor = when (tab) {
+            val tabColor = if (isPro) proAccent else when (tab) {
                 DjTab.LOCAL -> DeckACyan
                 DjTab.FINDS -> NeonAmber
                 DjTab.STREAMING -> SpotifyGreen
@@ -1354,9 +1358,10 @@ private fun SideDestinationScreen(
                         operationJournal = operationJournal,
                         scanServiceState = scanServiceState,
                         metadataSettings = viewModel.metadataSettings.collectAsState().value,
-                        focusMusicBrainz = false,
+                        focusMetadataOnly = false,
                         onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
-                        onSetMusicBrainzEnabled = viewModel::setMusicBrainzEnabled,
+                        onSetAppleSearchEnabled = viewModel::setAppleSearchEnabled,
+                        onSetTheAudioDbEnabled = viewModel::setTheAudioDbEnabled,
                         onSetBpmAnalysisEnabled = viewModel::setBpmAnalysisEnabled,
                         onSetKeyAnalysisEnabled = viewModel::setKeyAnalysisEnabled,
                         onSetWriteToFileEnabled = viewModel::setWriteToFileEnabled,
@@ -1379,15 +1384,16 @@ private fun SideDestinationScreen(
                         onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() }
                     )
                 }
-                SideMenuDestination.MusicBrainzSettings -> {
+                SideMenuDestination.MetadataSettings -> {
                     LibrarySettingsScreen(
                         storageSources = storageSources,
                         operationJournal = operationJournal,
                         scanServiceState = scanServiceState,
                         metadataSettings = viewModel.metadataSettings.collectAsState().value,
-                        focusMusicBrainz = true,
+                        focusMetadataOnly = true,
                         onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
-                        onSetMusicBrainzEnabled = viewModel::setMusicBrainzEnabled,
+                        onSetAppleSearchEnabled = viewModel::setAppleSearchEnabled,
+                        onSetTheAudioDbEnabled = viewModel::setTheAudioDbEnabled,
                         onSetBpmAnalysisEnabled = viewModel::setBpmAnalysisEnabled,
                         onSetKeyAnalysisEnabled = viewModel::setKeyAnalysisEnabled,
                         onSetWriteToFileEnabled = viewModel::setWriteToFileEnabled,
@@ -1412,13 +1418,22 @@ private fun SideDestinationScreen(
                 }
                 SideMenuDestination.AppearanceSettings -> {
                     val libraryDensity by viewModel.libraryDensity.collectAsState()
+                    val proDarkVariant by viewModel.proDarkVariant.collectAsState()
                     AppearanceSettingsScreen(
                         themeMode = themeMode,
                         onSetThemeMode = { viewModel.setThemeMode(it) },
+                        proDarkVariant = proDarkVariant,
+                        onSetProDarkVariant = { viewModel.setProDarkVariant(it) },
                         libraryDensity = libraryDensity,
                         onSetLibraryDensity = { viewModel.setLibraryDensity(it) },
                         waveformStyle = waveformStyle,
                         onSetWaveformStyle = { viewModel.setWaveformStyle(it) }
+                    )
+                }
+                SideMenuDestination.BackupRestore -> {
+                    com.example.ui.settings.BackupSettingsScreen(
+                        backupManager = com.example.backup.SoundSyncBackupManager.getInstance(context),
+                        onBack = onClose
                     )
                 }
                 SideMenuDestination.GitHubUpdates -> {

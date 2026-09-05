@@ -68,6 +68,7 @@ import com.example.ui.theme.NeonAmber
 import com.example.ui.theme.NeonGreen
 import com.example.ui.theme.NeonPurple
 import com.example.ui.theme.NeonRed
+import com.example.ui.theme.SoundSyncTheme
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -82,6 +83,15 @@ fun FilePropertiesDialog(
     onInspectSpectrogram: (Track) -> Unit,
     onDelete: (Track) -> Unit
 ) {
+    val theme = SoundSyncTheme.current
+    val isPro = SoundSyncTheme.isPro
+    val accent = if (isPro) theme.accent else DeckACyan
+    val onAccent = if (isPro) theme.onAccent else DjObsidian
+    val cardContainer = if (isPro) theme.surfaceElevated else DjSurfaceDark
+    val borderColor = if (isPro) theme.divider else DjSurfaceBorder
+    val dialogCorner = if (isPro) theme.cornerMedium else 12.dp
+    val buttonCorner = if (isPro) theme.cornerSmall else 8.dp
+
     var title by remember { mutableStateOf(track.title) }
     var artist by remember { mutableStateOf(track.artist) }
     var album by remember { mutableStateOf(track.album) }
@@ -100,9 +110,9 @@ fun FilePropertiesDialog(
                 .fillMaxWidth()
                 .padding(12.dp)
                 .testTag("file_properties_dialog"),
-            colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
-            shape = RoundedCornerShape(12.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+            colors = CardDefaults.cardColors(containerColor = cardContainer),
+            shape = RoundedCornerShape(dialogCorner),
+            border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
         ) {
             Column(
                 modifier = Modifier
@@ -127,7 +137,7 @@ fun FilePropertiesDialog(
                         )
                         Text(
                             text = track.filePath.substringAfterLast('/'),
-                            color = DeckACyan,
+                            color = accent,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace
                         )
@@ -197,7 +207,7 @@ fun FilePropertiesDialog(
                             lineHeight = 13.sp
                         )
 
-                        // Metadata Provenance Breakdown (MusicBrainz vs Local Audio DSP)
+                        // Metadata Provenance Breakdown (Apple iTunes & TheAudioDB vs Local Audio DSP)
                         MetadataProvenanceCard(
                             track = track,
                             onEnrich = { onAutoTag(track) },
@@ -381,20 +391,20 @@ fun FilePropertiesDialog(
                     Surface(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(buttonCorner))
                             .clickable { onInspectSpectrogram(track) },
-                        shape = RoundedCornerShape(8.dp),
-                        color = DeckACyan.copy(alpha = 0.2f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, DeckACyan)
+                        shape = RoundedCornerShape(buttonCorner),
+                        color = accent.copy(alpha = 0.2f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, accent)
                     ) {
                         Row(
                             modifier = Modifier.padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.GraphicEq, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Default.GraphicEq, contentDescription = null, tint = accent, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Spectrogram", color = DeckACyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Spectrogram", color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -413,7 +423,7 @@ fun FilePropertiesDialog(
                             onDismiss()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = NeonRed.copy(alpha = 0.2f), contentColor = NeonRed),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(buttonCorner),
                         border = androidx.compose.foundation.BorderStroke(1.dp, NeonRed)
                     ) {
                         Icon(Icons.Default.Delete, contentDescription = "Trash", modifier = Modifier.size(16.dp))
@@ -437,8 +447,8 @@ fun FilePropertiesDialog(
                             onSave(updated)
                         },
                         modifier = Modifier.weight(1f).testTag("save_track_properties_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = DeckACyan, contentColor = DjObsidian),
-                        shape = RoundedCornerShape(8.dp)
+                        colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = onAccent),
+                        shape = RoundedCornerShape(buttonCorner)
                     ) {
                         Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))

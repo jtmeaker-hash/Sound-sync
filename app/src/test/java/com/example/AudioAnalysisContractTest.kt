@@ -31,7 +31,7 @@ class AudioAnalysisContractTest {
     }
 
     @Test
-    fun `classifies metadata provenance correctly between MusicBrainz, local DSP, hybrid, and embedded`() {
+    fun `classifies metadata provenance correctly between Apple Search, local DSP, hybrid, and embedded`() {
         val embeddedTrack = com.example.model.Track(
             id = "1",
             title = "Track 1",
@@ -39,10 +39,10 @@ class AudioAnalysisContractTest {
         )
         assertEquals(com.example.model.MetadataProvenance.EMBEDDED_TAGS, embeddedTrack.metadataProvenance)
 
-        val mbTrack = embeddedTrack.copy(
-            musicBrainzRecordingId = "rec-1234-abcd"
+        val appleTrack = embeddedTrack.copy(
+            appleTrackId = 123456L
         )
-        assertEquals(com.example.model.MetadataProvenance.MUSICBRAINZ_CANONICAL, mbTrack.metadataProvenance)
+        assertEquals(com.example.model.MetadataProvenance.APPLE_SEARCH, appleTrack.metadataProvenance)
 
         val localDspTrack = embeddedTrack.copy(
             bpm = 128.0,
@@ -52,7 +52,7 @@ class AudioAnalysisContractTest {
         assertEquals(com.example.model.MetadataProvenance.LOCAL_DSP_ANALYZED, localDspTrack.metadataProvenance)
 
         val hybridTrack = embeddedTrack.copy(
-            musicBrainzRecordingId = "rec-1234-abcd",
+            appleTrackId = 123456L,
             bpm = 128.0,
             bpmLastAnalyzed = 1700000000000L,
             bpmAnalysisVersion = "v1.0-stft"

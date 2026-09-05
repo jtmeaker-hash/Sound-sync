@@ -1435,7 +1435,7 @@ private fun InspectorActionsCard(
                 ) {
                     Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = DeckBPink, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Fetch MusicBrainz", fontSize = 11.sp)
+                    Text("Apple & Artwork", fontSize = 11.sp)
                 }
                 OutlinedButton(
                     onClick = onShare,

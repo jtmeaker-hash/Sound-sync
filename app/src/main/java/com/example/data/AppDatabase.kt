@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaybackSessionEntity::class,
         BulkOperationHistoryEntity::class
     ],
-    version = 9,
+    version = 11,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -252,6 +252,139 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val newColumns = listOf(
+                    "originalArtist TEXT",
+                    "resolvedArtist TEXT",
+                    "metadataSource TEXT",
+                    "metadataConfidence REAL NOT NULL DEFAULT 0.0"
+                )
+                newColumns.forEach { definition ->
+                    val colName = definition.substringBefore(' ')
+                    try {
+                        db.execSQL("ALTER TABLE tracks ADD COLUMN $colName $definition")
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. Create tracks_new without MusicBrainz columns and with new Apple/TheAudioDB columns
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `tracks_new` (
+                        `id` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `artist` TEXT NOT NULL,
+                        `album` TEXT NOT NULL,
+                        `genre` TEXT NOT NULL,
+                        `subGenre` TEXT NOT NULL,
+                        `bpm` REAL NOT NULL,
+                        `bpmConfidence` REAL NOT NULL,
+                        `bpmAnalysisVersion` TEXT,
+                        `bpmLastAnalyzed` INTEGER,
+                        `musicalKey` TEXT NOT NULL,
+                        `camelotKey` TEXT NOT NULL,
+                        `keyConfidence` REAL NOT NULL,
+                        `keyAnalysisVersion` TEXT,
+                        `keyLastAnalyzed` INTEGER,
+                        `durationSeconds` INTEGER NOT NULL,
+                        `bitrateKbps` INTEGER NOT NULL,
+                        `format` TEXT NOT NULL,
+                        `fileSizeMb` REAL NOT NULL,
+                        `filePath` TEXT NOT NULL,
+                        `isOfflineReady` INTEGER NOT NULL,
+                        `syncState` TEXT NOT NULL,
+                        `platformsString` TEXT NOT NULL,
+                        `energyRating` INTEGER NOT NULL,
+                        `hotCuesString` TEXT NOT NULL,
+                        `isAiTagged` INTEGER NOT NULL,
+                        `qualityRating` TEXT NOT NULL,
+                        `dateAdded` INTEGER NOT NULL,
+                        `crateId` TEXT NOT NULL,
+                        `trackNumber` INTEGER NOT NULL,
+                        `discNumber` INTEGER NOT NULL,
+                        `albumArtist` TEXT NOT NULL,
+                        `releaseDate` TEXT,
+                        `releaseYear` INTEGER,
+                        `recordLabel` TEXT,
+                        `barcode` TEXT,
+                        `isrc` TEXT,
+                        `appleTrackId` INTEGER,
+                        `appleCollectionId` INTEGER,
+                        `appleArtistId` INTEGER,
+                        `theAudioDbAlbumId` TEXT,
+                        `theAudioDbArtistId` TEXT,
+                        `artworkSource` TEXT,
+                        `artworkCachePath` TEXT,
+                        `metadataScanState` TEXT NOT NULL DEFAULT 'NOT_SCANNED',
+                        `metadataScanTimestamp` INTEGER,
+                        `userConfirmedMetadata` INTEGER NOT NULL DEFAULT 0,
+                        `artworkUrl` TEXT,
+                        `storageRelativePath` TEXT NOT NULL,
+                        `contentFingerprint` TEXT NOT NULL,
+                        `rating` INTEGER NOT NULL,
+                        `customTags` TEXT NOT NULL,
+                        `notes` TEXT NOT NULL,
+                        `composer` TEXT NOT NULL,
+                        `isManualBpm` INTEGER NOT NULL,
+                        `isManualKey` INTEGER NOT NULL,
+                        `analysisState` TEXT NOT NULL,
+                        `analysisVersion` INTEGER NOT NULL,
+                        `lastAnalysedAt` INTEGER,
+                        `analysisFailureReason` TEXT,
+                        `analysisRetryCount` INTEGER NOT NULL,
+                        `fileModifiedTimestamp` INTEGER NOT NULL,
+                        `originalArtist` TEXT,
+                        `resolvedArtist` TEXT,
+                        `metadataSource` TEXT,
+                        `metadataConfidence` REAL NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+
+                // 2. Copy data across
+                db.execSQL(
+                    """
+                    INSERT INTO `tracks_new` (
+                        id, title, artist, album, genre, subGenre, bpm, bpmConfidence, bpmAnalysisVersion, bpmLastAnalyzed,
+                        musicalKey, camelotKey, keyConfidence, keyAnalysisVersion, keyLastAnalyzed, durationSeconds,
+                        bitrateKbps, format, fileSizeMb, filePath, isOfflineReady, syncState, platformsString, energyRating,
+                        hotCuesString, isAiTagged, qualityRating, dateAdded, crateId, trackNumber, discNumber, albumArtist,
+                        releaseDate, releaseYear, recordLabel, barcode, isrc, artworkUrl, storageRelativePath,
+                        contentFingerprint, rating, customTags, notes, composer, isManualBpm, isManualKey, analysisState,
+                        analysisVersion, lastAnalysedAt, analysisFailureReason, analysisRetryCount, fileModifiedTimestamp,
+                        originalArtist, resolvedArtist, metadataSource, metadataConfidence
+                    )
+                    SELECT
+                        id, title, artist, album, genre, subGenre, bpm, bpmConfidence, bpmAnalysisVersion, bpmLastAnalyzed,
+                        musicalKey, camelotKey, keyConfidence, keyAnalysisVersion, keyLastAnalyzed, durationSeconds,
+                        bitrateKbps, format, fileSizeMb, filePath, isOfflineReady, syncState, platformsString, energyRating,
+                        hotCuesString, isAiTagged, qualityRating, dateAdded, crateId, trackNumber, discNumber, albumArtist,
+                        releaseDate, releaseYear, recordLabel, barcode, isrc, artworkUrl, storageRelativePath,
+                        contentFingerprint, rating, customTags, notes, composer, isManualBpm, isManualKey, analysisState,
+                        analysisVersion, lastAnalysedAt, analysisFailureReason, analysisRetryCount, fileModifiedTimestamp,
+                        originalArtist, resolvedArtist, metadataSource, metadataConfidence
+                    FROM `tracks`
+                    """.trimIndent()
+                )
+
+                // 3. Drop old table and rename new
+                db.execSQL("DROP TABLE `tracks`")
+                db.execSQL("ALTER TABLE `tracks_new` RENAME TO `tracks`")
+
+                // 4. Recreate indices
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_contentFingerprint` ON `tracks` (`contentFingerprint`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_filePath` ON `tracks` (`filePath`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_crateId` ON `tracks` (`crateId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_dateAdded` ON `tracks` (`dateAdded`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_analysisState` ON `tracks` (`analysisState`)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -267,7 +400,9 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_5_6,
                     MIGRATION_6_7,
                     MIGRATION_7_8,
-                    MIGRATION_8_9
+                    MIGRATION_8_9,
+                    MIGRATION_9_10,
+                    MIGRATION_10_11
                 )
                 .fallbackToDestructiveMigration()
                 .build()

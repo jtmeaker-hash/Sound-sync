@@ -318,12 +318,12 @@ fun BulkTrackEditorDialog(
                         }
                     }
 
-                    // ── 5. MUSICBRAINZ METADATA LOOKUP ─────────────────────────────────
-                    BulkSectionCard(title = "MUSICBRAINZ METADATA LOOKUP", icon = Icons.Default.AutoAwesome) {
-                        Text("Conservatively match and enrich metadata & Camelot keys using MusicBrainz:", fontSize = 11.sp, color = TextSecondary)
+                    // ── 5. APPLE & THEAUDIODB METADATA LOOKUP ──────────────────────────
+                    BulkSectionCard(title = "APPLE & THEAUDIODB METADATA LOOKUP", icon = Icons.Default.AutoAwesome) {
+                        Text("Conservatively match and enrich metadata & album artwork using Apple iTunes Search and TheAudioDB:", fontSize = 11.sp, color = TextSecondary)
                         OutlinedButton(
                             onClick = {
-                                startMusicBrainzBatchEnrichment(selectedTracks, viewModel, trackDao) { msg, pct, running ->
+                                startAppleBatchEnrichment(selectedTracks, viewModel, trackDao) { msg, pct, running ->
                                     analysisProgressMessage = msg
                                     analysisProgressPercent = pct
                                     isAnalysisRunning = running
@@ -335,7 +335,7 @@ fun BulkTrackEditorDialog(
                         ) {
                             Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = DeckBPink, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Fetch Missing Metadata", fontSize = 12.sp)
+                            Text("Fetch Missing Metadata & Artwork", fontSize = 12.sp)
                         }
                     }
 
@@ -760,27 +760,32 @@ private fun startBatchAnalysis(
     }
 }
 
-private fun startMusicBrainzBatchEnrichment(
+private fun startAppleBatchEnrichment(
     tracks: List<Track>,
     viewModel: MainDjViewModel,
     trackDao: TrackDao,
     onProgress: (msg: String, pct: Int, running: Boolean) -> Unit
 ) {
-    onProgress("Starting MusicBrainz metadata lookup...", 0, true)
+    onProgress("Starting Apple & TheAudioDB metadata lookup...", 0, true)
     kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
         val total = tracks.size
         tracks.forEachIndexed { index, track ->
             val pct = ((index + 1) * 100) / total
             withContext(Dispatchers.Main) {
-                onProgress("Querying MusicBrainz (${index + 1}/$total): '${track.title}'", pct, true)
+                onProgress("Resolving metadata (${index + 1}/$total): '${track.title}'", pct, true)
             }
             try {
-                val tagged = AiAutoTagger.autoTagTrack(track)
-                trackDao.updateTrack(TrackEntity.fromTrack(tagged))
+                val result = viewModel.metadataResolver.resolveTrackMetadata(
+                    track = track,
+                    forceRefresh = true,
+                    embedArtworkToFile = viewModel.metadataSettings.value.writeToFileEnabled
+                )
+                val updated = result.updatedTrack
+                trackDao.updateTrack(TrackEntity.fromTrack(updated))
             } catch (_: Exception) {}
         }
         withContext(Dispatchers.Main) {
-            onProgress("MusicBrainz enrichment complete", 100, false)
+            onProgress("Apple & TheAudioDB enrichment complete", 100, false)
         }
     }
 }

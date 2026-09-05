@@ -11,9 +11,7 @@ import com.example.data.AppDatabase
 import com.example.data.TrackEntity
 import com.example.metadata.AudioEmbeddedMetadataReader
 import com.example.metadata.LocalPcmAudioAnalyzer
-import com.example.metadata.MusicBrainzClient
-import com.example.metadata.MusicMetadataEnrichmentService
-import com.example.metadata.OkHttpMusicBrainzTransport
+import com.example.metadata.MetadataResolver
 import com.example.model.AnalysisState
 import com.example.model.AudioQualityRating
 import com.example.model.Track
@@ -71,8 +69,7 @@ class TrackAnalysisManager private constructor(
     private val dspSemaphore = Semaphore(1)
 
     private val pcmAnalyzer = LocalPcmAudioAnalyzer(context)
-    private val musicBrainzClient = MusicBrainzClient(OkHttpMusicBrainzTransport())
-    private val enrichmentService = MusicMetadataEnrichmentService(musicBrainzClient, pcmAnalyzer)
+    private val metadataResolver = MetadataResolver(context)
 
     private val prefs: SharedPreferences = context.getSharedPreferences("soundsync_analysis_prefs", Context.MODE_PRIVATE)
 
@@ -370,7 +367,7 @@ class TrackAnalysisManager private constructor(
         var updatedTrack = track
 
         try {
-            // 1. Read embedded tags for accurate metadata & MusicBrainz tags if missing
+            // 1. Read embedded tags for accurate local metadata if missing
             try {
                 val embedded = AudioEmbeddedMetadataReader.read(context, track.filePath)
                 if (embedded != null) {
@@ -398,14 +395,6 @@ class TrackAnalysisManager private constructor(
                     }
                     if (t.isrc.isNullOrBlank() && !embedded.isrc.isNullOrBlank()) {
                         t = t.copy(isrc = embedded.isrc)
-                        modified = true
-                    }
-                    if (t.musicBrainzRecordingId.isNullOrBlank() && !embedded.musicBrainzRecordingId.isNullOrBlank()) {
-                        t = t.copy(
-                            musicBrainzRecordingId = embedded.musicBrainzRecordingId,
-                            musicBrainzReleaseId = embedded.musicBrainzReleaseId,
-                            musicBrainzArtistId = embedded.musicBrainzArtistId
-                        )
                         modified = true
                     }
                     if (modified) {
@@ -467,29 +456,17 @@ class TrackAnalysisManager private constructor(
                 }
             }
 
-            // 5. MusicBrainz Enrichment (if online, enabled, and missing canonical IDs)
-            if (!updatedTrack.isMusicBrainzEnriched) {
+            // 5. Apple iTunes Search & TheAudioDB artwork resolution (with Missing Artist support)
+            if (!updatedTrack.isAppleIdentified) {
                 try {
-                    val mbResult = enrichmentService.enrich(
+                    val res = metadataResolver.resolveTrackMetadata(
                         track = updatedTrack,
-                        musicBrainzEnabled = true,
-                        bpmAnalysisEnabled = false,
-                        keyAnalysisEnabled = false
+                        forceRefresh = false,
+                        embedArtworkToFile = true
                     )
-                    if (mbResult.musicBrainzRecordingId != null) {
-                        updatedTrack = updatedTrack.copy(
-                            musicBrainzRecordingId = mbResult.musicBrainzRecordingId,
-                            musicBrainzArtistId = mbResult.musicBrainzArtistId,
-                            musicBrainzReleaseId = mbResult.musicBrainzReleaseId,
-                            musicBrainzReleaseGroupId = mbResult.musicBrainzReleaseGroupId,
-                            artworkUrl = mbResult.artworkUrl ?: updatedTrack.artworkUrl,
-                            releaseYear = mbResult.releaseYear ?: updatedTrack.releaseYear,
-                            barcode = mbResult.barcode ?: updatedTrack.barcode,
-                            isrc = mbResult.isrc ?: updatedTrack.isrc
-                        )
-                    }
+                    updatedTrack = res.updatedTrack
                 } catch (e: Exception) {
-                    Log.d(TAG, "MusicBrainz lookup non-fatal: ${e.message}")
+                    Log.d(TAG, "Apple / TheAudioDB metadata resolution non-fatal: ${e.message}")
                 }
             }
 

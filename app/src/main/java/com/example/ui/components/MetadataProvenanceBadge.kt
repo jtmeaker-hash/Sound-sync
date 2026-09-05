@@ -61,7 +61,7 @@ import java.util.Locale
 
 /**
  * Compact pill/badge displayed on track cards, listings, and inspectors indicating
- * if metadata was analyzed locally via PCM DSP or resolved via the MusicBrainz catalogue.
+ * if metadata was analyzed locally via PCM DSP or resolved via the Apple iTunes catalogue.
  */
 @Composable
 fun MetadataProvenanceBadge(
@@ -72,11 +72,11 @@ fun MetadataProvenanceBadge(
     val provenance = track.metadataProvenance
 
     val style = when (provenance) {
-        MetadataProvenance.MUSICBRAINZ_CANONICAL -> ProvenanceStyle(
-            bgColor = NeonPurple.copy(alpha = 0.18f),
-            borderColor = NeonPurple.copy(alpha = 0.6f),
-            textColor = NeonPurple,
-            icon = Icons.Default.Language
+        MetadataProvenance.APPLE_SEARCH -> ProvenanceStyle(
+            bgColor = Color(0xFFFA243C).copy(alpha = 0.18f),
+            borderColor = Color(0xFFFA243C).copy(alpha = 0.6f),
+            textColor = Color(0xFFFF5268),
+            icon = Icons.Default.MusicNote
         )
         MetadataProvenance.LOCAL_DSP_ANALYZED -> ProvenanceStyle(
             bgColor = NeonGreen.copy(alpha = 0.18f),
@@ -187,21 +187,21 @@ fun MetadataProvenanceCard(
                 lineHeight = 14.sp
             )
 
-            // MusicBrainz Section if active
-            if (track.isMusicBrainzEnriched) {
+            // Apple & TheAudioDB Section if active
+            if (track.isAppleIdentified) {
                 Surface(
                     shape = RoundedCornerShape(6.dp),
                     color = DjSurfaceDark,
-                    border = BorderStroke(0.5.dp, NeonPurple.copy(alpha = 0.4f)),
+                    border = BorderStroke(0.5.dp, Color(0xFFFA243C).copy(alpha = 0.4f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("MUSICBRAINZ CATALOGUE", color = NeonPurple, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
+                            Text("APPLE ITUNES CATALOGUE", color = Color(0xFFFF5268), fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.weight(1f))
-                            if (track.musicBrainzMatchConfidence > 0) {
+                            if (track.metadataConfidence > 0) {
                                 Text(
-                                    text = "${(track.musicBrainzMatchConfidence * 100).toInt()}% Match Confidence",
+                                    text = "${track.metadataConfidence.toInt()}% Match Confidence",
                                     color = NeonGreen,
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold
@@ -209,11 +209,17 @@ fun MetadataProvenanceCard(
                             }
                         }
 
-                        track.musicBrainzRecordingId?.let {
-                            ProvenanceField("Recording MBID", it, isMono = true)
+                        track.appleTrackId?.let {
+                            ProvenanceField("Apple Track ID", it.toString(), isMono = true)
                         }
-                        track.musicBrainzReleaseId?.let {
-                            ProvenanceField("Release MBID", it, isMono = true)
+                        track.appleCollectionId?.let {
+                            ProvenanceField("Apple Album ID", it.toString(), isMono = true)
+                        }
+                        track.theAudioDbAlbumId?.let {
+                            ProvenanceField("TheAudioDB Album ID", it, isMono = true)
+                        }
+                        track.artworkSource?.let {
+                            ProvenanceField("Artwork Source", it)
                         }
                         track.isrc?.let {
                             ProvenanceField("ISRC", it, isMono = true)
@@ -221,9 +227,7 @@ fun MetadataProvenanceCard(
                         track.releaseDate?.let {
                             ProvenanceField("Release Date", it)
                         }
-                        track.musicBrainzLastChecked?.let {
-                            ProvenanceField("Last Verified", dateFormat.format(Date(it)))
-                        }
+                        ProvenanceField("Scan State", track.metadataScanState)
                     }
                 }
             }
@@ -264,14 +268,14 @@ fun MetadataProvenanceCard(
             }
 
             // Embedded tags notice
-            if (!track.isMusicBrainzEnriched && !track.isLocallyAnalyzed) {
+            if (!track.isAppleIdentified && !track.isLocallyAnalyzed) {
                 Surface(
                     shape = RoundedCornerShape(6.dp),
                     color = DjSurfaceDark,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Track contains default container ID3 tags. Tap 'Enrich Metadata' to resolve canonical MusicBrainz catalog details and compute local high-precision BPM & Key.",
+                        text = "Track contains default container ID3 tags. Tap 'Enrich Metadata' to resolve official Apple iTunes catalog details and compute local high-precision BPM & Key.",
                         color = TextMuted,
                         fontSize = 9.5.sp,
                         modifier = Modifier.padding(8.dp)
@@ -289,7 +293,7 @@ fun MetadataProvenanceCard(
                 ) {
                     Icon(Icons.Default.AutoAwesome, contentDescription = "Enrich", tint = DjObsidian, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Re-Analyze & Verify with MusicBrainz", color = DjObsidian, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Re-Analyze & Verify with Apple Search", color = DjObsidian, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -335,10 +339,10 @@ fun MetadataProvenanceLegend(modifier: Modifier = Modifier) {
             )
 
             LegendItem(
-                badge = "MB CANONICAL",
-                badgeColor = NeonPurple,
-                title = "MusicBrainz Canonical Catalogue",
-                desc = "Metadata matched and disambiguated against official MusicBrainz IDs and ISRC."
+                badge = "APPLE",
+                badgeColor = Color(0xFFFF5268),
+                title = "Apple iTunes Catalogue",
+                desc = "Metadata matched and identified against official Apple iTunes Search catalogue."
             )
 
             LegendItem(
@@ -351,8 +355,8 @@ fun MetadataProvenanceLegend(modifier: Modifier = Modifier) {
             LegendItem(
                 badge = "HYBRID",
                 badgeColor = DeckACyan,
-                title = "Hybrid Verified (MB + Local DSP)",
-                desc = "Both MusicBrainz canonical catalog metadata and local DSP audio analysis attached."
+                title = "Hybrid Verified (Apple + Local DSP)",
+                desc = "Both official Apple iTunes catalog metadata and local DSP audio analysis attached."
             )
 
             LegendItem(

@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Code
@@ -103,7 +104,7 @@ import com.example.util.ExternalAppOpener
  * ├── DJ Tools (Metronome, Tap BPM, Key Converter, RMS Meter, Clipping Detector, DR Meter, EQ, Haas)
  * ├── Streaming (Spotify, SoundCloud)
  * ├── Playback & Audio (Crossfade, Playback Behaviour)
- * ├── Library & Metadata (Scanning, MusicBrainz, Storage Maintenance)
+ * ├── Library & Metadata (Scanning, Metadata & Artwork, Storage Maintenance)
  * ├── Appearance (Themes, Dark Mode)
  * └── GitHub (SoundSync Repo, App Updates)
  */
@@ -483,13 +484,23 @@ fun SideNavigationDrawerContent(
                             }
                         )
                         DrawerActionItem(
-                            title = "MusicBrainz Configuration",
-                            subtitle = "Canonical catalogue, local BPM & Key analysis",
+                            title = "Metadata & Artwork",
+                            subtitle = "Apple iTunes Search, TheAudioDB artwork & local DSP",
                             icon = Icons.Default.AutoAwesome,
                             accentColor = NeonAmber,
                             onClick = {
                                 onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.MusicBrainzSettings)
+                                onSelectDestination(SideMenuDestination.MetadataSettings)
+                            }
+                        )
+                        DrawerActionItem(
+                            title = "Backup & Restore",
+                            subtitle = "Survives app uninstall, auto-backup, export/import",
+                            icon = Icons.Default.Backup,
+                            accentColor = NeonAmber,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.BackupRestore)
                             }
                         )
                         DrawerActionItem(
@@ -701,7 +712,7 @@ private fun DrawerActionItem(
 /**
  * Pro Workstation sidebar navigation drawer.
  * Grouped strictly into 4 professional categories inspired by Pioneer rekordbox:
- * - MUSIC: Library & Scanning, MusicBrainz, Listening Stats, Spotify, SoundCloud, Suno, ACE Studio
+ * - MUSIC: Library & Scanning, Metadata & Artwork, Listening Stats, Spotify, SoundCloud, Suno, ACE Studio
  * - TOOLS: Metronome, Tap BPM, Key Converter, RMS Meter, Clipping Detector, DR Meter
  * - AUDIO: Multipoint EQ, Haas Surround, Crossfade & Transitions, Playback Behaviour
  * - SYSTEM: Appearance & Density, SoundSync GitHub, Check for Updates
@@ -834,12 +845,12 @@ private fun ProSideNavigationDrawerContent(
                             }
                         )
                         ProDrawerItem(
-                            title = "MusicBrainz Catalogue",
-                            subtitle = "Canonical catalogue, local BPM & Key",
+                            title = "Metadata & Artwork",
+                            subtitle = "Apple iTunes Search, TheAudioDB & local DSP",
                             icon = Icons.Default.AutoAwesome,
                             onClick = {
                                 onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.MusicBrainzSettings)
+                                onSelectDestination(SideMenuDestination.MetadataSettings)
                             }
                         )
                         ProDrawerItem(
@@ -1039,7 +1050,7 @@ private fun ProSideNavigationDrawerContent(
                 // ── 4. SYSTEM ────────────────────────────────────
                 ProCategoryHeader(
                     title = "SYSTEM",
-                    badge = "3 ITEMS",
+                    badge = "4 ITEMS",
                     isExpanded = expandedMap["SYSTEM"] == true,
                     onToggle = { expandedMap["SYSTEM"] = !(expandedMap["SYSTEM"] ?: false) }
                 )
@@ -1049,6 +1060,15 @@ private fun ProSideNavigationDrawerContent(
                     exit = shrinkVertically()
                 ) {
                     Column(modifier = Modifier.padding(start = 8.dp)) {
+                        ProDrawerItem(
+                            title = "Backup & Restore",
+                            subtitle = "Survives app uninstall, auto-backup, export/import",
+                            icon = Icons.Default.Backup,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.BackupRestore)
+                            }
+                        )
                         ProDrawerItem(
                             title = "Appearance & Density",
                             subtitle = "Default / Pro theme & Compact / Comfortable",

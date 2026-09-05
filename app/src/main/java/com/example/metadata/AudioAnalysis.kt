@@ -1,5 +1,6 @@
 package com.example.metadata
 
+import com.example.model.Track
 import java.util.Locale
 
 const val AUDIO_ANALYSIS_VERSION = "1"
@@ -13,6 +14,10 @@ data class AudioAnalysisResult(
     val analysisVersion: String = AUDIO_ANALYSIS_VERSION,
     val analyzedAt: Long = System.currentTimeMillis()
 )
+
+interface LocalAudioAnalyzer {
+    suspend fun analyze(track: Track): AudioAnalysisResult
+}
 
 object CamelotKey {
     private val major = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")

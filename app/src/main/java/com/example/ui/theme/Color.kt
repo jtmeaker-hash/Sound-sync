@@ -25,6 +25,10 @@ enum class ThemeMode {
     }
 }
 
+// Theme-only primary accents and deck signals
+val BloodRedPrimary = Color(0xFFB11226)
+val DeckACyan = Color(0xFF00F0FF)
+
 private data class AppearancePalette(
     val background: Color,
     val surface: Color,
@@ -33,7 +37,9 @@ private data class AppearancePalette(
     val border: Color,
     val primaryText: Color,
     val secondaryText: Color,
-    val mutedText: Color
+    val mutedText: Color,
+    val accent: Color = DeckACyan,
+    val onAccent: Color = Color(0xFF090B10)
 )
 
 private val CurrentAppearancePalette = AppearancePalette(
@@ -44,7 +50,9 @@ private val CurrentAppearancePalette = AppearancePalette(
     border = Color(0xFF2D384E),
     primaryText = Color(0xFFF1F5F9),
     secondaryText = Color(0xFF94A3B8),
-    mutedText = Color(0xFF64748B)
+    mutedText = Color(0xFF64748B),
+    accent = DeckACyan,
+    onAccent = Color(0xFF090B10)
 )
 
 private val ProAppearancePalette = AppearancePalette(
@@ -55,7 +63,9 @@ private val ProAppearancePalette = AppearancePalette(
     border = Color(0xFF2B313C),
     primaryText = Color(0xFFF0F2F5),
     secondaryText = Color(0xFF8E95A2),
-    mutedText = Color(0xFF5E6573)
+    mutedText = Color(0xFF5E6573),
+    accent = Color(0xFF1E6CFF),
+    onAccent = Color.White
 )
 
 private val BloodRedAppearancePalette = AppearancePalette(
@@ -66,15 +76,35 @@ private val BloodRedAppearancePalette = AppearancePalette(
     border = Color(0xFF472024),
     primaryText = Color(0xFFF8F7F7),
     secondaryText = Color(0xFFB7AAAC),
-    mutedText = Color(0xFF817477)
+    mutedText = Color(0xFF817477),
+    accent = Color(0xFFB11226),
+    onAccent = Color.White
 )
+
+private val ProBlackWhiteAppearancePalette = AppearancePalette(
+    background = Color(0xFF0A0A0C),
+    surface = Color(0xFF131316),
+    card = Color(0xFF18181D),
+    elevated = Color(0xFF1E1E23),
+    border = Color(0xFF282830),
+    primaryText = Color(0xFFFFFFFF),
+    secondaryText = Color(0xFFA1A1AA),
+    mutedText = Color(0xFF71717A),
+    accent = Color(0xFFFFFFFF),
+    onAccent = Color(0xFF000000)
+)
+
+private val ProBlackRedAppearancePalette = BloodRedAppearancePalette
 
 @Volatile
 private var activeAppearancePalette = CurrentAppearancePalette
 
-internal fun setActiveAppearancePalette(mode: ThemeMode) {
+internal fun setActiveAppearancePalette(mode: ThemeMode, proVariant: ProDarkVariant = ProDarkVariant.BLACK_WHITE) {
     activeAppearancePalette = when (mode) {
-        ThemeMode.PRO -> ProAppearancePalette
+        ThemeMode.PRO -> when (proVariant) {
+            ProDarkVariant.BLACK_WHITE -> ProBlackWhiteAppearancePalette
+            ProDarkVariant.BLACK_RED -> ProBlackRedAppearancePalette
+        }
         ThemeMode.DARK -> BloodRedAppearancePalette
         else -> CurrentAppearancePalette
     }
@@ -86,12 +116,10 @@ val DjSurfaceDark: Color get() = activeAppearancePalette.surface
 val DjSurfaceCard: Color get() = activeAppearancePalette.card
 val DjSurfaceElevated: Color get() = activeAppearancePalette.elevated
 val DjSurfaceBorder: Color get() = activeAppearancePalette.border
+val DjAccent: Color get() = activeAppearancePalette.accent
+val DjOnAccent: Color get() = activeAppearancePalette.onAccent
 
-// Theme-only primary accent. Functional signal colours below remain unchanged.
-val BloodRedPrimary = Color(0xFFB11226)
-
-// Deck A - Electric Cyan
-val DeckACyan = Color(0xFF00F0FF)
+// Deck A - Electric Cyan (details)
 val DeckACyanDark = Color(0xFF0099A8)
 val DeckACyanGlow = Color(0x3300F0FF)
 

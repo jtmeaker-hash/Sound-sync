@@ -22,12 +22,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.Button
@@ -43,13 +45,18 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import android.widget.Toast
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -332,6 +339,75 @@ fun LocalMusicView(
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Text("Start Device Scan", color = DjObsidian, fontWeight = FontWeight.Bold)
+                        }
+
+                        val context = LocalContext.current
+                        val scope = rememberCoroutineScope()
+                        val backupManager = remember { com.example.backup.SoundSyncBackupManager.getInstance(context) }
+                        var hasBackup by remember { mutableStateOf(false) }
+                        var isRestoring by remember { mutableStateOf(false) }
+
+                        LaunchedEffect(Unit) {
+                            hasBackup = backupManager.hasExistingBackup()
+                        }
+
+                        if (hasBackup) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp),
+                                colors = CardDefaults.cardColors(containerColor = DjSurfaceElevated),
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, DeckACyan.copy(alpha = 0.6f))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Backup, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Previous Backup Found", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
+                                    Text(
+                                        "Restore your previous SoundSync library, Song Finds, analyzed BPMs, Camelot keys, and cue points with 1 tap.",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                isRestoring = true
+                                                val res = backupManager.restoreBackup()
+                                                isRestoring = false
+                                                when (res) {
+                                                    is com.example.backup.RestoreResult.Success -> {
+                                                        Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                                    }
+                                                    is com.example.backup.RestoreResult.Error -> {
+                                                        Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        enabled = !isRestoring,
+                                        colors = ButtonDefaults.buttonColors(containerColor = DeckACyan, contentColor = DjObsidian),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        if (isRestoring) {
+                                            CircularProgressIndicator(color = DjObsidian, modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Restoring...", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        } else {
+                                            Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Restore Backup", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

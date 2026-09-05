@@ -58,6 +58,7 @@ import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
 import com.example.ui.theme.DjSurfaceBorder
+import com.example.ui.theme.ProDarkVariant
 import com.example.ui.theme.DjSurfaceCard
 import com.example.ui.theme.DjSurfaceElevated
 import com.example.ui.theme.NeonGreen
@@ -323,10 +324,17 @@ private fun MiniWaveformProgressStrip(
     onSeekFraction: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isPro = SoundSyncTheme.isPro
+    val theme = SoundSyncTheme.current
+    val bgColor = if (isPro) theme.surfaceSunken else Color(0xFF090B10)
+    val activeColor = if (isPro) theme.accent else DeckACyan
+    val inactiveColor = if (isPro) theme.surfaceElevated.copy(alpha = 0.5f) else Color(0xFF222B3D)
+    val playheadColor = if (isPro) theme.accent else Color(0xFFFF0055)
+
     Box(
         modifier = modifier
             .clipToBounds()
-            .background(Color(0xFF090B10))
+            .background(bgColor)
             .pointerInput(durationMs) {
                 detectTapGestures { offset ->
                     val fraction = (offset.x / size.width).coerceIn(0f, 1f)
@@ -350,7 +358,7 @@ private fun MiniWaveformProgressStrip(
                     val peak = peaks[i]
                     val barH = max(1f, peak * (centerY * 0.9f))
                     val isPast = x <= playheadX
-                    val color = if (isPast) DeckACyan else Color(0xFF222B3D)
+                    val color = if (isPast) activeColor else inactiveColor
 
                     drawLine(
                         color = color,
@@ -362,7 +370,7 @@ private fun MiniWaveformProgressStrip(
 
                 // Center/Playhead Marker
                 drawLine(
-                    color = Color(0xFFFF0055),
+                    color = playheadColor,
                     start = Offset(playheadX, 0f),
                     end = Offset(playheadX, height),
                     strokeWidth = 2f
@@ -370,11 +378,11 @@ private fun MiniWaveformProgressStrip(
             } else {
                 // Standard progress fill
                 drawRect(
-                    color = Color(0xFF141924),
+                    color = if (isPro) theme.surfaceRaised else Color(0xFF141924),
                     size = Size(width, height)
                 )
                 drawRect(
-                    color = DeckACyan,
+                    color = activeColor,
                     size = Size(playheadX, height)
                 )
             }
@@ -531,7 +539,7 @@ private fun ProDjMiniPlayer(
                             ) {
                                 Text(
                                     text = track.camelotKey.ifBlank { track.musicalKey },
-                                    color = Color(0xFF38BDF8),
+                                    color = if (theme.proDarkVariant == ProDarkVariant.BLACK_WHITE) Color(0xFFD4D4D8) else theme.accent,
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace,
@@ -569,7 +577,7 @@ private fun ProDjMiniPlayer(
                         Icon(
                             imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = if (isPlaying) "Pause" else "Play",
-                            tint = if (isPlaying) theme.accent else Color.White,
+                            tint = if (isPlaying) theme.accent else theme.onAccent,
                             modifier = Modifier.size(20.dp)
                         )
                     }

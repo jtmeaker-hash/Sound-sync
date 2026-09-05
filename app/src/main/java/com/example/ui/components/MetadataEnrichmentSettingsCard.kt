@@ -33,7 +33,8 @@ import com.example.ui.theme.TextSecondary
 fun MetadataEnrichmentSettingsCard(
     settings: MetadataSettings,
     onSetEnrichmentEnabled: (Boolean) -> Unit,
-    onSetMusicBrainzEnabled: (Boolean) -> Unit,
+    onSetAppleSearchEnabled: (Boolean) -> Unit,
+    onSetTheAudioDbEnabled: (Boolean) -> Unit = {},
     onSetBpmAnalysisEnabled: (Boolean) -> Unit,
     onSetKeyAnalysisEnabled: (Boolean) -> Unit,
     onSetWriteToFileEnabled: (Boolean) -> Unit,
@@ -55,11 +56,12 @@ fun MetadataEnrichmentSettingsCard(
         ) {
             Text("Metadata Enrichment & Catalogue", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
             Text(
-                "MusicBrainz canonical database matches recordings; high-precision DSP analyzes BPM & Key locally from PCM.",
+                "Apple iTunes Search identifies tracks and catalog metadata; TheAudioDB resolves cover art; high-precision DSP analyzes BPM & Key locally.",
                 color = TextSecondary, fontSize = 10.sp
             )
             SettingSwitch("Enable enrichment engine", settings.enrichmentEnabled, onSetEnrichmentEnabled)
-            SettingSwitch("Use MusicBrainz open catalogue", settings.musicBrainzEnabled, onSetMusicBrainzEnabled)
+            SettingSwitch("Use Apple iTunes Search catalogue", settings.appleSearchEnabled, onSetAppleSearchEnabled)
+            SettingSwitch("Use TheAudioDB for cover art", settings.theAudioDbEnabled, onSetTheAudioDbEnabled)
             SettingSwitch("Analyse BPM locally via PCM STFT", settings.bpmAnalysisEnabled, onSetBpmAnalysisEnabled)
             SettingSwitch("Analyse Musical Key locally via chroma", settings.keyAnalysisEnabled, onSetKeyAnalysisEnabled)
             SettingSwitch("Show Metadata Provenance Badges", settings.showProvenanceBadges, onSetShowProvenanceBadges)

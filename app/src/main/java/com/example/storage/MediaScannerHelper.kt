@@ -172,7 +172,7 @@ object MediaScannerHelper {
 
                         val qualityRating = resolveQualityRating(format, computedBitrateKbps)
 
-                        // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 tags & MusicBrainz tags) if present
+                        // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 tags) if present
                         val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, targetPath)
                         val effectiveTitle = embedded.title?.takeIf(String::isNotBlank) ?: title
                         val effectiveArtist = embedded.artist?.takeIf(String::isNotBlank)
@@ -222,15 +222,13 @@ object MediaScannerHelper {
                             recordLabel = embedded.recordLabel,
                             barcode = embedded.barcode,
                             isrc = embedded.isrc,
-                            musicBrainzRecordingId = embedded.musicBrainzRecordingId,
-                            musicBrainzReleaseId = embedded.musicBrainzReleaseId,
-                            musicBrainzArtistId = embedded.musicBrainzArtistId,
-                            musicBrainzReleaseGroupId = embedded.musicBrainzReleaseGroupId,
-                            musicBrainzMatchConfidence = if (embedded.hasEmbeddedMusicBrainz) 1.0 else 0.0,
-                            musicBrainzLastChecked = if (embedded.hasEmbeddedMusicBrainz) System.currentTimeMillis() else null,
-                            artworkUrl = embedded.musicBrainzReleaseId?.let { "https://coverartarchive.org/release/$it/front-500" },
                             storageRelativePath = storageRelPath,
-                            contentFingerprint = fingerprint
+                            contentFingerprint = fingerprint,
+                            originalArtist = embedded.artist?.takeIf { !com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(it) }
+                                ?: rawArtist?.takeIf { !com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(it) },
+                            resolvedArtist = null,
+                            metadataSource = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(effectiveArtist)) "EMBEDDED" else null,
+                            metadataConfidence = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(effectiveArtist)) 100.0 else 0.0
                         )
 
                         seenFingerprints.add(fingerprint)
@@ -344,7 +342,7 @@ object MediaScannerHelper {
 
             val effectiveTitle = if (!title.isNullOrBlank()) title else displayName.substringBeforeLast(".")
 
-            // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 tags & MusicBrainz tags) if present
+            // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 tags) if present
             val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, uri.toString())
             val resolvedTitle = embedded.title?.takeIf(String::isNotBlank)
                 ?: if (!title.isNullOrBlank()) title else displayName.substringBeforeLast(".")
@@ -396,13 +394,6 @@ object MediaScannerHelper {
                 recordLabel = embedded.recordLabel,
                 barcode = embedded.barcode,
                 isrc = embedded.isrc,
-                musicBrainzRecordingId = embedded.musicBrainzRecordingId,
-                musicBrainzReleaseId = embedded.musicBrainzReleaseId,
-                musicBrainzArtistId = embedded.musicBrainzArtistId,
-                musicBrainzReleaseGroupId = embedded.musicBrainzReleaseGroupId,
-                musicBrainzMatchConfidence = if (embedded.hasEmbeddedMusicBrainz) 1.0 else 0.0,
-                musicBrainzLastChecked = if (embedded.hasEmbeddedMusicBrainz) System.currentTimeMillis() else null,
-                artworkUrl = embedded.musicBrainzReleaseId?.let { "https://coverartarchive.org/release/$it/front-500" },
                 contentFingerprint = fingerprint
             )
         } catch (e: Exception) {

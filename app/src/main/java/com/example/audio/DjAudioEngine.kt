@@ -424,7 +424,7 @@ class DjAudioEngine(private val context: Context) {
     }
 
     /**
-     * Updates metadata for the currently active track (e.g. after MusicBrainz enrichment or tag editing)
+     * Updates metadata for the currently active track (e.g. after Apple/TheAudioDB enrichment or tag editing)
      * WITHOUT resetting the decoder, position, or audio stream.
      */
     fun updateCurrentTrackMetadata(updatedTrack: Track) {

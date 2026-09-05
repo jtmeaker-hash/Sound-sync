@@ -75,10 +75,10 @@ enum class MetadataProvenance(
     val fullLabel: String,
     val description: String
 ) {
-    MUSICBRAINZ_CANONICAL(
-        shortLabel = "MB CANONICAL",
-        fullLabel = "MusicBrainz Canonical Catalogue",
-        description = "Identified against official MusicBrainz open database (ISRC/MBID/Release Group)."
+    APPLE_SEARCH(
+        shortLabel = "APPLE",
+        fullLabel = "Apple iTunes Catalogue",
+        description = "Identified against official Apple iTunes Search catalogue."
     ),
     LOCAL_DSP_ANALYZED(
         shortLabel = "LOCAL DSP",
@@ -87,14 +87,28 @@ enum class MetadataProvenance(
     ),
     VERIFIED_HYBRID(
         shortLabel = "HYBRID",
-        fullLabel = "Hybrid Verified (MB + Local DSP)",
-        description = "Canonical MusicBrainz catalogue release metadata paired with high-precision local PCM audio analysis."
+        fullLabel = "Hybrid Verified (Apple + Local DSP)",
+        description = "Official Apple catalogue release metadata paired with high-precision local PCM audio analysis."
     ),
     EMBEDDED_TAGS(
         shortLabel = "EMBEDDED",
         fullLabel = "Embedded File Tags",
         description = "Standard metadata read from local audio container ID3/Vorbis tags without external verification."
     )
+}
+
+enum class MetadataScanState {
+    NOT_SCANNED,
+    QUEUED,
+    SEARCHING_APPLE,
+    IDENTIFIED,
+    SEARCHING_ARTWORK,
+    COMPLETE,
+    PARTIAL,
+    LOW_CONFIDENCE,
+    NOT_FOUND,
+    TEMPORARY_FAILURE,
+    USER_CONFIRMED
 }
 
 enum class AnalysisState {
@@ -147,12 +161,16 @@ data class Track(
     val recordLabel: String? = null,
     val barcode: String? = null,
     val isrc: String? = null,
-    val musicBrainzRecordingId: String? = null,
-    val musicBrainzArtistId: String? = null,
-    val musicBrainzReleaseId: String? = null,
-    val musicBrainzReleaseGroupId: String? = null,
-    val musicBrainzMatchConfidence: Double = 0.0,
-    val musicBrainzLastChecked: Long? = null,
+    val appleTrackId: Long? = null,
+    val appleCollectionId: Long? = null,
+    val appleArtistId: Long? = null,
+    val theAudioDbAlbumId: String? = null,
+    val theAudioDbArtistId: String? = null,
+    val artworkSource: String? = null,
+    val artworkCachePath: String? = null,
+    val metadataScanState: String = "NOT_SCANNED",
+    val metadataScanTimestamp: Long? = null,
+    val userConfirmedMetadata: Boolean = false,
     val artworkUrl: String? = null,
     val storageRelativePath: String = "",
     val contentFingerprint: String = "",
@@ -167,7 +185,11 @@ data class Track(
     val lastAnalysedAt: Long? = null,
     val analysisFailureReason: String? = null,
     val analysisRetryCount: Int = 0,
-    val fileModifiedTimestamp: Long = 0L
+    val fileModifiedTimestamp: Long = 0L,
+    val originalArtist: String? = null,
+    val resolvedArtist: String? = null,
+    val metadataSource: String? = null,
+    val metadataConfidence: Double = 0.0
 ) {
     val tagsList: List<String>
         get() = customTags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -181,8 +203,8 @@ data class Track(
     val hasValidKey: Boolean
         get() = musicalKey.isNotBlank() && musicalKey != "—" && musicalKey != "-" && !musicalKey.equals("Unknown", ignoreCase = true)
 
-    val isMusicBrainzEnriched: Boolean
-        get() = !musicBrainzRecordingId.isNullOrBlank() || !musicBrainzReleaseId.isNullOrBlank()
+    val isAppleIdentified: Boolean
+        get() = appleTrackId != null || !theAudioDbAlbumId.isNullOrBlank() || metadataScanState == MetadataScanState.COMPLETE.name || metadataScanState == MetadataScanState.IDENTIFIED.name || metadataScanState == MetadataScanState.USER_CONFIRMED.name
 
     val isLocallyAnalyzed: Boolean
         get() = (bpmLastAnalyzed != null && bpmLastAnalyzed > 0L) ||
@@ -192,8 +214,8 @@ data class Track(
 
     val metadataProvenance: MetadataProvenance
         get() = when {
-            isMusicBrainzEnriched && isLocallyAnalyzed -> MetadataProvenance.VERIFIED_HYBRID
-            isMusicBrainzEnriched -> MetadataProvenance.MUSICBRAINZ_CANONICAL
+            isAppleIdentified && isLocallyAnalyzed -> MetadataProvenance.VERIFIED_HYBRID
+            isAppleIdentified -> MetadataProvenance.APPLE_SEARCH
             isLocallyAnalyzed -> MetadataProvenance.LOCAL_DSP_ANALYZED
             else -> MetadataProvenance.EMBEDDED_TAGS
         }

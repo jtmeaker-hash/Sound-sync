@@ -96,9 +96,10 @@ fun LibrarySettingsScreen(
     operationJournal: List<OperationJournalItem>,
     scanServiceState: AudioScanState = AudioScanState(),
     metadataSettings: MetadataSettings = MetadataSettings(),
-    focusMusicBrainz: Boolean = false,
+    focusMetadataOnly: Boolean = false,
     onSetEnrichmentEnabled: (Boolean) -> Unit = {},
-    onSetMusicBrainzEnabled: (Boolean) -> Unit = {},
+    onSetAppleSearchEnabled: (Boolean) -> Unit = {},
+    onSetTheAudioDbEnabled: (Boolean) -> Unit = {},
     onSetBpmAnalysisEnabled: (Boolean) -> Unit = {},
     onSetKeyAnalysisEnabled: (Boolean) -> Unit = {},
     onSetWriteToFileEnabled: (Boolean) -> Unit = {},
@@ -130,12 +131,13 @@ fun LibrarySettingsScreen(
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // MusicBrainz & Metadata Settings Card
+        // Metadata & Artwork Settings Card
         item {
             MetadataEnrichmentSettingsCard(
                 settings = metadataSettings,
                 onSetEnrichmentEnabled = onSetEnrichmentEnabled,
-                onSetMusicBrainzEnabled = onSetMusicBrainzEnabled,
+                onSetAppleSearchEnabled = onSetAppleSearchEnabled,
+                onSetTheAudioDbEnabled = onSetTheAudioDbEnabled,
                 onSetBpmAnalysisEnabled = onSetBpmAnalysisEnabled,
                 onSetKeyAnalysisEnabled = onSetKeyAnalysisEnabled,
                 onSetWriteToFileEnabled = onSetWriteToFileEnabled,
@@ -145,7 +147,7 @@ fun LibrarySettingsScreen(
             )
         }
 
-        if (!focusMusicBrainz) {
+        if (!focusMetadataOnly) {
             // Background DocumentFile Scanner Live Card
             item {
                 BackgroundScannerStatusCard(
