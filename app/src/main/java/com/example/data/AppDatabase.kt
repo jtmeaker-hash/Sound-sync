@@ -16,9 +16,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaylistTrackEntity::class,
         SongFindEntity::class,
         PlaybackSessionEntity::class,
-        BulkOperationHistoryEntity::class
+        BulkOperationHistoryEntity::class,
+        MetadataHistoryEntity::class,
+        MetadataReviewItemEntity::class,
+        WatchedFolderEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,6 +31,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun songFindDao(): SongFindDao
     abstract fun playbackSessionDao(): PlaybackSessionDao
     abstract fun bulkOperationHistoryDao(): BulkOperationHistoryDao
+    abstract fun metadataHistoryDao(): MetadataHistoryDao
+    abstract fun metadataReviewInboxDao(): MetadataReviewInboxDao
+    abstract fun watchedFolderDao(): WatchedFolderDao
 
     companion object {
         @Volatile
@@ -385,6 +391,88 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add fingerprint columns to tracks
+                try {
+                    db.execSQL("ALTER TABLE `tracks` ADD COLUMN `fingerprintAlgorithm` TEXT")
+                } catch (ignored: Exception) {}
+                try {
+                    db.execSQL("ALTER TABLE `tracks` ADD COLUMN `fingerprintTimestamp` INTEGER")
+                } catch (ignored: Exception) {}
+
+                // metadata_history table
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `metadata_history` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `trackId` TEXT NOT NULL,
+                        `filePath` TEXT NOT NULL,
+                        `fieldChanged` TEXT NOT NULL,
+                        `previousValue` TEXT,
+                        `newValue` TEXT,
+                        `source` TEXT NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        `isAutomatic` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_history_trackId` ON `metadata_history` (`trackId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_history_timestamp` ON `metadata_history` (`timestamp`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_history_filePath` ON `metadata_history` (`filePath`)")
+
+                // metadata_review_inbox table
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `metadata_review_inbox` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `trackId` TEXT NOT NULL,
+                        `filePath` TEXT NOT NULL,
+                        `originalArtist` TEXT NOT NULL,
+                        `originalTitle` TEXT NOT NULL,
+                        `originalAlbum` TEXT NOT NULL,
+                        `proposedArtist` TEXT NOT NULL,
+                        `proposedTitle` TEXT NOT NULL,
+                        `proposedAlbum` TEXT NOT NULL,
+                        `proposedGenre` TEXT,
+                        `proposedYear` INTEGER,
+                        `proposedTrackNumber` INTEGER,
+                        `proposedArtworkUrl` TEXT,
+                        `provider` TEXT NOT NULL,
+                        `confidenceScore` REAL NOT NULL,
+                        `evidenceSummary` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `timestamp` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_review_inbox_trackId` ON `metadata_review_inbox` (`trackId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_review_inbox_status` ON `metadata_review_inbox` (`status`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_review_inbox_confidenceScore` ON `metadata_review_inbox` (`confidenceScore`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_review_inbox_timestamp` ON `metadata_review_inbox` (`timestamp`)")
+
+                // watched_folders table
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `watched_folders` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `folderPathOrUri` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `includeSubfolders` INTEGER NOT NULL,
+                        `autoScanNewFiles` INTEGER NOT NULL,
+                        `autoAnalyzeMetadata` INTEGER NOT NULL,
+                        `autoFingerprint` INTEGER NOT NULL,
+                        `autoAnalyzeBpmKey` INTEGER NOT NULL,
+                        `autoFetchArtwork` INTEGER NOT NULL,
+                        `ignoredExtensions` TEXT NOT NULL,
+                        `lastScannedTimestamp` INTEGER NOT NULL,
+                        `isEnabled` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -402,7 +490,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_7_8,
                     MIGRATION_8_9,
                     MIGRATION_9_10,
-                    MIGRATION_10_11
+                    MIGRATION_10_11,
+                    MIGRATION_11_12
                 )
                 .fallbackToDestructiveMigration()
                 .build()

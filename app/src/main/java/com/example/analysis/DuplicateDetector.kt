@@ -1,5 +1,6 @@
 package com.example.analysis
 
+import com.example.metadata.parser.TrackIdentityParser
 import com.example.model.AudioQualityRating
 import com.example.model.DuplicateMatch
 import com.example.model.Track
@@ -86,6 +87,13 @@ object DuplicateDetector {
     }
 
     private fun calculateSimilarity(t1: NormalizedTrack, t2: NormalizedTrack): Int {
+        // Version / Remix check: Different versions/remixes must NOT be treated as duplicates
+        val v1 = TrackIdentityParser.extractVersion(t1.track.title)
+        val v2 = TrackIdentityParser.extractVersion(t2.track.title)
+        if (v1 != null && v2 != null && !v1.equals(v2, ignoreCase = true)) {
+            return 0
+        }
+
         val titleSim = tokenSimilarity(t1.normTitle, t2.normTitle)
         val artistSim = tokenSimilarity(t1.normArtist, t2.normArtist)
 

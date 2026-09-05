@@ -166,6 +166,7 @@ class MetadataResolver(
         }
 
         Log.d(TAG, "selected track: \"${selectedCandidate.artistName} - ${selectedCandidate.trackName}\" (confidence=${"%.1f".format(candidateScore)})")
+        Log.d("AppleMetadata", "Match: ${selectedCandidate.artistName} - ${selectedCandidate.trackName}")
 
         // 5. Build Enriched Track Metadata from Apple (Phases 5 & 6)
         // Technical properties (BPM, key, local duration, format, bitrate) are STRICTLY preserved!
@@ -194,8 +195,7 @@ class MetadataResolver(
             metadataScanState = MetadataScanState.IDENTIFIED.name
         )
 
-        // 6. Artwork Resolution via TheAudioDB (Phases 11, 13, 14, 15)
-        // Apple artwork is strictly ignored! TheAudioDB is the sole artwork provider.
+        // 6. Artwork Resolution via TheAudioDB with Apple Fallback (Phases 11, 13, 14, 15)
         var resolvedArtworkUrl: String? = track.artworkUrl
         var artworkSource: String? = track.artworkSource
         var artworkCachePath: String? = track.artworkCachePath
@@ -240,6 +240,35 @@ class MetadataResolver(
             } catch (e: Exception) {
                 Log.w(TAG, "TheAudioDB lookup failed gracefully without affecting textual metadata: ${e.message}")
             }
+
+            // Fallback to Apple Artwork if TheAudioDB did not provide artwork
+            if (artworkCachePath == null) {
+                val appleArtUrl = selectedCandidate.artworkUrl600 ?: selectedCandidate.artworkUrl100
+                if (!appleArtUrl.isNullOrBlank()) {
+                    Log.d("AppleMetadata", "Artwork found: $appleArtUrl")
+                    try {
+                        val downloaded = artworkProvider.downloadArtwork(appleArtUrl)
+                        if (downloaded != null) {
+                            val savedFile = artworkCache.saveArtwork(resolvedArtist, resolvedAlbum, downloaded)
+                            resolvedArtworkUrl = appleArtUrl
+                            artworkSource = "Apple iTunes"
+                            artworkCachePath = savedFile.absolutePath
+                            Log.d("ArtworkResolver", "Saved Apple artwork to cache: ${savedFile.absolutePath}")
+
+                            if (embedArtworkToFile && !track.filePath.startsWith("content://") && File(track.filePath).exists()) {
+                                val embedded = ArtworkEmbeddingHelper.embedArtwork(
+                                    audioFile = File(track.filePath),
+                                    artworkBytes = downloaded.bytes,
+                                    mimeType = downloaded.mimeType
+                                )
+                                Log.d("MetadataWriter", "embedded artwork write: ${if (embedded) "SUCCESS" else "SKIPPED/UNSUPPORTED"}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Apple artwork download failed: ${e.message}")
+                    }
+                }
+            }
         }
 
         val finalScanState = if (candidateScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD) {
@@ -256,6 +285,7 @@ class MetadataResolver(
         )
 
         Log.d("MetadataWriter", "database write: updated track id=${finalTrack.id} state=${finalTrack.metadataScanState}")
+        Log.d("AppleMetadata", "Metadata saved successfully")
 
         MetadataResolutionResult(
             updatedTrack = finalTrack,

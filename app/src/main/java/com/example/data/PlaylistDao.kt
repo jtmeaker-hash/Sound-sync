@@ -47,6 +47,9 @@ interface PlaylistDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPlaylistTracks(tracks: List<PlaylistTrackEntity>)
 
+    @Query("DELETE FROM playlist_tracks WHERE id = :entryId")
+    suspend fun removeTrackByEntryId(entryId: Long)
+
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId AND position = :position")
     suspend fun deleteTrackAtPosition(playlistId: String, position: Int)
 

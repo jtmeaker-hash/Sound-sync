@@ -26,7 +26,26 @@ object AlbumArtHelper {
             memoryCache[cacheKey]?.let { return@withContext it }
         }
 
-        // Try extracting embedded picture via MediaMetadataRetriever
+        // 1. Try cached artwork file if present
+        val cachePath = track.artworkCachePath ?: track.artworkUrl?.takeIf { it.startsWith("/") || it.startsWith("file://") }
+        if (!cachePath.isNullOrBlank()) {
+            val actualPath = if (cachePath.startsWith("file://")) Uri.parse(cachePath).path else cachePath
+            if (actualPath != null) {
+                val cachedFile = File(actualPath)
+                if (cachedFile.exists() && cachedFile.canRead()) {
+                    val decoded = decodeFileToBitmap(cachedFile, sizePx)
+                    if (decoded != null) {
+                        synchronized(memoryCache) {
+                            if (memoryCache.size > 50) memoryCache.clear()
+                            memoryCache[cacheKey] = decoded
+                        }
+                        return@withContext decoded
+                    }
+                }
+            }
+        }
+
+        // 2. Try extracting embedded picture via MediaMetadataRetriever
         val embeddedBitmap = extractEmbeddedPicture(context, track.filePath, sizePx)
         if (embeddedBitmap != null) {
             synchronized(memoryCache) {
@@ -36,13 +55,38 @@ object AlbumArtHelper {
             return@withContext embeddedBitmap
         }
 
-        // Fallback: Generate a crisp, vibrant DJ vinyl record artwork Bitmap
+        // 3. Fallback: Generate a crisp, vibrant DJ vinyl record artwork Bitmap
         val generated = generateFallbackArtwork(track, sizePx)
         synchronized(memoryCache) {
             if (memoryCache.size > 50) memoryCache.clear()
             memoryCache[cacheKey] = generated
         }
         generated
+    }
+
+    private fun decodeFileToBitmap(file: File, targetSize: Int): Bitmap? {
+        return try {
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeFile(file.absolutePath, options)
+            var sampleSize = 1
+            if (options.outHeight > targetSize || options.outWidth > targetSize) {
+                val halfHeight = options.outHeight / 2
+                val halfWidth = options.outWidth / 2
+                while ((halfHeight / sampleSize) >= targetSize && (halfWidth / sampleSize) >= targetSize) {
+                    sampleSize *= 2
+                }
+            }
+            val decodeOptions = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decode cached artwork file ${file.absolutePath}: ${e.message}")
+            null
+        }
     }
 
     private fun extractEmbeddedPicture(context: Context, uriOrPath: String, targetSize: Int): Bitmap? {

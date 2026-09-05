@@ -21,4 +21,7 @@ sealed class SideMenuDestination(val title: String) {
     object AppearanceSettings : SideMenuDestination("Appearance")
     object GitHubUpdates : SideMenuDestination("GitHub & App Updates")
     object CarModeSettings : SideMenuDestination("Car Mode & Bluetooth")
+    object LibraryHealth : SideMenuDestination("Library Health")
+    object MetadataReviewInbox : SideMenuDestination("Metadata Review Inbox")
+    object LibraryIntegrity : SideMenuDestination("Library Integrity")
 }

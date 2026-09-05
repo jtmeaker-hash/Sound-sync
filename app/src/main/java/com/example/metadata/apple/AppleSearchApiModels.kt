@@ -52,13 +52,19 @@ data class AppleTrackResult(
     val previewUrl: String? = null,
     val trackViewUrl: String? = null,
     val collectionViewUrl: String? = null,
-    val isStreamable: Boolean = false
+    val isStreamable: Boolean = false,
+    val artworkUrl100: String? = null,
+    val artworkUrl60: String? = null,
+    val artworkUrl30: String? = null
 ) {
     val releaseYear: Int?
         get() = releaseDate?.take(4)?.toIntOrNull()
 
     val durationSeconds: Int
         get() = (trackTimeMillis / 1000).toInt()
+
+    val artworkUrl600: String?
+        get() = artworkUrl100?.replace("100x100bb.jpg", "600x600bb.jpg")
 
     companion object {
         fun fromJson(json: JSONObject): AppleTrackResult {
@@ -83,7 +89,10 @@ data class AppleTrackResult(
                 previewUrl = json.optString("previewUrl").takeIf(String::isNotBlank),
                 trackViewUrl = json.optString("trackViewUrl").takeIf(String::isNotBlank),
                 collectionViewUrl = json.optString("collectionViewUrl").takeIf(String::isNotBlank),
-                isStreamable = json.optBoolean("isStreamable", false)
+                isStreamable = json.optBoolean("isStreamable", false),
+                artworkUrl100 = json.optString("artworkUrl100").takeIf(String::isNotBlank),
+                artworkUrl60 = json.optString("artworkUrl60").takeIf(String::isNotBlank),
+                artworkUrl30 = json.optString("artworkUrl30").takeIf(String::isNotBlank)
             )
         }
     }

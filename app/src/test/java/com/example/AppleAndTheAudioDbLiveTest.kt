@@ -68,4 +68,40 @@ class AppleAndTheAudioDbLiveTest {
         assertTrue("Bytes must be non-empty", downloaded.bytes.isNotEmpty())
         println("=== PHASE 12 PROOF PASSED SUCCESSFULLY ===")
     }
+
+    @Test
+    fun `Apple iTunes Search API matches and retrieves artwork for Avicii - Levels`() = runBlocking {
+        println("=== START TEST: AVICII - LEVELS METADATA & ARTWORK ===")
+        val provider = AppleMetadataProvider()
+
+        val results = provider.searchTracks("avicii levels", country = "US", limit = 5)
+        assertFalse("Apple API must return results for 'avicii levels'", results.isEmpty())
+
+        val levelsTrack = results.firstOrNull {
+            it.artistName.contains("Avicii", ignoreCase = true) && it.trackName.contains("Levels", ignoreCase = true)
+        } ?: results.first()
+
+        println("Matched Track: ${levelsTrack.artistName} - ${levelsTrack.trackName}")
+        println("Collection: ${levelsTrack.collectionName}")
+        println("Release Date: ${levelsTrack.releaseDate}")
+        println("Genre: ${levelsTrack.primaryGenreName}")
+        println("Artwork 100: ${levelsTrack.artworkUrl100}")
+        println("Artwork 600: ${levelsTrack.artworkUrl600}")
+
+        assertEquals("Avicii", levelsTrack.artistName)
+        assertTrue("Track name must contain Levels", levelsTrack.trackName.contains("Levels", ignoreCase = true))
+        assertNotNull("Artwork 100 must be present", levelsTrack.artworkUrl100)
+        assertNotNull("Artwork 600 must be present", levelsTrack.artworkUrl600)
+
+        // Test downloading artwork
+        val artworkProvider = TheAudioDbArtworkProvider()
+        val downloaded = artworkProvider.downloadArtwork(levelsTrack.artworkUrl600 ?: levelsTrack.artworkUrl100!!)
+        assertNotNull("Downloaded artwork must not be null", downloaded)
+        println("Downloaded dimensions: ${downloaded!!.width}x${downloaded.height}, size: ${downloaded.bytes.size} bytes")
+        assertTrue("Image width must be >= 150", downloaded.width >= 150)
+        assertTrue("Image height must be >= 150", downloaded.height >= 150)
+        assertTrue("Artwork bytes must not be empty", downloaded.bytes.isNotEmpty())
+
+        println("=== AVICII - LEVELS METADATA & ARTWORK TEST PASSED ===")
+    }
 }

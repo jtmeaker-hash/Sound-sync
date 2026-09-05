@@ -6,6 +6,7 @@ import com.example.metadata.ArtworkCache
 import com.example.metadata.MetadataResolver
 import com.example.metadata.apple.AppleMetadataProvider
 import com.example.metadata.apple.AppleTrackResult
+import com.example.metadata.theaudiodb.ArtworkCandidate
 import com.example.metadata.theaudiodb.DownloadedArtwork
 import com.example.metadata.theaudiodb.TheAudioDbArtworkProvider
 import com.example.model.MetadataScanState
@@ -157,5 +158,67 @@ class MetadataResolverTest {
         assertEquals("3A", updated.camelotKey)
         assertEquals(listOf(0, 32, 64, 128), updated.hotCues)
         assertEquals(8, updated.energyRating)
+    }
+
+    @Test
+    fun `MetadataResolver falls back to Apple artwork when TheAudioDB has no artwork`() = runBlocking {
+        val localTrack = Track(
+            id = "t_avicii",
+            title = "Levels",
+            artist = "Avicii",
+            durationSeconds = 338
+        )
+
+        val mockApple = object : AppleMetadataProvider() {
+            override suspend fun searchTracks(query: String, country: String, limit: Int): List<AppleTrackResult> {
+                return listOf(
+                    AppleTrackResult(
+                        trackId = 1440787349L,
+                        trackName = "Levels",
+                        artistId = 298496035L,
+                        artistName = "Avicii",
+                        collectionId = 1440787344L,
+                        collectionName = "Levels - EP",
+                        trackTimeMillis = 338867L,
+                        releaseDate = "2011-07-28T12:00:00Z",
+                        primaryGenreName = "Dance",
+                        artworkUrl100 = "https://example.com/artwork100.jpg"
+                    )
+                )
+            }
+        }
+
+        val mockArtworkProvider = object : TheAudioDbArtworkProvider() {
+            override suspend fun findArtwork(artist: String, album: String?, track: String?): List<ArtworkCandidate> {
+                return emptyList()
+            }
+
+            override suspend fun downloadArtwork(artworkUrl: String): DownloadedArtwork? {
+                return DownloadedArtwork(
+                    bytes = byteArrayOf(0x01, 0x02, 0x03, 0x04),
+                    mimeType = "image/jpeg",
+                    width = 600,
+                    height = 600,
+                    sourceUrl = artworkUrl
+                )
+            }
+        }
+
+        val customResolver = MetadataResolver(
+            context = context,
+            appleProvider = mockApple,
+            artworkProvider = mockArtworkProvider,
+            artworkCache = ArtworkCache(context)
+        )
+
+        val result = customResolver.resolveTrackMetadata(localTrack, forceRefresh = true)
+        val updated = result.updatedTrack
+
+        assertEquals("Avicii", updated.artist)
+        assertEquals("Levels", updated.title)
+        assertEquals("Dance", updated.genre)
+        assertEquals("Apple iTunes", updated.artworkSource)
+        assertNotNull(updated.artworkCachePath)
+        assertTrue(File(updated.artworkCachePath!!).exists())
     }
 }

@@ -81,6 +81,7 @@ open class AppleMetadataProvider(
 
         Log.d(TAG, "request started")
         Log.d(TAG, "query: $trimmedQuery (country: $country, limit: $limit)")
+        Log.d("AppleMetadata", "Searching: $trimmedQuery")
 
         var attempts = 0
         var backoffMs = 1500L
@@ -100,6 +101,7 @@ open class AppleMetadataProvider(
                 client.newCall(request).execute().use { response ->
                     val statusCode = response.code
                     Log.d(TAG, "HTTP response status: $statusCode")
+                    Log.d("AppleMetadata", "HTTP status: $statusCode")
 
                     if (statusCode == 429) {
                         Log.w(TAG, "HTTP 429 Rate limited by Apple Search API, backing off ${backoffMs}ms...")
@@ -124,11 +126,15 @@ open class AppleMetadataProvider(
                     try {
                         val parsed = AppleSearchResponse.fromJson(bodyString)
                         Log.d(TAG, "result count: ${parsed.results.size}")
+                        Log.d("AppleMetadata", "Results returned: ${parsed.results.size}")
                         Log.d(TAG, "parsing status: SUCCESS")
 
                         // Log first few candidates for diagnostic trace
                         parsed.results.take(3).forEachIndexed { idx, candidate ->
                             Log.d(TAG, "Candidate #$idx: artistName=${candidate.artistName}, trackName=${candidate.trackName}, collectionName=${candidate.collectionName}, trackTimeMillis=${candidate.trackTimeMillis}, releaseDate=${candidate.releaseDate}, primaryGenreName=${candidate.primaryGenreName}, trackNumber=${candidate.trackNumber}, trackCount=${candidate.trackCount}, discNumber=${candidate.discNumber}, discCount=${candidate.discCount}, trackExplicitness=${candidate.trackExplicitness}")
+                            if (!candidate.artworkUrl100.isNullOrBlank()) {
+                                Log.d("AppleMetadata", "Artwork found: ${candidate.artworkUrl100}")
+                            }
                         }
 
                         searchCache[cacheKey] = parsed.results

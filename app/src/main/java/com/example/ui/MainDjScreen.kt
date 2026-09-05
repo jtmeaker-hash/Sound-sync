@@ -449,7 +449,8 @@ fun MainDjScreen(
                         waveformStyle = waveformStyle,
                         onPickSafFolder = onPickSafFolder,
                         onPickAudioFiles = onPickAudioFiles,
-                        onClose = { activeSideDestination = null }
+                        onClose = { activeSideDestination = null },
+                        onNavigate = { newDest -> activeSideDestination = newDest }
                     )
                 }
                 else -> {
@@ -1218,7 +1219,8 @@ private fun SideDestinationScreen(
     waveformStyle: com.example.model.WaveformStyle = com.example.model.WaveformStyle.DETAILED,
     onPickSafFolder: () -> Unit,
     onPickAudioFiles: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onNavigate: (SideMenuDestination) -> Unit = {}
 ) {
     val context = LocalContext.current
     val metronomeEngine = remember { com.example.ui.djtools.MetronomeEngine() }
@@ -1471,6 +1473,30 @@ private fun SideDestinationScreen(
                             onClose()
                             viewModel.carModeManager.enterCarMode(manual = true)
                         }
+                    )
+                }
+                SideMenuDestination.LibraryHealth -> {
+                    com.example.ui.library.LibraryHealthScreen(
+                        viewModel = viewModel,
+                        onBack = onClose,
+                        onNavigateToIntegrity = { onNavigate(SideMenuDestination.LibraryIntegrity) },
+                        onNavigateToReviewInbox = { onNavigate(SideMenuDestination.MetadataReviewInbox) },
+                        onNavigateToDuplicates = {
+                            onClose()
+                        },
+                        onFilterTracks = { _ ->
+                            onClose()
+                        }
+                    )
+                }
+                SideMenuDestination.MetadataReviewInbox -> {
+                    com.example.ui.library.MetadataReviewInboxScreen(
+                        onBack = onClose
+                    )
+                }
+                SideMenuDestination.LibraryIntegrity -> {
+                    com.example.ui.library.LibraryIntegrityScreen(
+                        onBack = onClose
                     )
                 }
             }

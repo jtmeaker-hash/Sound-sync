@@ -30,7 +30,7 @@ data class DownloadedArtwork(
  * Reference: https://www.theaudiodb.com/free_music_api
  * Uses the free public development key "123".
  */
-class TheAudioDbArtworkProvider(
+open class TheAudioDbArtworkProvider(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
@@ -203,7 +203,7 @@ class TheAudioDbArtworkProvider(
     /**
      * Downloads and decodes an image, verifying valid dimensions and square aspect ratio.
      */
-    suspend fun downloadArtwork(artworkUrl: String): DownloadedArtwork? = withContext(Dispatchers.IO) {
+    open suspend fun downloadArtwork(artworkUrl: String): DownloadedArtwork? = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(artworkUrl)
             .header("User-Agent", "SoundSync/1.0.0 (Linux; Android)")

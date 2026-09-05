@@ -529,6 +529,37 @@ fun BulkTrackEditorDialog(
                                 undoPayloadJson = "" // Handled via DAO
                             )
                             bulkDao.insertOperation(historyItem)
+
+                            // Save granular per-track field history for reversible undo
+                            val historyDao = database.metadataHistoryDao()
+                            val now = System.currentTimeMillis()
+                            val historyEntries = mutableListOf<MetadataHistoryEntity>()
+                            for (i in selectedTracks.indices) {
+                                val oldT = selectedTracks[i]
+                                val newT = updatedList[i]
+                                if (oldT.artist != newT.artist) {
+                                    historyEntries.add(MetadataHistoryEntity(UUID.randomUUID().toString(), oldT.id, oldT.filePath, "artist", oldT.artist, newT.artist, "BULK_EDIT", now, false))
+                                }
+                                if (oldT.album != newT.album) {
+                                    historyEntries.add(MetadataHistoryEntity(UUID.randomUUID().toString(), oldT.id, oldT.filePath, "album", oldT.album, newT.album, "BULK_EDIT", now, false))
+                                }
+                                if (oldT.albumArtist != newT.albumArtist) {
+                                    historyEntries.add(MetadataHistoryEntity(UUID.randomUUID().toString(), oldT.id, oldT.filePath, "albumArtist", oldT.albumArtist, newT.albumArtist, "BULK_EDIT", now, false))
+                                }
+                                if (oldT.genre != newT.genre) {
+                                    historyEntries.add(MetadataHistoryEntity(UUID.randomUUID().toString(), oldT.id, oldT.filePath, "genre", oldT.genre, newT.genre, "BULK_EDIT", now, false))
+                                }
+                                if (oldT.releaseYear != newT.releaseYear) {
+                                    historyEntries.add(MetadataHistoryEntity(UUID.randomUUID().toString(), oldT.id, oldT.filePath, "year", oldT.releaseYear?.toString(), newT.releaseYear?.toString(), "BULK_EDIT", now, false))
+                                }
+                                if (oldT.composer != newT.composer) {
+                                    historyEntries.add(MetadataHistoryEntity(UUID.randomUUID().toString(), oldT.id, oldT.filePath, "composer", oldT.composer, newT.composer, "BULK_EDIT", now, false))
+                                }
+                            }
+                            if (historyEntries.isNotEmpty()) {
+                                historyDao.insertHistories(historyEntries)
+                            }
+
                             trackDao.updateTracks(updatedList.map { TrackEntity.fromTrack(it) })
 
                             withContext(Dispatchers.Main) {

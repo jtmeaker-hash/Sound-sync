@@ -189,7 +189,9 @@ data class Track(
     val originalArtist: String? = null,
     val resolvedArtist: String? = null,
     val metadataSource: String? = null,
-    val metadataConfidence: Double = 0.0
+    val metadataConfidence: Double = 0.0,
+    val fingerprintAlgorithm: String? = null,
+    val fingerprintTimestamp: Long? = null
 ) {
     val tagsList: List<String>
         get() = customTags.split(",").map { it.trim() }.filter { it.isNotEmpty() }

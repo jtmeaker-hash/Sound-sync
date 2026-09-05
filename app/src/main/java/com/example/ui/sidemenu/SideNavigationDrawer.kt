@@ -494,6 +494,36 @@ fun SideNavigationDrawerContent(
                             }
                         )
                         DrawerActionItem(
+                            title = "Library Health Dashboard",
+                            subtitle = "Missing tags, artwork, BPM/key, and library score",
+                            icon = Icons.Default.Speed,
+                            accentColor = NeonGreen,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.LibraryHealth)
+                            }
+                        )
+                        DrawerActionItem(
+                            title = "Metadata Review Inbox",
+                            subtitle = "Approve and review uncertain metadata proposals",
+                            icon = Icons.Default.Tune,
+                            accentColor = DeckACyan,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.MetadataReviewInbox)
+                            }
+                        )
+                        DrawerActionItem(
+                            title = "Database & File Integrity",
+                            subtitle = "Detect orphaned tracks, duplicate rows, and repair safe issues",
+                            icon = Icons.Default.Equalizer,
+                            accentColor = DeckBPink,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.LibraryIntegrity)
+                            }
+                        )
+                        DrawerActionItem(
                             title = "Backup & Restore",
                             subtitle = "Survives app uninstall, auto-backup, export/import",
                             icon = Icons.Default.Backup,

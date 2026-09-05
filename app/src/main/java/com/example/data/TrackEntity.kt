@@ -85,7 +85,9 @@ data class TrackEntity(
     val originalArtist: String? = null,
     val resolvedArtist: String? = null,
     val metadataSource: String? = null,
-    val metadataConfidence: Double = 0.0
+    val metadataConfidence: Double = 0.0,
+    val fingerprintAlgorithm: String? = null,
+    val fingerprintTimestamp: Long? = null
 ) {
     fun toTrack(): Track {
         val syncEnum = try { SyncState.valueOf(syncState) } catch (e: Exception) { SyncState.LOCAL_ONLY }
@@ -180,7 +182,9 @@ data class TrackEntity(
             originalArtist = originalArtist,
             resolvedArtist = resolvedArtist,
             metadataSource = metadataSource,
-            metadataConfidence = metadataConfidence
+            metadataConfidence = metadataConfidence,
+            fingerprintAlgorithm = fingerprintAlgorithm,
+            fingerprintTimestamp = fingerprintTimestamp
         )
     }
 
@@ -252,7 +256,9 @@ data class TrackEntity(
                 originalArtist = track.originalArtist,
                 resolvedArtist = track.resolvedArtist,
                 metadataSource = track.metadataSource,
-                metadataConfidence = track.metadataConfidence
+                metadataConfidence = track.metadataConfidence,
+                fingerprintAlgorithm = track.fingerprintAlgorithm,
+                fingerprintTimestamp = track.fingerprintTimestamp
             )
         }
     }
