@@ -39,14 +39,20 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.Insights
 import com.example.ui.LocalCategory
 import com.example.ui.MainDjViewModel
 import com.example.ui.components.AudioQualityDialog
+import com.example.ui.components.LibraryInsightsDialog
+import com.example.ui.components.LyricsEditorDialog
 import com.example.ui.components.MixWithThisDialog
+import com.example.ui.components.NowPlayingLyricsSheet
 import com.example.ui.components.ParametricEqDialog
 import com.example.ui.components.QueueBottomSheet
+import com.example.ui.components.TrackIntelligenceDialog
 import com.example.ui.library.SmartCratesScreen
 import com.example.ui.theme.DeckACyan
+import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
 import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceCard
@@ -85,6 +91,15 @@ fun LocalLibraryScreen(
     val showParametricEqDialog by viewModel.showParametricEqDialog.collectAsState()
     val mixWithThisTrack by viewModel.mixWithThisTrack.collectAsState()
     val inspectQualityTrack by viewModel.inspectQualityTrack.collectAsState()
+
+    val showLyricsSheet by viewModel.showLyricsSheet.collectAsState()
+    val lyricsEditorTrack by viewModel.lyricsEditorTrack.collectAsState()
+    val trackIntelligenceTrack by viewModel.trackIntelligenceTrack.collectAsState()
+    val showLibraryInsightsDialog by viewModel.showLibraryInsightsDialog.collectAsState()
+
+    val currentLyrics by viewModel.lyricsManager.currentTrackLyrics.collectAsState()
+    val isLoadingLyrics by viewModel.lyricsManager.isLoadingLyrics.collectAsState()
+    val playbackPositionMs by viewModel.audioEngine.currentPositionMs.collectAsState()
 
     // Add to Playlist bottom sheet
     if (showAddToPlaylistSheet != null) {
@@ -149,6 +164,84 @@ fun LocalLibraryScreen(
         AudioQualityDialog(
             track = inspectQualityTrack!!,
             onDismiss = { viewModel.closeAudioQualityInspector() }
+        )
+    }
+
+    // Now Playing Lyrics Sheet
+    if (showLyricsSheet && currentPlayingTrack != null) {
+        NowPlayingLyricsSheet(
+            track = currentPlayingTrack!!,
+            lyrics = currentLyrics,
+            isLoading = isLoadingLyrics,
+            currentPlaybackPositionMs = playbackPositionMs,
+            onSeekToPosition = { pos -> viewModel.audioEngine.seekToMs(pos) },
+            onOpenEditor = {
+                viewModel.closeLyricsSheet()
+                currentPlayingTrack?.let { viewModel.openLyricsEditor(it) }
+            },
+            onRefreshLyrics = {
+                currentPlayingTrack?.let { viewModel.lyricsManager.loadForTrack(it, forceRefresh = true) }
+            },
+            onDismiss = { viewModel.closeLyricsSheet() }
+        )
+    }
+
+    // Lyrics Editor Dialog
+    if (lyricsEditorTrack != null) {
+        LyricsEditorDialog(
+            track = lyricsEditorTrack!!,
+            existingLyrics = if (lyricsEditorTrack!!.id == currentPlayingTrack?.id) currentLyrics else null,
+            currentPlaybackPositionMs = playbackPositionMs,
+            onSeekToPosition = { pos -> viewModel.audioEngine.seekToMs(pos) },
+            onSave = { lines, plainText, offsetMs ->
+                viewModel.saveUserEditedLyrics(lyricsEditorTrack!!.id, lines, plainText, offsetMs)
+                viewModel.closeLyricsEditor()
+            },
+            onExportLrc = {
+                viewModel.exportLyricsToLrc(lyricsEditorTrack!!)
+            },
+            onDismiss = { viewModel.closeLyricsEditor() }
+        )
+    }
+
+    // Track Intelligence Dialog
+    if (trackIntelligenceTrack != null) {
+        TrackIntelligenceDialog(
+            track = trackIntelligenceTrack!!,
+            allTracks = allTracks,
+            onMixWithThis = {
+                val t = trackIntelligenceTrack!!
+                viewModel.closeTrackIntelligence()
+                viewModel.openMixWithThis(t)
+            },
+            onInspectQuality = {
+                val t = trackIntelligenceTrack!!
+                viewModel.closeTrackIntelligence()
+                viewModel.openAudioQualityInspector(t)
+            },
+            onOpenLyrics = {
+                val t = trackIntelligenceTrack!!
+                viewModel.closeTrackIntelligence()
+                viewModel.openLyricsEditor(t)
+            },
+            onInspectSpectrogram = {
+                val t = trackIntelligenceTrack!!
+                viewModel.closeTrackIntelligence()
+                viewModel.inspectTrackSpectrogram(t, showTab = true)
+            },
+            onDismiss = { viewModel.closeTrackIntelligence() }
+        )
+    }
+
+    // Library Health Insights Dialog
+    if (showLibraryInsightsDialog) {
+        LibraryInsightsDialog(
+            allTracks = allTracks,
+            onOpenSmartCrates = {
+                viewModel.closeLibraryInsights()
+                viewModel.selectLocalCategory(LocalCategory.SMART_CRATES)
+            },
+            onDismiss = { viewModel.closeLibraryInsights() }
         )
     }
 
@@ -238,6 +331,7 @@ fun LocalLibraryScreen(
                     playlistCount = allPlaylists.size,
                     folderCount = allFolders.size,
                     onSelectCategory = { cat -> viewModel.selectLocalCategory(cat) },
+                    onOpenLibraryInsights = { viewModel.openLibraryInsights() },
                     onOpenFolderExplorer = onOpenFolderExplorer
                 )
 
@@ -259,7 +353,9 @@ fun LocalLibraryScreen(
                             onStartScan = { viewModel.scanDeviceMediaStore() },
                             onBulkEditTracks = { tracks -> viewModel.openBulkEditor(tracks) },
                             onMixWithThis = { track -> viewModel.openMixWithThis(track) },
-                            onInspectQuality = { track -> viewModel.openAudioQualityInspector(track) }
+                            onInspectQuality = { track -> viewModel.openAudioQualityInspector(track) },
+                            onOpenLyrics = { track -> viewModel.openLyricsEditor(track) },
+                            onOpenTrackIntelligence = { track -> viewModel.openTrackIntelligence(track) }
                         )
                     }
                     LocalCategory.ALBUMS -> {
@@ -316,6 +412,7 @@ private fun CategorySelectorBar(
     playlistCount: Int,
     folderCount: Int,
     onSelectCategory: (LocalCategory) -> Unit,
+    onOpenLibraryInsights: () -> Unit,
     onOpenFolderExplorer: () -> Unit
 ) {
     val theme = SoundSyncTheme.current
@@ -395,6 +492,25 @@ private fun CategorySelectorBar(
             }
 
             Spacer(modifier = Modifier.width(6.dp))
+
+            // Library Health Insights Toggle Icon
+            IconButton(
+                onClick = onOpenLibraryInsights,
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(chipCorner))
+                    .background(if (isPro) theme.surfaceElevated else DjSurfaceElevated)
+                    .testTag("open_library_insights_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Insights,
+                    contentDescription = "Library Insights",
+                    tint = if (isPro) theme.accent else DeckBPink,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
 
             // Folder Explorer Toggle Icon
             IconButton(

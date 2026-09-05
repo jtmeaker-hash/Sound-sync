@@ -340,6 +340,48 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // Step 3 Lyrics & Intelligence Layer
+    val lyricsManager = com.example.lyrics.LyricsManager.getInstance(application)
+
+    private val _showLyricsSheet = MutableStateFlow(false)
+    val showLyricsSheet = _showLyricsSheet.asStateFlow()
+    fun openLyricsSheet() { _showLyricsSheet.value = true }
+    fun closeLyricsSheet() { _showLyricsSheet.value = false }
+
+    private val _lyricsEditorTrack = MutableStateFlow<Track?>(null)
+    val lyricsEditorTrack = _lyricsEditorTrack.asStateFlow()
+    fun openLyricsEditor(track: Track) { _lyricsEditorTrack.value = track }
+    fun closeLyricsEditor() { _lyricsEditorTrack.value = null }
+
+    private val _trackIntelligenceTrack = MutableStateFlow<Track?>(null)
+    val trackIntelligenceTrack = _trackIntelligenceTrack.asStateFlow()
+    fun openTrackIntelligence(track: Track) { _trackIntelligenceTrack.value = track }
+    fun closeTrackIntelligence() { _trackIntelligenceTrack.value = null }
+
+    private val _showLibraryInsightsDialog = MutableStateFlow(false)
+    val showLibraryInsightsDialog = _showLibraryInsightsDialog.asStateFlow()
+    fun openLibraryInsights() { _showLibraryInsightsDialog.value = true }
+    fun closeLibraryInsights() { _showLibraryInsightsDialog.value = false }
+
+    fun saveUserEditedLyrics(trackId: String, lines: List<com.example.lyrics.LyricLine>, plainText: String, offsetMs: Long) {
+        viewModelScope.launch {
+            lyricsManager.saveUserEditedLyrics(trackId, lines, plainText, offsetMs)
+            showSnackbar("Lyrics saved successfully")
+        }
+    }
+
+    fun exportLyricsToLrc(track: Track) {
+        viewModelScope.launch {
+            val destFile = java.io.File(track.filePath.substringBeforeLast('.') + ".lrc")
+            val success = lyricsManager.exportToLrcFile(track, destFile)
+            if (success) {
+                showSnackbar("Exported .lrc to ${destFile.name}")
+            } else {
+                showSnackbar("Failed exporting .lrc file")
+            }
+        }
+    }
+
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
 
@@ -2210,6 +2252,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             audioEngine.loadTrack(track, autoPlay = true)
             inspectTrackSpectrogram(track)
             resolveBpmAndKeyForTrack(track)
+            lyricsManager.loadForTrack(track)
         }
     }
 

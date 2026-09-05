@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Queue
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
@@ -146,7 +147,9 @@ fun SongsScreen(
     onStartScan: () -> Unit,
     onBulkEditTracks: ((List<Track>) -> Unit)? = null,
     onMixWithThis: ((Track) -> Unit)? = null,
-    onInspectQuality: ((Track) -> Unit)? = null
+    onInspectQuality: ((Track) -> Unit)? = null,
+    onOpenLyrics: ((Track) -> Unit)? = null,
+    onOpenTrackIntelligence: ((Track) -> Unit)? = null
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SongSortMode.TITLE_ASC) }
@@ -487,7 +490,9 @@ fun SongsScreen(
                         onInspectProperties = { onInspectProperties(track) },
                         onInspectSpectrogram = { onInspectSpectrogram(track) },
                         onMixWithThis = onMixWithThis?.let { fn -> { fn(track) } },
-                        onInspectQuality = onInspectQuality?.let { fn -> { fn(track) } }
+                        onInspectQuality = onInspectQuality?.let { fn -> { fn(track) } },
+                        onOpenLyrics = onOpenLyrics?.let { fn -> { fn(track) } },
+                        onOpenTrackIntelligence = onOpenTrackIntelligence?.let { fn -> { fn(track) } }
                     )
                 }
             }
@@ -511,7 +516,9 @@ fun SongTrackRow(
     onInspectProperties: () -> Unit,
     onInspectSpectrogram: () -> Unit,
     onMixWithThis: (() -> Unit)? = null,
-    onInspectQuality: (() -> Unit)? = null
+    onInspectQuality: (() -> Unit)? = null,
+    onOpenLyrics: (() -> Unit)? = null,
+    onOpenTrackIntelligence: (() -> Unit)? = null
 ) {
     if (SoundSyncTheme.isPro) {
         ProSongTrackRow(
@@ -528,7 +535,9 @@ fun SongTrackRow(
             onInspectProperties = onInspectProperties,
             onInspectSpectrogram = onInspectSpectrogram,
             onMixWithThis = onMixWithThis,
-            onInspectQuality = onInspectQuality
+            onInspectQuality = onInspectQuality,
+            onOpenLyrics = onOpenLyrics,
+            onOpenTrackIntelligence = onOpenTrackIntelligence
         )
         return
     }
@@ -853,6 +862,26 @@ fun SongTrackRow(
                                 }
                             )
                         }
+                        if (onOpenLyrics != null) {
+                            DropdownMenuItem(
+                                text = { Text("Lyrics & Timestamps", color = TextPrimary) },
+                                leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null, tint = DeckACyan) },
+                                onClick = {
+                                    showMenu = false
+                                    onOpenLyrics()
+                                }
+                            )
+                        }
+                        if (onOpenTrackIntelligence != null) {
+                            DropdownMenuItem(
+                                text = { Text("Track Intelligence", color = TextPrimary) },
+                                leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null, tint = NeonPurple) },
+                                onClick = {
+                                    showMenu = false
+                                    onOpenTrackIntelligence()
+                                }
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Track Inspector", color = DeckACyan, fontWeight = FontWeight.SemiBold) },
                             leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = DeckACyan) },
@@ -1061,7 +1090,9 @@ private fun ProSongTrackRow(
     onInspectProperties: () -> Unit,
     onInspectSpectrogram: () -> Unit,
     onMixWithThis: (() -> Unit)? = null,
-    onInspectQuality: (() -> Unit)? = null
+    onInspectQuality: (() -> Unit)? = null,
+    onOpenLyrics: (() -> Unit)? = null,
+    onOpenTrackIntelligence: (() -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val theme = SoundSyncTheme.current
@@ -1335,6 +1366,26 @@ private fun ProSongTrackRow(
                                 onClick = {
                                     showMenu = false
                                     onInspectQuality()
+                                }
+                            )
+                        }
+                        if (onOpenLyrics != null) {
+                            DropdownMenuItem(
+                                text = { Text("Lyrics & Timestamps", color = theme.textPrimary) },
+                                leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null, tint = theme.accent) },
+                                onClick = {
+                                    showMenu = false
+                                    onOpenLyrics()
+                                }
+                            )
+                        }
+                        if (onOpenTrackIntelligence != null) {
+                            DropdownMenuItem(
+                                text = { Text("Track Intelligence", color = theme.textPrimary) },
+                                leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null, tint = Color(0xFFA855F7)) },
+                                onClick = {
+                                    showMenu = false
+                                    onOpenTrackIntelligence()
                                 }
                             )
                         }

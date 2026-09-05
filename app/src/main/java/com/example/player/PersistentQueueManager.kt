@@ -26,12 +26,20 @@ enum class QueueRepeatMode {
     ALL
 }
 
+enum class SmartContinueMode(val label: String) {
+    OFF("Off"),
+    SMART_CONTINUE("Smart Continue"),
+    MIX_COMPATIBLE("Mix-Compatible"),
+    SIMILAR_MUSIC("Similar Music")
+}
+
 data class QueueSnapshot(
     val currentTrack: Track?,
     val upcomingQueue: List<Track>,
     val playbackHistory: List<Track>,
     val isShuffle: Boolean,
-    val repeatMode: QueueRepeatMode
+    val repeatMode: QueueRepeatMode,
+    val smartContinueMode: SmartContinueMode = SmartContinueMode.OFF
 )
 
 /**
@@ -81,6 +89,14 @@ class PersistentQueueManager(
 
     private val _repeatMode = MutableStateFlow(QueueRepeatMode.OFF)
     val repeatMode: StateFlow<QueueRepeatMode> = _repeatMode.asStateFlow()
+
+    private val _smartContinueMode = MutableStateFlow(SmartContinueMode.OFF)
+    val smartContinueMode: StateFlow<SmartContinueMode> = _smartContinueMode.asStateFlow()
+
+    fun setSmartContinueMode(mode: SmartContinueMode) {
+        _smartContinueMode.value = mode
+        saveToDiskAsync()
+    }
 
     // Context fallback provider when the upcoming queue is empty (e.g. playing from an album/folder)
     var contextTrackProvider: (() -> List<Track>)? = null
@@ -297,6 +313,40 @@ class PersistentQueueManager(
             }
         }
 
+        // Smart Queue Assistance (Step 3 Part F)
+        if (_smartContinueMode.value != SmartContinueMode.OFF && current != null) {
+            val libraryPool = contextTrackProvider?.invoke() ?: emptyList()
+            if (libraryPool.isNotEmpty()) {
+                val recentIds = _playbackHistory.value.take(25).map { it.id }.toSet() + current.id
+                val candidates = libraryPool.filter { it.id !in recentIds && it.isAvailable }
+                if (candidates.isNotEmpty()) {
+                    val recommended = when (_smartContinueMode.value) {
+                        SmartContinueMode.MIX_COMPATIBLE -> {
+                            val compat = candidates.map { c ->
+                                Pair(c, com.example.dj.MixCompatibilityEngine.evaluatePair(current, c).overallScore)
+                            }.filter { it.second >= 40 }.sortedByDescending { it.second }
+                            compat.firstOrNull()?.first
+                        }
+                        SmartContinueMode.SIMILAR_MUSIC -> {
+                            val targetGenre = current.genre.trim().lowercase(java.util.Locale.ROOT)
+                            candidates.firstOrNull { it.genre.trim().lowercase(java.util.Locale.ROOT) == targetGenre }
+                                ?: candidates.firstOrNull()
+                        }
+                        SmartContinueMode.SMART_CONTINUE -> {
+                            candidates.maxByOrNull { it.rating } ?: candidates.firstOrNull()
+                        }
+                        SmartContinueMode.OFF -> null
+                    }
+                    if (recommended != null) {
+                        _currentTrack.value = recommended
+                        saveToDiskAsync()
+                        Log.i(TAG, "Smart Continue [${_smartContinueMode.value.label}]: '${recommended.title}'")
+                        return recommended
+                    }
+                }
+            }
+        }
+
         // Context fallback (e.g. continue playing library/folder)
         val contextTracks = contextTrackProvider?.invoke()
         if (!contextTracks.isNullOrEmpty()) {
@@ -395,6 +445,7 @@ class PersistentQueueManager(
                 put("version", 2)
                 put("isShuffle", _isShuffleEnabled.value)
                 put("repeatMode", _repeatMode.value.name)
+                put("smartContinueMode", _smartContinueMode.value.name)
                 _currentTrack.value?.let { put("currentTrack", trackToJson(it)) }
 
                 val upcomingArr = JSONArray()
@@ -424,6 +475,9 @@ class PersistentQueueManager(
             _repeatMode.value = runCatching {
                 QueueRepeatMode.valueOf(root.optString("repeatMode", "OFF"))
             }.getOrDefault(QueueRepeatMode.OFF)
+            _smartContinueMode.value = runCatching {
+                SmartContinueMode.valueOf(root.optString("smartContinueMode", "OFF"))
+            }.getOrDefault(SmartContinueMode.OFF)
 
             val currentObj = root.optJSONObject("currentTrack")
             if (currentObj != null) {

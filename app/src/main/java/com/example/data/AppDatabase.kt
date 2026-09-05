@@ -19,9 +19,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BulkOperationHistoryEntity::class,
         MetadataHistoryEntity::class,
         MetadataReviewItemEntity::class,
-        WatchedFolderEntity::class
+        WatchedFolderEntity::class,
+        LyricsEntity::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -34,6 +35,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun metadataHistoryDao(): MetadataHistoryDao
     abstract fun metadataReviewInboxDao(): MetadataReviewInboxDao
     abstract fun watchedFolderDao(): WatchedFolderDao
+    abstract fun lyricsDao(): LyricsDao
 
     companion object {
         @Volatile
@@ -473,6 +475,31 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // lyrics table
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `lyrics` (
+                        `trackId` TEXT NOT NULL PRIMARY KEY,
+                        `plainLyrics` TEXT NOT NULL DEFAULT '',
+                        `syncedLyricsJson` TEXT NOT NULL DEFAULT '',
+                        `isSynced` INTEGER NOT NULL DEFAULT 0,
+                        `isUserEdited` INTEGER NOT NULL DEFAULT 0,
+                        `source` TEXT NOT NULL DEFAULT 'none',
+                        `offsetMs` INTEGER NOT NULL DEFAULT 0,
+                        `remoteLyricsId` TEXT,
+                        `updatedAt` INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_lyrics_trackId` ON `lyrics` (`trackId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_lyrics_source` ON `lyrics` (`source`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_lyrics_isUserEdited` ON `lyrics` (`isUserEdited`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_lyrics_updatedAt` ON `lyrics` (`updatedAt`)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -491,7 +518,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_8_9,
                     MIGRATION_9_10,
                     MIGRATION_10_11,
-                    MIGRATION_11_12
+                    MIGRATION_11_12,
+                    MIGRATION_12_13
                 )
                 .fallbackToDestructiveMigration()
                 .build()
