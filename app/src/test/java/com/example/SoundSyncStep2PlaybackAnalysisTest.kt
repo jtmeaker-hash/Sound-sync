@@ -86,96 +86,102 @@ class SoundSyncStep2PlaybackAnalysisTest {
     // ──────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun testPersistentQueueManager_orderingAndGranularOperations() = runBlocking {
-        val queueManager = PersistentQueueManager(context)
-        val track1 = createTestTrack(title = "Track 1")
-        val track2 = createTestTrack(title = "Track 2")
-        val track3 = createTestTrack(title = "Track 3")
-        val trackNext = createTestTrack(title = "Track Next")
+    fun testPersistentQueueManager_orderingAndGranularOperations() {
+        runBlocking {
+            val queueManager = PersistentQueueManager(context)
+            val track1 = createTestTrack(title = "Track 1")
+            val track2 = createTestTrack(title = "Track 2")
+            val track3 = createTestTrack(title = "Track 3")
+            val trackNext = createTestTrack(title = "Track Next")
 
-        // 1. Set Queue
-        queueManager.setQueue(listOf(track1, track2, track3), track1, shuffle = false)
-        assertEquals(track1.id, queueManager.currentTrack.value?.id)
-        assertEquals(2, queueManager.upcomingQueue.value.size)
-        assertEquals(track2.id, queueManager.upcomingQueue.value[0].id)
-        assertEquals(track3.id, queueManager.upcomingQueue.value[1].id)
+            // 1. Set Queue
+            queueManager.setQueue(listOf(track1, track2, track3), track1, shuffle = false)
+            assertEquals(track1.id, queueManager.currentTrack.value?.id)
+            assertEquals(2, queueManager.upcomingQueue.value.size)
+            assertEquals(track2.id, queueManager.upcomingQueue.value[0].id)
+            assertEquals(track3.id, queueManager.upcomingQueue.value[1].id)
 
-        // 2. Play Next (inserts at position 0 of upcoming)
-        queueManager.playNext(trackNext)
-        assertEquals(3, queueManager.upcomingQueue.value.size)
-        assertEquals(trackNext.id, queueManager.upcomingQueue.value[0].id)
+            // 2. Play Next (inserts at position 0 of upcoming)
+            queueManager.playNext(trackNext)
+            assertEquals(3, queueManager.upcomingQueue.value.size)
+            assertEquals(trackNext.id, queueManager.upcomingQueue.value[0].id)
 
-        // 3. Reorder Queue
-        queueManager.reorderQueue(0, 2)
-        assertEquals(track2.id, queueManager.upcomingQueue.value[0].id)
-        assertEquals(trackNext.id, queueManager.upcomingQueue.value[2].id)
+            // 3. Reorder Queue
+            queueManager.reorderQueue(0, 2)
+            assertEquals(track2.id, queueManager.upcomingQueue.value[0].id)
+            assertEquals(trackNext.id, queueManager.upcomingQueue.value[2].id)
 
-        // 4. Remove from Queue
-        val removed = queueManager.removeFromQueue(0)
-        assertEquals(track2.id, removed?.id)
-        assertEquals(2, queueManager.upcomingQueue.value.size)
+            // 4. Remove from Queue
+            val removed = queueManager.removeFromQueue(0)
+            assertEquals(track2.id, removed?.id)
+            assertEquals(2, queueManager.upcomingQueue.value.size)
 
-        // 5. Clear Queue
-        queueManager.clearQueue(clearCurrent = false)
-        assertTrue(queueManager.upcomingQueue.value.isEmpty())
-        assertNotNull(queueManager.currentTrack.value)
+            // 5. Clear Queue
+            queueManager.clearQueue(clearCurrent = false)
+            assertTrue(queueManager.upcomingQueue.value.isEmpty())
+            assertNotNull(queueManager.currentTrack.value)
+        }
     }
 
     @Test
-    fun testPersistentQueueManager_deterministicShufflePreviousLIFO() = runBlocking {
-        val queueManager = PersistentQueueManager(context)
-        val tA = createTestTrack(title = "Alpha")
-        val tB = createTestTrack(title = "Bravo")
-        val tC = createTestTrack(title = "Charlie")
+    fun testPersistentQueueManager_deterministicShufflePreviousLIFO() {
+        runBlocking {
+            val queueManager = PersistentQueueManager(context)
+            val tA = createTestTrack(title = "Alpha")
+            val tB = createTestTrack(title = "Bravo")
+            val tC = createTestTrack(title = "Charlie")
 
-        // Start with Alpha, queue Bravo and Charlie
-        queueManager.setQueue(listOf(tA, tB, tC), tA, shuffle = true)
-        queueManager.setShuffle(true)
+            // Start with Alpha, queue Bravo and Charlie
+            queueManager.setQueue(listOf(tA, tB, tC), tA, shuffle = true)
+            queueManager.setShuffle(true)
 
-        // Play next track -> moves Alpha to history
-        val next1 = queueManager.nextTrack()
-        assertNotNull(next1)
-        assertEquals(1, queueManager.playbackHistory.value.size)
-        assertEquals(tA.id, queueManager.playbackHistory.value.first().id)
+            // Play next track -> moves Alpha to history
+            val next1 = queueManager.nextTrack()
+            assertNotNull(next1)
+            assertEquals(1, queueManager.playbackHistory.value.size)
+            assertEquals(tA.id, queueManager.playbackHistory.value.first().id)
 
-        // Play next track again -> moves next1 to top of history (LIFO)
-        val next2 = queueManager.nextTrack()
-        assertNotNull(next2)
-        assertEquals(2, queueManager.playbackHistory.value.size)
-        assertEquals(next1?.id, queueManager.playbackHistory.value[0].id)
-        assertEquals(tA.id, queueManager.playbackHistory.value[1].id)
+            // Play next track again -> moves next1 to top of history (LIFO)
+            val next2 = queueManager.nextTrack()
+            assertNotNull(next2)
+            assertEquals(2, queueManager.playbackHistory.value.size)
+            assertEquals(next1?.id, queueManager.playbackHistory.value[0].id)
+            assertEquals(tA.id, queueManager.playbackHistory.value[1].id)
 
-        // In shuffle mode, Previous MUST return to the actual previously played track from history!
-        val prev1 = queueManager.previousTrack()
-        assertEquals(next1?.id, prev1?.id)
-        assertEquals(1, queueManager.playbackHistory.value.size)
+            // In shuffle mode, Previous MUST return to the actual previously played track from history!
+            val prev1 = queueManager.previousTrack()
+            assertEquals(next1?.id, prev1?.id)
+            assertEquals(1, queueManager.playbackHistory.value.size)
 
-        // Second Previous returns Alpha
-        val prev2 = queueManager.previousTrack()
-        assertEquals(tA.id, prev2?.id)
-        assertEquals(0, queueManager.playbackHistory.value.size)
+            // Second Previous returns Alpha
+            val prev2 = queueManager.previousTrack()
+            assertEquals(tA.id, prev2?.id)
+            assertEquals(0, queueManager.playbackHistory.value.size)
+        }
     }
 
     @Test
-    fun testPersistentQueueManager_diskPersistenceAndRestoration() = runBlocking {
-        val queueManager1 = PersistentQueueManager(context)
-        val tA = createTestTrack(title = "Persist A")
-        val tB = createTestTrack(title = "Persist B")
-        val tC = createTestTrack(title = "Persist C")
+    fun testPersistentQueueManager_diskPersistenceAndRestoration() {
+        runBlocking {
+            val queueManager1 = PersistentQueueManager(context)
+            val tA = createTestTrack(title = "Persist A")
+            val tB = createTestTrack(title = "Persist B")
+            val tC = createTestTrack(title = "Persist C")
 
-        queueManager1.setQueue(listOf(tA, tB, tC), tA, shuffle = false)
-        queueManager1.setRepeatMode(QueueRepeatMode.ALL)
-        queueManager1.saveToDisk()
+            queueManager1.setQueue(listOf(tA, tB, tC), tA, shuffle = false)
+            queueManager1.setRepeatMode(QueueRepeatMode.ALL)
+            queueManager1.saveToDisk()
 
-        // Create fresh manager instance and restore from disk
-        val queueManager2 = PersistentQueueManager(context)
-        queueManager2.restoreFromDisk()
+            // Create fresh manager instance and restore from disk
+            val queueManager2 = PersistentQueueManager(context)
+            queueManager2.restoreFromDisk()
 
-        assertEquals(tA.id, queueManager2.currentTrack.value?.id)
-        assertEquals(2, queueManager2.upcomingQueue.value.size)
-        assertEquals(tB.id, queueManager2.upcomingQueue.value[0].id)
-        assertEquals(tC.id, queueManager2.upcomingQueue.value[1].id)
-        assertEquals(QueueRepeatMode.ALL, queueManager2.repeatMode.value)
+            assertEquals(tA.id, queueManager2.currentTrack.value?.id)
+            assertEquals(2, queueManager2.upcomingQueue.value.size)
+            assertEquals(tB.id, queueManager2.upcomingQueue.value[0].id)
+            assertEquals(tC.id, queueManager2.upcomingQueue.value[1].id)
+            assertEquals(QueueRepeatMode.ALL, queueManager2.repeatMode.value)
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -319,8 +325,9 @@ class SoundSyncStep2PlaybackAnalysisTest {
     // ──────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun testPhraseDetector_barQuantizationAndSectionClassification() = runBlocking {
-        val track = createTestTrack(bpm = 128.0, durationSeconds = 180)
+    fun testPhraseDetector_barQuantizationAndSectionClassification() {
+        runBlocking {
+            val track = createTestTrack(bpm = 128.0, durationSeconds = 180)
 
         val analysis = PhraseDetector.detectPhrases(context, track)
 
@@ -342,6 +349,7 @@ class SoundSyncStep2PlaybackAnalysisTest {
         val restored = TrackPhraseAnalysis.fromJson(json)
         assertEquals(analysis.sections.size, restored.sections.size)
         assertEquals(analysis.sections[0].type, restored.sections[0].type)
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -407,8 +415,9 @@ class SoundSyncStep2PlaybackAnalysisTest {
     // ──────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun testMixCompatibilityEngine_camelotScoringAndHarmonicMatching() = runBlocking {
-        val currentTrack = createTestTrack(
+    fun testMixCompatibilityEngine_camelotScoringAndHarmonicMatching() {
+        runBlocking {
+            val currentTrack = createTestTrack(
             id = "curr",
             title = "Master Track",
             artist = "DJ Hero",
@@ -471,5 +480,6 @@ class SoundSyncStep2PlaybackAnalysisTest {
 
         // Reasons list must be populated with explainable pills
         assertTrue(recommendations[0].reasons.isNotEmpty())
+        }
     }
 }

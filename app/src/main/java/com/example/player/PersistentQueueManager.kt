@@ -6,18 +6,24 @@ import com.example.data.AppDatabase
 import com.example.data.PlaylistEntity
 import com.example.data.PlaylistTrackEntity
 import com.example.model.Track
+import android.os.Build
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 enum class QueueRepeatMode {
@@ -74,6 +80,9 @@ class PersistentQueueManager(
     }
 
     private val queueFile = File(context.filesDir, QUEUE_FILENAME)
+    private val diskMutex = Mutex()
+    @Volatile
+    private var currentSaveJob: Job? = null
 
     private val _currentTrack = MutableStateFlow<Track?>(null)
     val currentTrack: StateFlow<Track?> = _currentTrack.asStateFlow()
@@ -432,79 +441,118 @@ class PersistentQueueManager(
     }
 
     // ── Disk Persistence ─────────────────────────────────────────────────────
-
+ 
     private fun saveToDiskAsync() {
-        scope.launch {
+        currentSaveJob?.cancel()
+        currentSaveJob = scope.launch {
             saveToDisk()
         }
     }
-
+ 
     suspend fun saveToDisk() = withContext(Dispatchers.IO) {
-        try {
-            val root = JSONObject().apply {
-                put("version", 2)
-                put("isShuffle", _isShuffleEnabled.value)
-                put("repeatMode", _repeatMode.value.name)
-                put("smartContinueMode", _smartContinueMode.value.name)
-                _currentTrack.value?.let { put("currentTrack", trackToJson(it)) }
+        diskMutex.withLock {
+            try {
+                val filesDir = context.filesDir
+                if (!filesDir.exists()) {
+                    filesDir.mkdirs()
+                }
 
-                val upcomingArr = JSONArray()
-                _upcomingQueue.value.forEach { upcomingArr.put(trackToJson(it)) }
-                put("upcomingQueue", upcomingArr)
+                val root = JSONObject().apply {
+                    put("version", 2)
+                    put("isShuffle", _isShuffleEnabled.value)
+                    put("repeatMode", _repeatMode.value.name)
+                    put("smartContinueMode", _smartContinueMode.value.name)
+                    _currentTrack.value?.let { put("currentTrack", trackToJson(it)) }
 
-                val historyArr = JSONArray()
-                _playbackHistory.value.take(MAX_HISTORY_SIZE).forEach { historyArr.put(trackToJson(it)) }
-                put("playbackHistory", historyArr)
+                    val upcomingArr = JSONArray()
+                    _upcomingQueue.value.forEach { upcomingArr.put(trackToJson(it)) }
+                    put("upcomingQueue", upcomingArr)
+
+                    val historyArr = JSONArray()
+                    _playbackHistory.value.take(MAX_HISTORY_SIZE).forEach { historyArr.put(trackToJson(it)) }
+                    put("playbackHistory", historyArr)
+                }
+
+                val tempFile = File(filesDir, "$QUEUE_FILENAME.${UUID.randomUUID()}.tmp")
+                tempFile.writeText(root.toString(2), StandardCharsets.UTF_8)
+
+                var moved = false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        Files.move(
+                            tempFile.toPath(),
+                            queueFile.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE
+                        )
+                        moved = true
+                    } catch (_: Exception) {
+                        try {
+                            Files.move(
+                                tempFile.toPath(),
+                                queueFile.toPath(),
+                                StandardCopyOption.REPLACE_EXISTING
+                            )
+                            moved = true
+                        } catch (_: Exception) {
+                            moved = false
+                        }
+                    }
+                }
+
+                if (!moved) {
+                    if (!tempFile.renameTo(queueFile)) {
+                        tempFile.copyTo(queueFile, overwrite = true)
+                        tempFile.delete()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed saving queue to disk: ${e.message}")
             }
-
-            val tempFile = File(context.filesDir, "$QUEUE_FILENAME.tmp")
-            tempFile.writeText(root.toString(2), StandardCharsets.UTF_8)
-            if (queueFile.exists()) queueFile.delete()
-            tempFile.renameTo(queueFile)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed saving queue to disk: ${e.message}")
         }
     }
-
+ 
     fun restoreFromDisk() {
-        if (!queueFile.exists() || queueFile.length() == 0L) return
-        try {
-            val text = queueFile.readText(StandardCharsets.UTF_8)
-            val root = JSONObject(text)
-            _isShuffleEnabled.value = root.optBoolean("isShuffle", false)
-            _repeatMode.value = runCatching {
-                QueueRepeatMode.valueOf(root.optString("repeatMode", "OFF"))
-            }.getOrDefault(QueueRepeatMode.OFF)
-            _smartContinueMode.value = runCatching {
-                SmartContinueMode.valueOf(root.optString("smartContinueMode", "OFF"))
-            }.getOrDefault(SmartContinueMode.OFF)
+        synchronized(this) {
+            if (!queueFile.exists() || queueFile.length() == 0L) return
+            try {
+                val text = queueFile.readText(StandardCharsets.UTF_8)
+                val root = JSONObject(text)
+                _isShuffleEnabled.value = root.optBoolean("isShuffle", false)
+                _repeatMode.value = runCatching {
+                    QueueRepeatMode.valueOf(root.optString("repeatMode", "OFF"))
+                }.getOrDefault(QueueRepeatMode.OFF)
+                _smartContinueMode.value = runCatching {
+                    SmartContinueMode.valueOf(root.optString("smartContinueMode", "OFF"))
+                }.getOrDefault(SmartContinueMode.OFF)
 
-            val currentObj = root.optJSONObject("currentTrack")
-            if (currentObj != null) {
-                _currentTrack.value = trackFromJson(currentObj)
-            }
-
-            val upcomingArr = root.optJSONArray("upcomingQueue")
-            if (upcomingArr != null) {
-                val list = mutableListOf<Track>()
-                for (i in 0 until upcomingArr.length()) {
-                    upcomingArr.optJSONObject(i)?.let { list.add(trackFromJson(it)) }
+                val currentObj = root.optJSONObject("currentTrack")
+                if (currentObj != null) {
+                    _currentTrack.value = trackFromJson(currentObj)
                 }
-                _upcomingQueue.value = list
-            }
 
-            val historyArr = root.optJSONArray("playbackHistory")
-            if (historyArr != null) {
-                val list = mutableListOf<Track>()
-                for (i in 0 until historyArr.length()) {
-                    historyArr.optJSONObject(i)?.let { list.add(trackFromJson(it)) }
+                val upcomingArr = root.optJSONArray("upcomingQueue")
+                if (upcomingArr != null) {
+                    val list = mutableListOf<Track>()
+                    for (i in 0 until upcomingArr.length()) {
+                        upcomingArr.optJSONObject(i)?.let { list.add(trackFromJson(it)) }
+                    }
+                    _upcomingQueue.value = list
                 }
-                _playbackHistory.value = list
-            }
 
-            Log.i(TAG, "Restored queue: current='${_currentTrack.value?.title}', upcoming=${_upcomingQueue.value.size}, history=${_playbackHistory.value.size}")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed restoring queue from disk: ${e.message}")
+                val historyArr = root.optJSONArray("playbackHistory")
+                if (historyArr != null) {
+                    val list = mutableListOf<Track>()
+                    for (i in 0 until historyArr.length()) {
+                        historyArr.optJSONObject(i)?.let { list.add(trackFromJson(it)) }
+                    }
+                    _playbackHistory.value = list
+                }
+
+                Log.i(TAG, "Restored queue: current='${_currentTrack.value?.title}', upcoming=${_upcomingQueue.value.size}, history=${_playbackHistory.value.size}")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed restoring queue from disk: ${e.message}")
+            }
         }
     }
 
