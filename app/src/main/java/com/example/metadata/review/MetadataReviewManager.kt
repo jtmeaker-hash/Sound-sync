@@ -86,7 +86,9 @@ class MetadataReviewManager(
 
         val finalTitle = item.proposedTitle.takeIf { it.isNotBlank() } ?: track.title
         val finalArtist = item.proposedArtist.takeIf { it.isNotBlank() } ?: track.artist
-        val finalArtworkUrl = item.proposedArtworkUrl ?: track.artworkUrl
+        val shouldReplaceArtwork = settings.replaceExistingArtwork || track.artworkUrl.isNullOrBlank()
+        val finalArtworkUrl = if (shouldReplaceArtwork) (item.proposedArtworkUrl ?: track.artworkUrl) else track.artworkUrl
+        val finalArtworkCachePath = if (shouldReplaceArtwork) (item.artworkCachePath ?: track.artworkCachePath) else track.artworkCachePath
 
         // 1. Transactional Pre-Write Backup (Sections 10 & 11)
         if (settings.keepOriginalMetadataBackup) {
@@ -118,7 +120,7 @@ class MetadataReviewManager(
             releaseYear = item.proposedYear ?: track.releaseYear,
             trackNumber = item.proposedTrackNumber ?: track.trackNumber,
             artworkUrl = finalArtworkUrl,
-            artworkCachePath = item.artworkCachePath ?: track.artworkCachePath,
+            artworkCachePath = finalArtworkCachePath,
             metadataSource = item.provider,
             metadataConfidence = item.confidenceScore,
             metadataScanState = MetadataScanState.APPLIED.name,
