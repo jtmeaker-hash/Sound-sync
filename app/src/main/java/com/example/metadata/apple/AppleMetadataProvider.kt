@@ -73,13 +73,35 @@ open class AppleMetadataProvider(
             return@withContext emptyList()
         }
 
+        val primaryResults = executeSearch(trimmedQuery, country, limit)
+        if (primaryResults.isNotEmpty()) {
+            return@withContext primaryResults
+        }
+
+        // Section 3: If no good Australian result exists, retry sensible storefront such as US
+        if (country.equals("AU", ignoreCase = true)) {
+            Log.d(TAG, "No results in primary storefront (AU) for \"$trimmedQuery\"; retrying storefront (US)")
+            val usResults = executeSearch(trimmedQuery, "US", limit)
+            if (usResults.isNotEmpty()) {
+                return@withContext usResults
+            }
+        }
+
+        emptyList()
+    }
+
+    private suspend fun executeSearch(
+        trimmedQuery: String,
+        country: String,
+        limit: Int
+    ): List<AppleTrackResult> {
         val cacheKey = "$country:$limit:${trimmedQuery.lowercase()}"
-        searchCache[cacheKey]?.let { return@withContext it }
+        searchCache[cacheKey]?.let { return it }
 
         val encodedTerm = URLEncoder.encode(trimmedQuery, StandardCharsets.UTF_8.name())
         val url = "$BASE_URL/search?term=$encodedTerm&country=$country&media=music&entity=song&limit=$limit"
 
-        Log.d(TAG, "request started")
+        Log.d(TAG, "iTunes request URL: $url")
         Log.d(TAG, "query: $trimmedQuery (country: $country, limit: $limit)")
         Log.d("AppleMetadata", "Searching: $trimmedQuery")
 
@@ -112,7 +134,7 @@ open class AppleMetadataProvider(
 
                     if (!response.isSuccessful) {
                         Log.e(TAG, "Apple Search API error: HTTP $statusCode")
-                        return@withContext emptyList()
+                        return emptyList()
                     }
 
                     val bodyString = response.body?.string()
@@ -120,7 +142,7 @@ open class AppleMetadataProvider(
 
                     if (bodyString.isNullOrBlank()) {
                         Log.w(TAG, "parsing status: empty body")
-                        return@withContext emptyList()
+                        return emptyList()
                     }
 
                     try {
@@ -138,23 +160,23 @@ open class AppleMetadataProvider(
                         }
 
                         searchCache[cacheKey] = parsed.results
-                        return@withContext parsed.results
+                        return parsed.results
                     } catch (e: Exception) {
                         Log.e(TAG, "parsing status: FAILED - ${e.message}", e)
-                        return@withContext emptyList()
+                        return emptyList()
                     }
                 }
             } catch (e: IOException) {
                 Log.w(TAG, "Network exception querying Apple Search API (attempt $attempts): ${e.message}")
                 if (attempts >= 3) {
-                    return@withContext emptyList()
+                    return emptyList()
                 }
                 delay(backoffMs)
                 backoffMs *= 2
             }
         }
 
-        emptyList()
+        return emptyList()
     }
 
     /**

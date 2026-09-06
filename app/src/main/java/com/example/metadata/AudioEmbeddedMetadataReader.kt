@@ -44,7 +44,10 @@ data class EmbeddedAudioMetadata(
     val musicalKey: String? = null,
     val camelotKey: String? = null,
     val releaseCountry: String? = null,
-    val releaseStatus: String? = null
+    val releaseStatus: String? = null,
+    val hasEmbeddedArtwork: Boolean = false,
+    val embeddedArtworkSize: Int = 0,
+    val embeddedArtworkBytes: ByteArray? = null
 ) {
     val hasBpm: Boolean get() = bpm != null && bpm in 30.0..300.0
     val hasKey: Boolean get() = !musicalKey.isNullOrBlank() && musicalKey != "—" && musicalKey != "-" && !musicalKey.equals("Unknown", ignoreCase = true)
@@ -106,6 +109,10 @@ object AudioEmbeddedMetadataReader {
             val mBpm = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toDoubleOrNull()
                 ?.takeIf { it in 30.0..300.0 }
 
+            val embeddedPic = retriever.embeddedPicture
+            val hasArt = embeddedPic != null && embeddedPic.isNotEmpty()
+            val artSize = embeddedPic?.size ?: 0
+
             EmbeddedAudioMetadata(
                 title = mTitle?.takeIf(String::isNotBlank),
                 artist = mArtist?.takeIf(String::isNotBlank),
@@ -120,7 +127,10 @@ object AudioEmbeddedMetadataReader {
                 discNumber = mDiscNumber,
                 releaseDate = mDate?.takeIf(String::isNotBlank),
                 releaseYear = mYear,
-                bpm = mBpm
+                bpm = mBpm,
+                hasEmbeddedArtwork = hasArt,
+                embeddedArtworkSize = artSize,
+                embeddedArtworkBytes = embeddedPic
             )
         } catch (e: Exception) {
             Log.v(TAG, "MediaMetadataRetriever skipped for $filePathOrUri: ${e.message}")
@@ -193,6 +203,8 @@ object AudioEmbeddedMetadataReader {
         var musicalKey: String? = null
         var releaseCountry: String? = null
         var releaseStatus: String? = null
+        var hasArtwork = false
+        var artworkSize = 0
 
         val isV24 = versionMajor >= 4
 
@@ -236,6 +248,10 @@ object AudioEmbeddedMetadataReader {
                             releaseDate = d
                             releaseYear = d.take(4).toIntOrNull()
                         }
+                    }
+                    "APIC", "PIC" -> {
+                        hasArtwork = true
+                        artworkSize = framePayload.size
                     }
                     "TBPM" -> {
                         val bpmStr = decodeTextFrame(framePayload).filter { it.isDigit() || it == '.' }
@@ -282,12 +298,18 @@ object AudioEmbeddedMetadataReader {
             musicalKey = musicalKey?.takeIf(String::isNotBlank),
             camelotKey = camelot,
             releaseCountry = releaseCountry?.takeIf(String::isNotBlank),
-            releaseStatus = releaseStatus?.takeIf(String::isNotBlank)
+            releaseStatus = releaseStatus?.takeIf(String::isNotBlank),
+            hasEmbeddedArtwork = hasArtwork,
+            embeddedArtworkSize = artworkSize
         )
     }
 
     private fun parseFlacVorbisComment(stream: InputStream): EmbeddedAudioMetadata {
         var isLast = false
+        var parsedMetadata: EmbeddedAudioMetadata? = null
+        var hasFlacPicture = false
+        var flacPictureSize = 0
+
         while (!isLast) {
             val blockHeader = ByteArray(4)
             val read = stream.read(blockHeader)
@@ -310,12 +332,20 @@ object AudioEmbeddedMetadataReader {
                 val skipRemaining = blockLength - total
                 if (skipRemaining > 0) stream.skip(skipRemaining.toLong())
 
-                return parseVorbisCommentBytes(commentBytes, total)
+                parsedMetadata = parseVorbisCommentBytes(commentBytes, total)
+            } else if (blockType == 6) { // PICTURE
+                hasFlacPicture = true
+                flacPictureSize = blockLength
+                stream.skip(blockLength.toLong())
             } else {
                 stream.skip(blockLength.toLong())
             }
         }
-        return EmbeddedAudioMetadata()
+        val base = parsedMetadata ?: EmbeddedAudioMetadata()
+        return base.copy(
+            hasEmbeddedArtwork = hasFlacPicture || base.hasEmbeddedArtwork,
+            embeddedArtworkSize = if (flacPictureSize > 0) flacPictureSize else base.embeddedArtworkSize
+        )
     }
 
     private fun parseVorbisCommentBytes(bytes: ByteArray, length: Int): EmbeddedAudioMetadata {
@@ -485,7 +515,10 @@ object AudioEmbeddedMetadataReader {
             musicalKey = musicalKey,
             camelotKey = camelotKey,
             releaseCountry = stream.releaseCountry ?: retriever.releaseCountry,
-            releaseStatus = stream.releaseStatus ?: retriever.releaseStatus
+            releaseStatus = stream.releaseStatus ?: retriever.releaseStatus,
+            hasEmbeddedArtwork = stream.hasEmbeddedArtwork || retriever.hasEmbeddedArtwork,
+            embeddedArtworkSize = if (stream.embeddedArtworkSize > 0) stream.embeddedArtworkSize else retriever.embeddedArtworkSize,
+            embeddedArtworkBytes = retriever.embeddedArtworkBytes ?: stream.embeddedArtworkBytes
         )
     }
 }

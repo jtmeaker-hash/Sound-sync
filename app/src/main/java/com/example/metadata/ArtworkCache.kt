@@ -80,6 +80,37 @@ class ArtworkCache(private val context: Context) {
         return imageFile
     }
 
+    fun saveArtwork(
+        artist: String,
+        album: String?,
+        artwork: com.example.metadata.coverart.DownloadedCoverArt,
+        sourceProvider: String = "Cover Art Archive"
+    ): File {
+        val key = generateCacheKey(artist, album)
+        val imageFile = File(cacheDir, "$key.jpg")
+        val metaFile = File(cacheDir, "$key.json")
+
+        val tempFile = File(cacheDir, "$key.tmp")
+        tempFile.writeBytes(artwork.bytes)
+        if (imageFile.exists()) {
+            imageFile.delete()
+        }
+        tempFile.renameTo(imageFile)
+
+        val meta = JSONObject().apply {
+            put("sourceProvider", sourceProvider)
+            put("sourceUrl", artwork.sourceUrl)
+            put("downloadTimestamp", System.currentTimeMillis())
+            put("dimensions", "${artwork.width}x${artwork.height}")
+            put("artist", artist)
+            put("album", album.orEmpty())
+        }
+        metaFile.writeText(meta.toString(2), StandardCharsets.UTF_8)
+
+        Log.d(TAG, "Cached artwork to ${imageFile.absolutePath} (${artwork.width}x${artwork.height}) via $sourceProvider")
+        return imageFile
+    }
+
     fun getCachedArtworkInfo(artist: String, album: String?): CachedArtworkInfo? {
         val file = getCachedArtworkFile(artist, album) ?: return null
         val key = generateCacheKey(artist, album)
