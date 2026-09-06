@@ -315,14 +315,15 @@ class MetadataResolver(
 
         // 9. Physical File Writing: STRICT SAFETY ENFORCEMENT (Section 8)
         // Background scanning MUST NOT modify physical audio files unless user disabled approval requirement
-        val isLocalPhysicalFile = !track.filePath.startsWith("content://") &&
-                !track.filePath.startsWith("demo://") &&
-                File(track.filePath).exists()
+        val isLocalPhysicalFile = !track.filePath.startsWith("demo://") &&
+                !track.filePath.startsWith("http") &&
+                (track.filePath.startsWith("content://") || File(track.filePath).exists())
 
         val shouldWritePhysicalFile = embedArtworkToFile && isLocalPhysicalFile &&
                 (!settings.writeMetadataOnlyAfterApproval || forceRefresh || matchState == MetadataScanState.VERIFIED)
 
         var finalScanState = matchState
+        var fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
 
         if (shouldWritePhysicalFile) {
             Log.d("MetadataWriter", "Physical tag writing for ${track.filePath}")
@@ -331,9 +332,14 @@ class MetadataResolver(
                 artworkBytes = activeArtworkBytes,
                 artworkMimeType = activeArtworkMime
             )
+            fileWriteState = writeResult.writeState
             when (writeResult) {
                 is MetadataWriteResult.Written -> {
                     Log.d("MetadataWriter", "Physical tag writing and readback verification PASSED for ${track.filePath}")
+                    finalScanState = MetadataScanState.COMPLETE
+                }
+                is MetadataWriteResult.Partial -> {
+                    Log.d("MetadataWriter", "Physical tag writing PASSED (partial) for ${track.filePath}")
                     finalScanState = MetadataScanState.COMPLETE
                 }
                 is MetadataWriteResult.VerificationFailed -> {
@@ -343,6 +349,10 @@ class MetadataResolver(
                 is MetadataWriteResult.PermissionRequired -> {
                     Log.w("MetadataWriter", "Physical write requires Android storage write permission for ${track.filePath}")
                     finalScanState = MetadataScanState.NEEDS_WRITE_PERMISSION
+                }
+                is MetadataWriteResult.ReadOnlyFile -> {
+                    Log.w("MetadataWriter", "Physical write not possible; file is read-only: ${track.filePath}")
+                    finalScanState = MetadataScanState.IDENTIFIED
                 }
                 is MetadataWriteResult.Unsupported -> {
                     Log.d("MetadataWriter", "Physical write not supported: ${writeResult.reason}")
@@ -359,7 +369,8 @@ class MetadataResolver(
             artworkUrl = finalArtworkUrl,
             artworkSource = artworkSource,
             artworkCachePath = artworkCachePath,
-            metadataScanState = finalScanState.name
+            metadataScanState = finalScanState.name,
+            metadataWriteState = fileWriteState.name
         )
 
         Log.d("MetadataWriter", "database write: updated track id=${finalTrack.id} state=${finalTrack.metadataScanState}")

@@ -117,7 +117,8 @@ class MetadataBackupManager(
         }
 
         val ext = file.extension.lowercase()
-        if (ext != "mp3" && ext != "flac") {
+        val supportedExts = setOf("wav", "mp3", "flac", "m4a", "mp4", "aac", "ogg", "opus")
+        if (ext !in supportedExts) {
             return@withContext MetadataWriteResult.Unsupported("Unsupported container: $ext")
         }
 

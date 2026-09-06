@@ -111,4 +111,13 @@ interface TrackDao {
 
     @Query("UPDATE tracks SET analysisState = 'QUEUED' WHERE bpm <= 0.0 OR camelotKey = '' OR artworkUrl IS NULL OR artworkUrl = ''")
     suspend fun markMissingForAnalysis()
+
+    @Query("UPDATE tracks SET metadataWriteState = :state WHERE id = :id")
+    suspend fun updateMetadataWriteState(id: String, state: String)
+
+    @Query("SELECT * FROM tracks WHERE metadataWriteState != 'FILE_WRITE_SUCCESS' AND filePath != '' AND filePath NOT LIKE 'demo://%'")
+    suspend fun getTracksNeedingFileWrite(): List<TrackEntity>
+
+    @Query("SELECT COUNT(*) FROM tracks WHERE metadataWriteState != 'FILE_WRITE_SUCCESS' AND filePath != '' AND filePath NOT LIKE 'demo://%'")
+    suspend fun getCountNeedingFileWrite(): Int
 }

@@ -15,13 +15,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -139,6 +144,100 @@ private data class ProvenanceStyle(
     val textColor: Color,
     val icon: ImageVector
 )
+
+/**
+ * Badge indicating file tag persistence status (Sections 13, 15, 16, 17):
+ * - FILE_WRITE_SUCCESS: "✓ Embedded in file" (Green)
+ * - DATABASE_ONLY / NOT_ANALYSED: "⚠ Stored in SoundSync only" (Amber)
+ * - WRITING_TO_FILE: "⏳ Writing to file..." (Cyan)
+ * - FILE_WRITE_PARTIAL: "⚠ Partially embedded" (Amber)
+ * - FILE_WRITE_FAILED: "✕ File write failed" (Pink/Red)
+ * - READ_ONLY_FILE: "🔒 Read-only file" (Gray)
+ * - FORMAT_WRITE_UNSUPPORTED: "ℹ Format unsupported" (Gray)
+ * - PERMISSION_REQUIRED: "⚠ Storage permission required" (Amber)
+ */
+@Composable
+fun MetadataFileWriteStateBadge(
+    track: Track,
+    compact: Boolean = true,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
+) {
+    val state = track.writeState
+    val (bgColor, borderColor, textColor, icon) = when (state) {
+        com.example.model.MetadataWriteState.FILE_WRITE_SUCCESS -> {
+            val c = NeonGreen
+            Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.CheckCircle)
+        }
+        com.example.model.MetadataWriteState.WRITING_TO_FILE -> {
+            val c = DeckACyan
+            Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.HourglassTop)
+        }
+        com.example.model.MetadataWriteState.FILE_WRITE_PARTIAL -> {
+            val c = NeonAmber
+            Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.Warning)
+        }
+        com.example.model.MetadataWriteState.FILE_WRITE_FAILED -> {
+            val c = DeckBPink
+            Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.Error)
+        }
+        com.example.model.MetadataWriteState.PERMISSION_REQUIRED -> {
+            val c = NeonAmber
+            Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.Lock)
+        }
+        com.example.model.MetadataWriteState.READ_ONLY_FILE -> {
+            val c = TextMuted
+            Tuple4(DjSurfaceElevated, DjSurfaceBorder, c, Icons.Default.Lock)
+        }
+        com.example.model.MetadataWriteState.FORMAT_WRITE_UNSUPPORTED -> {
+            val c = TextMuted
+            Tuple4(DjSurfaceElevated, DjSurfaceBorder, c, Icons.Default.Info)
+        }
+        com.example.model.MetadataWriteState.NOT_ANALYSED,
+        com.example.model.MetadataWriteState.METADATA_FOUND,
+        com.example.model.MetadataWriteState.DATABASE_ONLY -> {
+            val c = NeonAmber
+            Tuple4(c.copy(alpha = 0.12f), c.copy(alpha = 0.4f), c, Icons.Default.Warning)
+        }
+    }
+
+    Surface(
+        modifier = modifier
+            .wrapContentWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .testTag("metadata_write_state_badge_${track.id}"),
+        shape = RoundedCornerShape(if (compact) 4.dp else 6.dp),
+        color = bgColor,
+        border = BorderStroke(0.75.dp, borderColor)
+    ) {
+        Row(
+            modifier = Modifier
+                .wrapContentWidth()
+                .padding(horizontal = if (compact) 5.dp else 7.dp, vertical = if (compact) 2.dp else 3.5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.5.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = state.displayName,
+                tint = textColor,
+                modifier = Modifier.size(if (compact) 10.dp else 12.dp)
+            )
+            Text(
+                text = if (compact) state.displayName else state.userSummary,
+                color = textColor,
+                fontSize = if (compact) 9.sp else 10.5.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 0.3.sp,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+    }
+}
+
+private data class Tuple4<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 
 /**
  * Detailed metadata provenance card for properties dialogs, file inspectors, and deck views.

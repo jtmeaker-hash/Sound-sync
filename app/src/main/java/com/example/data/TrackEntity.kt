@@ -87,7 +87,8 @@ data class TrackEntity(
     val metadataSource: String? = null,
     val metadataConfidence: Double = 0.0,
     val fingerprintAlgorithm: String? = null,
-    val fingerprintTimestamp: Long? = null
+    val fingerprintTimestamp: Long? = null,
+    val metadataWriteState: String = "NOT_ANALYSED"
 ) {
     fun toTrack(): Track {
         val syncEnum = try { SyncState.valueOf(syncState) } catch (e: Exception) { SyncState.LOCAL_ONLY }
@@ -184,7 +185,8 @@ data class TrackEntity(
             metadataSource = metadataSource,
             metadataConfidence = metadataConfidence,
             fingerprintAlgorithm = fingerprintAlgorithm,
-            fingerprintTimestamp = fingerprintTimestamp
+            fingerprintTimestamp = fingerprintTimestamp,
+            metadataWriteState = metadataWriteState
         )
     }
 
@@ -258,7 +260,8 @@ data class TrackEntity(
                 metadataSource = track.metadataSource,
                 metadataConfidence = track.metadataConfidence,
                 fingerprintAlgorithm = track.fingerprintAlgorithm,
-                fingerprintTimestamp = track.fingerprintTimestamp
+                fingerprintTimestamp = track.fingerprintTimestamp,
+                metadataWriteState = track.metadataWriteState
             )
         }
     }

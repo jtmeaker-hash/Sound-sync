@@ -47,7 +47,10 @@ import com.example.model.AudioQualityRating
 import com.example.model.SpectrogramAnalysis
 import com.example.model.Track
 import com.example.model.WaveformStyle
+import com.example.metadata.MetadataFileWriteQueue
+import com.example.metadata.MetadataWriteResult
 import com.example.ui.MainDjViewModel
+import com.example.ui.components.MetadataFileWriteStateBadge
 import com.example.ui.components.RekordboxWaveformView
 import com.example.ui.components.SpectrogramAnalyzerView
 import com.example.ui.djtools.KeyConverterData
@@ -238,6 +241,25 @@ fun TrackInspectorScreen(
                     coroutineScope.launch(Dispatchers.IO) {
                         trackDao.updateTrack(TrackEntity.fromTrack(updated))
                     }
+                },
+                onEmbedInFile = {
+                    Toast.makeText(context, "Embedding metadata into audio file...", Toast.LENGTH_SHORT).show()
+                    currentTrack = currentTrack.copy(metadataWriteState = com.example.model.MetadataWriteState.WRITING_TO_FILE.name)
+                    MetadataFileWriteQueue.getInstance(context).enqueue(currentTrack) { result ->
+                        coroutineScope.launch(Dispatchers.Main) {
+                            currentTrack = currentTrack.copy(metadataWriteState = result.writeState.name)
+                            val msg = when (result) {
+                                is MetadataWriteResult.Written -> "Successfully embedded metadata in audio file!"
+                                is MetadataWriteResult.Partial -> "Partially embedded metadata in audio file."
+                                is MetadataWriteResult.VerificationFailed -> "Verification failed on ${result.field}"
+                                is MetadataWriteResult.PermissionRequired -> "Write permission required!"
+                                is MetadataWriteResult.ReadOnlyFile -> "File is read-only!"
+                                is MetadataWriteResult.Unsupported -> "Format unsupported: ${result.reason}"
+                                is MetadataWriteResult.Failed -> "File write failed: ${result.reason}"
+                            }
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
             )
 
@@ -267,21 +289,39 @@ fun TrackInspectorScreen(
                 track = currentTrack,
                 onHalfBpm = {
                     val half = currentTrack.bpm / 2.0
-                    val updated = currentTrack.copy(bpm = half, isManualBpm = true)
+                    val updated = currentTrack.copy(
+                        bpm = half,
+                        isManualBpm = true,
+                        metadataWriteState = com.example.model.MetadataWriteState.WRITING_TO_FILE.name
+                    )
                     currentTrack = updated
                     coroutineScope.launch(Dispatchers.IO) {
                         trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                        MetadataFileWriteQueue.getInstance(context).enqueue(updated) { res ->
+                            coroutineScope.launch(Dispatchers.Main) {
+                                currentTrack = currentTrack.copy(metadataWriteState = res.writeState.name)
+                            }
+                        }
                     }
-                    Toast.makeText(context, "BPM halved: ${String.format(Locale.US, "%.1f", half)}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "BPM halved: ${String.format(Locale.US, "%.1f", half)} (embedding to file)", Toast.LENGTH_SHORT).show()
                 },
                 onDoubleBpm = {
                     val dbl = currentTrack.bpm * 2.0
-                    val updated = currentTrack.copy(bpm = dbl, isManualBpm = true)
+                    val updated = currentTrack.copy(
+                        bpm = dbl,
+                        isManualBpm = true,
+                        metadataWriteState = com.example.model.MetadataWriteState.WRITING_TO_FILE.name
+                    )
                     currentTrack = updated
                     coroutineScope.launch(Dispatchers.IO) {
                         trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                        MetadataFileWriteQueue.getInstance(context).enqueue(updated) { res ->
+                            coroutineScope.launch(Dispatchers.Main) {
+                                currentTrack = currentTrack.copy(metadataWriteState = res.writeState.name)
+                            }
+                        }
                     }
-                    Toast.makeText(context, "BPM doubled: ${String.format(Locale.US, "%.1f", dbl)}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "BPM doubled: ${String.format(Locale.US, "%.1f", dbl)} (embedding to file)", Toast.LENGTH_SHORT).show()
                 },
                 onEditBpm = { showEditBpmDialog = true },
                 onReanalyseBpm = {
@@ -453,15 +493,21 @@ fun TrackInspectorScreen(
             track = currentTrack,
             onDismiss = { showEditMetadataDialog = false },
             onSave = { updated ->
-                currentTrack = updated
+                val writingTrack = updated.copy(metadataWriteState = com.example.model.MetadataWriteState.WRITING_TO_FILE.name)
+                currentTrack = writingTrack
                 showEditMetadataDialog = false
                 coroutineScope.launch(Dispatchers.IO) {
-                    trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                    trackDao.updateTrack(TrackEntity.fromTrack(writingTrack))
+                    MetadataFileWriteQueue.getInstance(context).enqueue(updated) { res ->
+                        coroutineScope.launch(Dispatchers.Main) {
+                            currentTrack = currentTrack.copy(metadataWriteState = res.writeState.name)
+                        }
+                    }
                 }
                 if (audioEngine.currentTrack.value?.id == updated.id) {
                     audioEngine.loadTrack(updated, autoPlay = audioEngine.isPlaying.value)
                 }
-                Toast.makeText(context, "Metadata saved", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Metadata saved & embedding into audio file...", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -471,13 +517,22 @@ fun TrackInspectorScreen(
             initialBpm = currentTrack.bpm,
             onDismiss = { showEditBpmDialog = false },
             onConfirm = { newBpm ->
-                val updated = currentTrack.copy(bpm = newBpm, isManualBpm = true)
+                val updated = currentTrack.copy(
+                    bpm = newBpm,
+                    isManualBpm = true,
+                    metadataWriteState = com.example.model.MetadataWriteState.WRITING_TO_FILE.name
+                )
                 currentTrack = updated
                 showEditBpmDialog = false
                 coroutineScope.launch(Dispatchers.IO) {
                     trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                    MetadataFileWriteQueue.getInstance(context).enqueue(updated) { res ->
+                        coroutineScope.launch(Dispatchers.Main) {
+                            currentTrack = currentTrack.copy(metadataWriteState = res.writeState.name)
+                        }
+                    }
                 }
-                Toast.makeText(context, "BPM set to ${String.format(Locale.US, "%.2f", newBpm)}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "BPM set to ${String.format(Locale.US, "%.2f", newBpm)} (embedding into file)", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -487,13 +542,23 @@ fun TrackInspectorScreen(
             currentKey = currentTrack.musicalKey,
             onDismiss = { showEditKeyDialog = false },
             onConfirm = { newKey, newCamelot ->
-                val updated = currentTrack.copy(musicalKey = newKey, camelotKey = newCamelot, isManualKey = true)
+                val updated = currentTrack.copy(
+                    musicalKey = newKey,
+                    camelotKey = newCamelot,
+                    isManualKey = true,
+                    metadataWriteState = com.example.model.MetadataWriteState.WRITING_TO_FILE.name
+                )
                 currentTrack = updated
                 showEditKeyDialog = false
                 coroutineScope.launch(Dispatchers.IO) {
                     trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                    MetadataFileWriteQueue.getInstance(context).enqueue(updated) { res ->
+                        coroutineScope.launch(Dispatchers.Main) {
+                            currentTrack = currentTrack.copy(metadataWriteState = res.writeState.name)
+                        }
+                    }
                 }
-                Toast.makeText(context, "Key set to $newKey ($newCamelot)", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Key set to $newKey ($newCamelot) (embedding into file)", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -575,7 +640,8 @@ fun TrackInspectorScreen(
 @Composable
 private fun InspectorHeaderCard(
     track: Track,
-    onRatingChanged: (Int) -> Unit
+    onRatingChanged: (Int) -> Unit,
+    onEmbedInFile: (() -> Unit)? = null
 ) {
     val isPro = SoundSyncTheme.isPro
     val theme = SoundSyncTheme.current
@@ -685,11 +751,24 @@ private fun InspectorHeaderCard(
                     )
                 }
 
+                // File Tag Persistence Status Badge
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 2.dp)
+                ) {
+                    MetadataFileWriteStateBadge(
+                        track = track,
+                        compact = true,
+                        onClick = onEmbedInFile
+                    )
+                }
+
                 // Interactive 5-star rating
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier.padding(top = 4.dp)
+                    modifier = Modifier.padding(top = 2.dp)
                 ) {
                     for (star in 1..5) {
                         val isFilled = star <= track.rating

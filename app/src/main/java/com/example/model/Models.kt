@@ -133,6 +133,23 @@ enum class MetadataScanState {
     RESTORED
 }
 
+enum class MetadataWriteState(
+    val displayName: String,
+    val statusSymbol: String,
+    val userSummary: String
+) {
+    NOT_ANALYSED("Not Analysed", "—", "Metadata not yet analysed"),
+    METADATA_FOUND("Metadata Found", "ℹ", "Metadata identified, pending file write"),
+    DATABASE_ONLY("Stored in SoundSync only", "⚠", "Stored in SoundSync only"),
+    WRITING_TO_FILE("Writing to File", "⏳", "Writing metadata to file"),
+    FILE_WRITE_SUCCESS("Embedded in file", "✓", "Embedded in file"),
+    FILE_WRITE_PARTIAL("Partially embedded", "⚠", "Partially embedded in file"),
+    FILE_WRITE_FAILED("File write failed", "✕", "File write failed"),
+    READ_ONLY_FILE("Read-only file", "🔒", "Audio file is read-only"),
+    FORMAT_WRITE_UNSUPPORTED("Format write unsupported", "ℹ", "File format does not support tag writing"),
+    PERMISSION_REQUIRED("Permission required", "⚠", "Permission required to write file")
+}
+
 enum class AnalysisState {
     NOT_ANALYSED,
     QUEUED,
@@ -213,8 +230,15 @@ data class Track(
     val metadataSource: String? = null,
     val metadataConfidence: Double = 0.0,
     val fingerprintAlgorithm: String? = null,
-    val fingerprintTimestamp: Long? = null
+    val fingerprintTimestamp: Long? = null,
+    val metadataWriteState: String = MetadataWriteState.NOT_ANALYSED.name
 ) {
+    val writeState: MetadataWriteState
+        get() = try { MetadataWriteState.valueOf(metadataWriteState) } catch (_: Exception) { MetadataWriteState.NOT_ANALYSED }
+
+    val isEmbeddedInFile: Boolean
+        get() = metadataWriteState == MetadataWriteState.FILE_WRITE_SUCCESS.name
+
     val tagsList: List<String>
         get() = customTags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 

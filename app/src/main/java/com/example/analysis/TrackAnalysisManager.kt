@@ -11,6 +11,7 @@ import com.example.data.AppDatabase
 import com.example.data.TrackEntity
 import com.example.metadata.AudioEmbeddedMetadataReader
 import com.example.metadata.LocalPcmAudioAnalyzer
+import com.example.metadata.MetadataFileWriteQueue
 import com.example.metadata.MetadataResolver
 import com.example.model.AnalysisState
 import com.example.model.AudioQualityRating
@@ -480,6 +481,14 @@ class TrackAnalysisManager private constructor(
             )
 
             trackDao.updateTrack(TrackEntity.fromTrack(finalTrack))
+
+            // Authoritative persistence: physically write analyzed BPM & Key into audio file
+            try {
+                MetadataFileWriteQueue.getInstance(context).enqueue(finalTrack)
+            } catch (queueEx: Exception) {
+                Log.w(TAG, "Failed to enqueue file write after analysis: ${queueEx.message}")
+            }
+
             true
         } catch (e: Exception) {
             val retryCount = track.analysisRetryCount + 1

@@ -17,6 +17,7 @@ import com.example.audio.WaveformData
 import com.example.data.AppDatabase
 import com.example.data.SourceFolderEntity
 import com.example.data.TrackEntity
+import com.example.metadata.MetadataFileWriteQueue
 import com.example.model.AudioQualityRating
 import com.example.model.DjCrate
 import com.example.model.DuplicateMatch
@@ -2709,14 +2710,14 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         val app = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             trackDao.updateTrack(TrackEntity.fromTrack(updatedTrack))
-            if (updatedTrack.hasValidBpm || updatedTrack.hasValidKey) {
-                com.example.storage.AudioTagWriter.writeConfirmedBpmAndKey(
-                    context = app,
-                    filePathOrUri = updatedTrack.filePath,
-                    bpm = if (updatedTrack.hasValidBpm) updatedTrack.bpm else 0.0,
-                    musicalKey = if (updatedTrack.hasValidKey) updatedTrack.musicalKey else ""
-                )
+
+            // Authoritatively persist all updated metadata (Title, Artist, Album, Genre, Key, BPM, etc.) into physical audio file
+            try {
+                MetadataFileWriteQueue.getInstance(app).enqueue(updatedTrack)
+            } catch (e: Exception) {
+                Log.w("MainDjViewModel", "Failed to enqueue track file write: ${e.message}")
             }
+
             if (audioEngine.currentTrack.value?.id == updatedTrack.id) {
                 withContext(Dispatchers.Main) {
                     audioEngine.updateCurrentTrackMetadata(updatedTrack)
@@ -2724,7 +2725,18 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             }
             withContext(Dispatchers.Main) {
                 _inspectingTrackForProperties.value = null
-                showSnackbar("Saved metadata for '${updatedTrack.title}'")
+                showSnackbar("Saved & embedding metadata for '${updatedTrack.title}'")
+            }
+        }
+    }
+
+    fun repairLibraryEmbeddedMetadata() {
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            showSnackbar("Starting audio file metadata sync...")
+            val report = MetadataFileWriteQueue.getInstance(app).repairOrMigrateLibrary()
+            withContext(Dispatchers.Main) {
+                showSnackbar("Sync complete: ${report.successfullyWritten} updated, ${report.alreadySynchronized} in sync, ${report.failed} failed")
             }
         }
     }
