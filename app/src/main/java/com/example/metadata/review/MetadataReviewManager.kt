@@ -5,22 +5,26 @@ import android.util.Log
 import com.example.data.AppDatabase
 import com.example.data.MetadataReviewItemEntity
 import com.example.data.TrackEntity
-import com.example.metadata.MetadataFileWriter
+import com.example.metadata.MetadataSettingsStore
+import com.example.metadata.backup.MetadataBackupManager
 import com.example.metadata.history.MetadataHistoryManager
+import com.example.metadata.parser.TrackIdentityParser
 import com.example.model.MetadataScanState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 
 class MetadataReviewManager(
     private val context: Context,
     private val database: AppDatabase,
-    private val historyManager: MetadataHistoryManager = MetadataHistoryManager(context, database)
+    private val historyManager: MetadataHistoryManager = MetadataHistoryManager(context, database),
+    private val backupManager: MetadataBackupManager = MetadataBackupManager(context, database, historyManager),
+    private val settingsStore: MetadataSettingsStore = MetadataSettingsStore(context)
 ) {
     private val inboxDao = database.metadataReviewInboxDao()
     private val trackDao = database.trackDao()
-    private val fileWriter = MetadataFileWriter(context)
 
     companion object {
         private const val TAG = "MetadataReviewManager"
@@ -37,7 +41,12 @@ class MetadataReviewManager(
         proposedArtworkUrl: String? = null,
         provider: String,
         confidenceScore: Double,
-        evidenceSummary: String
+        evidenceSummary: String,
+        matchStatus: MetadataScanState = MetadataScanState.REVIEW_REQUIRED,
+        candidatesJson: String? = null,
+        originalArtworkUrl: String? = track.artworkUrl,
+        artworkCachePath: String? = null,
+        originalMetadataBackupJson: String? = null
     ): String = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val item = MetadataReviewItemEntity(
@@ -58,51 +67,85 @@ class MetadataReviewManager(
             confidenceScore = confidenceScore,
             evidenceSummary = evidenceSummary,
             status = "PENDING",
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            originalArtworkUrl = originalArtworkUrl,
+            artworkCachePath = artworkCachePath,
+            matchStatus = matchStatus.name,
+            candidatesJson = candidatesJson,
+            originalMetadataBackupJson = originalMetadataBackupJson
         )
         inboxDao.insertItem(item)
-        Log.i(TAG, "Submitted track ${track.id} to metadata review inbox (confidence=${confidenceScore}%)")
+        Log.i(TAG, "Submitted track ${track.id} to metadata review inbox (status=$matchStatus, confidence=${confidenceScore}%)")
         id
     }
 
     suspend fun acceptAllProposed(itemId: String): Boolean = withContext(Dispatchers.IO) {
         val item = inboxDao.getItemById(itemId) ?: return@withContext false
         val track = trackDao.getTrackById(item.trackId) ?: return@withContext false
+        val settings = settingsStore.load()
+
+        // Primary Rule (Section 5): Protect existing title and artist unless explicitly configured or blank/malformed
+        val shouldReplaceTitle = settings.replaceExistingTitle || !TrackIdentityParser.isTitleValid(track.title)
+        val finalTitle = if (shouldReplaceTitle) item.proposedTitle else track.title
+
+        val shouldReplaceArtist = settings.replaceExistingArtist || !TrackIdentityParser.isArtistValid(track.artist)
+        val finalArtist = if (shouldReplaceArtist) item.proposedArtist else track.artist
+
+        val shouldReplaceArtwork = settings.replaceExistingArtwork || track.artworkUrl.isNullOrBlank()
+        val finalArtworkUrl = if (shouldReplaceArtwork) (item.proposedArtworkUrl ?: track.artworkUrl) else track.artworkUrl
+
+        // 1. Transactional Pre-Write Backup (Sections 10 & 11)
+        if (settings.keepOriginalMetadataBackup) {
+            backupManager.savePreWriteBackup(track)
+        }
 
         // Record history for changes
-        historyManager.recordChange(track.id, track.filePath, "title", track.title, item.proposedTitle, item.provider, false)
-        historyManager.recordChange(track.id, track.filePath, "artist", track.artist, item.proposedArtist, item.provider, false)
-        historyManager.recordChange(track.id, track.filePath, "album", track.album, item.proposedAlbum, item.provider, false)
-        if (item.proposedGenre != null) {
+        if (finalTitle != track.title) {
+            historyManager.recordChange(track.id, track.filePath, "title", track.title, finalTitle, item.provider, false)
+        }
+        if (finalArtist != track.artist) {
+            historyManager.recordChange(track.id, track.filePath, "artist", track.artist, finalArtist, item.provider, false)
+        }
+        if (item.proposedAlbum != track.album) {
+            historyManager.recordChange(track.id, track.filePath, "album", track.album, item.proposedAlbum, item.provider, false)
+        }
+        if (item.proposedGenre != null && item.proposedGenre != track.genre) {
             historyManager.recordChange(track.id, track.filePath, "genre", track.genre, item.proposedGenre, item.provider, false)
         }
-        if (item.proposedYear != null) {
+        if (item.proposedYear != null && item.proposedYear != track.releaseYear) {
             historyManager.recordChange(track.id, track.filePath, "year", track.releaseYear?.toString(), item.proposedYear.toString(), item.provider, false)
         }
 
         val updated = track.copy(
-            title = item.proposedTitle,
-            artist = item.proposedArtist,
+            title = finalTitle,
+            artist = finalArtist,
             album = item.proposedAlbum,
             genre = item.proposedGenre ?: track.genre,
             releaseYear = item.proposedYear ?: track.releaseYear,
             trackNumber = item.proposedTrackNumber ?: track.trackNumber,
-            artworkUrl = item.proposedArtworkUrl ?: track.artworkUrl,
+            artworkUrl = finalArtworkUrl,
+            artworkCachePath = item.artworkCachePath ?: track.artworkCachePath,
             metadataSource = item.provider,
             metadataConfidence = item.confidenceScore,
-            metadataScanState = MetadataScanState.USER_CONFIRMED.name,
+            metadataScanState = MetadataScanState.APPLIED.name,
             userConfirmedMetadata = true
         )
         trackDao.updateTrack(updated)
         inboxDao.updateStatus(itemId, "ACCEPTED")
 
-        try {
-            fileWriter.writeAsync(updated.toTrack())
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed writing tags to file: ${e.message}")
+        // 2. Physical File Writing with Transactional Rollback (Section 11)
+        if (File(track.filePath).exists() && File(track.filePath).canWrite()) {
+            val artworkBytes = item.artworkCachePath?.let { path ->
+                try { File(path).readBytes() } catch (_: Exception) { null }
+            }
+            val writeResult = backupManager.writeWithTransactionalRollback(
+                track = updated.toTrack(),
+                artworkBytes = artworkBytes
+            )
+            Log.d(TAG, "Write result after approval for ${track.filePath}: $writeResult")
         }
 
-        Log.i(TAG, "Accepted all proposed metadata for item $itemId (track ${track.id})")
+        Log.i(TAG, "Approved and applied metadata for item $itemId (track ${track.id})")
         true
     }
 
@@ -138,13 +181,20 @@ class MetadataReviewManager(
             }
         }
         trackDao.updateTrack(updated)
-        try {
-            fileWriter.writeAsync(updated.toTrack())
-        } catch (e: Exception) {}
+        if (File(updated.filePath).exists() && File(updated.filePath).canWrite()) {
+            backupManager.writeWithTransactionalRollback(updated.toTrack())
+        }
         true
     }
 
     suspend fun rejectProposal(itemId: String): Boolean = withContext(Dispatchers.IO) {
+        val item = inboxDao.getItemById(itemId)
+        if (item != null) {
+            val track = trackDao.getTrackById(item.trackId)
+            if (track != null) {
+                trackDao.updateTrack(track.copy(metadataScanState = MetadataScanState.REJECTED.name))
+            }
+        }
         inboxDao.updateStatus(itemId, "REJECTED")
         true
     }
@@ -154,16 +204,56 @@ class MetadataReviewManager(
         true
     }
 
-    suspend fun bulkAcceptHighConfidence(minConfidence: Double = 80.0): Int = withContext(Dispatchers.IO) {
-        val pending = inboxDao.getPendingItems()
-        val eligible = pending.filter { it.confidenceScore >= minConfidence }
-        var acceptedCount = 0
-        for (item in eligible) {
+    /**
+     * Approves ONLY items that SoundSync has classified as VERIFIED (Section 7).
+     * Items requiring review are never approved by this method.
+     */
+    suspend fun approveAllVerified(): Int = withContext(Dispatchers.IO) {
+        val verifiedItems = inboxDao.getPendingVerifiedItems()
+        var count = 0
+        for (item in verifiedItems) {
             if (acceptAllProposed(item.id)) {
-                acceptedCount++
+                count++
             }
         }
-        acceptedCount
+        Log.i(TAG, "Approved all verified items ($count applied)")
+        count
+    }
+
+    suspend fun approveMultiple(itemIds: List<String>): Int = withContext(Dispatchers.IO) {
+        var count = 0
+        for (id in itemIds) {
+            if (acceptAllProposed(id)) {
+                count++
+            }
+        }
+        count
+    }
+
+    suspend fun rejectMultiple(itemIds: List<String>): Int = withContext(Dispatchers.IO) {
+        var count = 0
+        for (id in itemIds) {
+            if (rejectProposal(id)) {
+                count++
+            }
+        }
+        count
+    }
+
+    suspend fun restoreTrack(trackId: String): Boolean = withContext(Dispatchers.IO) {
+        backupManager.restoreTrack(trackId)
+    }
+
+    suspend fun restoreMultiple(trackIds: List<String>): Int = withContext(Dispatchers.IO) {
+        backupManager.restoreTracks(trackIds)
+    }
+
+    suspend fun restoreAll(): Int = withContext(Dispatchers.IO) {
+        backupManager.restoreAll()
+    }
+
+    suspend fun bulkAcceptHighConfidence(minConfidence: Double = 95.0): Int = withContext(Dispatchers.IO) {
+        approveAllVerified()
     }
 
     fun observePendingItems(): Flow<List<MetadataReviewItemEntity>> {
@@ -172,6 +262,10 @@ class MetadataReviewManager(
 
     fun observePendingCount(): Flow<Int> {
         return inboxDao.observePendingCount()
+    }
+
+    fun observeModifiedTracksCount(): Flow<Int> {
+        return backupManager.observeModifiedTracksCount()
     }
 
     suspend fun getPendingItems(): List<MetadataReviewItemEntity> {

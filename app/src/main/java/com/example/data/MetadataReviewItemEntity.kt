@@ -32,5 +32,10 @@ data class MetadataReviewItemEntity(
     val confidenceScore: Double,
     val evidenceSummary: String,
     val status: String = "PENDING", // PENDING, ACCEPTED, REJECTED, IGNORED
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val originalArtworkUrl: String? = null,
+    val artworkCachePath: String? = null,
+    val matchStatus: String = "REVIEW_REQUIRED", // VERIFIED, REVIEW_REQUIRED, CONFLICTING_RESULTS, NO_MATCH, REJECTED
+    val candidatesJson: String? = null,
+    val originalMetadataBackupJson: String? = null
 )

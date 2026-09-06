@@ -66,7 +66,58 @@ data class AppleTrackResult(
     val artworkUrl600: String?
         get() = artworkUrl100?.replace("100x100bb.jpg", "600x600bb.jpg")
 
+    fun toJson(): JSONObject {
+        val json = JSONObject()
+        json.put("trackId", trackId)
+        json.put("trackName", trackName)
+        artistId?.let { json.put("artistId", it) }
+        json.put("artistName", artistName)
+        collectionId?.let { json.put("collectionId", it) }
+        collectionName?.let { json.put("collectionName", it) }
+        collectionArtistName?.let { json.put("collectionArtistName", it) }
+        json.put("trackTimeMillis", trackTimeMillis)
+        releaseDate?.let { json.put("releaseDate", it) }
+        primaryGenreName?.let { json.put("primaryGenreName", it) }
+        trackNumber?.let { json.put("trackNumber", it) }
+        trackCount?.let { json.put("trackCount", it) }
+        discNumber?.let { json.put("discNumber", it) }
+        discCount?.let { json.put("discCount", it) }
+        trackExplicitness?.let { json.put("trackExplicitness", it) }
+        country?.let { json.put("country", it) }
+        currency?.let { json.put("currency", it) }
+        previewUrl?.let { json.put("previewUrl", it) }
+        trackViewUrl?.let { json.put("trackViewUrl", it) }
+        collectionViewUrl?.let { json.put("collectionViewUrl", it) }
+        json.put("isStreamable", isStreamable)
+        artworkUrl100?.let { json.put("artworkUrl100", it) }
+        artworkUrl60?.let { json.put("artworkUrl60", it) }
+        artworkUrl30?.let { json.put("artworkUrl30", it) }
+        return json
+    }
+
     companion object {
+        fun listToJson(list: List<AppleTrackResult>): String {
+            val arr = JSONArray()
+            for (item in list) {
+                arr.put(item.toJson())
+            }
+            return arr.toString()
+        }
+
+        fun listFromJson(jsonStr: String): List<AppleTrackResult> {
+            return try {
+                val arr = JSONArray(jsonStr)
+                val list = ArrayList<AppleTrackResult>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    list.add(fromJson(obj))
+                }
+                list
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+
         fun fromJson(json: JSONObject): AppleTrackResult {
             return AppleTrackResult(
                 trackId = json.optLong("trackId"),

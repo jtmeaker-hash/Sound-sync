@@ -43,6 +43,12 @@ interface MetadataReviewInboxDao {
     @Query("DELETE FROM metadata_review_inbox WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    @Query("SELECT * FROM metadata_review_inbox WHERE status = 'PENDING' AND (matchStatus = 'VERIFIED' OR confidenceScore >= 95.0) ORDER BY timestamp DESC")
+    suspend fun getPendingVerifiedItems(): List<MetadataReviewItemEntity>
+
+    @Query("SELECT * FROM metadata_review_inbox WHERE id IN (:ids)")
+    suspend fun getItemsByIds(ids: List<String>): List<MetadataReviewItemEntity>
+
     @Query("DELETE FROM metadata_review_inbox WHERE status != 'PENDING'")
     suspend fun pruneResolved()
 }

@@ -20,9 +20,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MetadataHistoryEntity::class,
         MetadataReviewItemEntity::class,
         WatchedFolderEntity::class,
-        LyricsEntity::class
+        LyricsEntity::class,
+        MetadataBackupEntity::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -36,6 +37,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun metadataReviewInboxDao(): MetadataReviewInboxDao
     abstract fun watchedFolderDao(): WatchedFolderDao
     abstract fun lyricsDao(): LyricsDao
+    abstract fun metadataBackupDao(): MetadataBackupDao
 
     companion object {
         @Volatile
@@ -500,6 +502,57 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // metadata_backups table
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `metadata_backups` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `trackId` TEXT NOT NULL,
+                        `filePath` TEXT NOT NULL,
+                        `title` TEXT,
+                        `artist` TEXT,
+                        `album` TEXT,
+                        `albumArtist` TEXT,
+                        `genre` TEXT,
+                        `releaseYear` INTEGER,
+                        `releaseDate` TEXT,
+                        `trackNumber` INTEGER,
+                        `discNumber` INTEGER,
+                        `bpm` REAL,
+                        `musicalKey` TEXT,
+                        `artworkUrl` TEXT,
+                        `artworkCachePath` TEXT,
+                        `hasEmbeddedArtwork` INTEGER NOT NULL DEFAULT 0,
+                        `timestamp` INTEGER NOT NULL,
+                        `isOriginalScanBackup` INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_backups_trackId` ON `metadata_backups` (`trackId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_backups_filePath` ON `metadata_backups` (`filePath`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_backups_timestamp` ON `metadata_backups` (`timestamp`)")
+
+                // metadata_review_inbox additions
+                try {
+                    db.execSQL("ALTER TABLE `metadata_review_inbox` ADD COLUMN `originalArtworkUrl` TEXT DEFAULT NULL")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("ALTER TABLE `metadata_review_inbox` ADD COLUMN `artworkCachePath` TEXT DEFAULT NULL")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("ALTER TABLE `metadata_review_inbox` ADD COLUMN `matchStatus` TEXT NOT NULL DEFAULT 'REVIEW_REQUIRED'")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("ALTER TABLE `metadata_review_inbox` ADD COLUMN `candidatesJson` TEXT DEFAULT NULL")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("ALTER TABLE `metadata_review_inbox` ADD COLUMN `originalMetadataBackupJson` TEXT DEFAULT NULL")
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -519,7 +572,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_9_10,
                     MIGRATION_10_11,
                     MIGRATION_11_12,
-                    MIGRATION_12_13
+                    MIGRATION_12_13,
+                    MIGRATION_13_14
                 )
                 .fallbackToDestructiveMigration()
                 .build()

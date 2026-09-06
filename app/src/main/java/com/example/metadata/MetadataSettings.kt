@@ -4,6 +4,16 @@ import android.content.Context
 
 data class MetadataSettings(
     val enrichmentEnabled: Boolean = true,
+    // Metadata Safety Settings (Section 17)
+    val backgroundScanningEnabled: Boolean = true,
+    val autoSearchEnabled: Boolean = true,
+    val autoQueueVerified: Boolean = true,
+    val replaceExistingTitle: Boolean = false,
+    val replaceExistingArtist: Boolean = false,
+    val replaceExistingArtwork: Boolean = false,
+    val writeMetadataOnlyAfterApproval: Boolean = true,
+    val keepOriginalMetadataBackup: Boolean = true,
+    // External Catalog & Analysis Settings
     val appleSearchEnabled: Boolean = true,
     val theAudioDbEnabled: Boolean = true,
     val storefrontCountry: String = "AU",
@@ -46,6 +56,14 @@ class MetadataSettingsStore(private val context: Context) {
         )
         return MetadataSettings(
             enrichmentEnabled = prefs.getBoolean(KEY_ENABLED, true),
+            backgroundScanningEnabled = prefs.getBoolean(KEY_BACKGROUND_SCANNING, true),
+            autoSearchEnabled = prefs.getBoolean(KEY_AUTO_SEARCH, true),
+            autoQueueVerified = prefs.getBoolean(KEY_AUTO_QUEUE_VERIFIED, true),
+            replaceExistingTitle = prefs.getBoolean(KEY_REPLACE_TITLE, false),
+            replaceExistingArtist = prefs.getBoolean(KEY_REPLACE_ARTIST, false),
+            replaceExistingArtwork = prefs.getBoolean(KEY_REPLACE_ARTWORK, false),
+            writeMetadataOnlyAfterApproval = prefs.getBoolean(KEY_WRITE_ONLY_AFTER_APPROVAL, true),
+            keepOriginalMetadataBackup = prefs.getBoolean(KEY_KEEP_BACKUP, true),
             appleSearchEnabled = prefs.getBoolean(KEY_APPLE_SEARCH, true),
             theAudioDbEnabled = prefs.getBoolean(KEY_THEAUDIODB, true),
             storefrontCountry = prefs.getString(KEY_STOREFRONT, "AU") ?: "AU",
@@ -63,6 +81,14 @@ class MetadataSettingsStore(private val context: Context) {
         val (min, max) = MetadataSettings.clampBpmRange(settings.bpmMin, settings.bpmMax)
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_ENABLED, settings.enrichmentEnabled)
+            .putBoolean(KEY_BACKGROUND_SCANNING, settings.backgroundScanningEnabled)
+            .putBoolean(KEY_AUTO_SEARCH, settings.autoSearchEnabled)
+            .putBoolean(KEY_AUTO_QUEUE_VERIFIED, settings.autoQueueVerified)
+            .putBoolean(KEY_REPLACE_TITLE, settings.replaceExistingTitle)
+            .putBoolean(KEY_REPLACE_ARTIST, settings.replaceExistingArtist)
+            .putBoolean(KEY_REPLACE_ARTWORK, settings.replaceExistingArtwork)
+            .putBoolean(KEY_WRITE_ONLY_AFTER_APPROVAL, settings.writeMetadataOnlyAfterApproval)
+            .putBoolean(KEY_KEEP_BACKUP, settings.keepOriginalMetadataBackup)
             .putBoolean(KEY_APPLE_SEARCH, settings.appleSearchEnabled)
             .putBoolean(KEY_THEAUDIODB, settings.theAudioDbEnabled)
             .putString(KEY_STOREFRONT, settings.storefrontCountry)
@@ -79,6 +105,14 @@ class MetadataSettingsStore(private val context: Context) {
     private companion object {
         const val PREFS_NAME = "soundsync_metadata_settings"
         const val KEY_ENABLED = "enrichment_enabled"
+        const val KEY_BACKGROUND_SCANNING = "background_metadata_scanning"
+        const val KEY_AUTO_SEARCH = "automatically_search_metadata"
+        const val KEY_AUTO_QUEUE_VERIFIED = "automatically_queue_verified"
+        const val KEY_REPLACE_TITLE = "replace_existing_title"
+        const val KEY_REPLACE_ARTIST = "replace_existing_artist"
+        const val KEY_REPLACE_ARTWORK = "replace_existing_artwork"
+        const val KEY_WRITE_ONLY_AFTER_APPROVAL = "write_metadata_only_after_approval"
+        const val KEY_KEEP_BACKUP = "keep_original_metadata_backup"
         const val KEY_APPLE_SEARCH = "apple_search_enabled"
         const val KEY_THEAUDIODB = "theaudiodb_enabled"
         const val KEY_STOREFRONT = "apple_storefront_country"

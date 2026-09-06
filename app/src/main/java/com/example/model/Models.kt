@@ -122,7 +122,15 @@ enum class MetadataScanState {
     TEMPORARY_FAILURE,
     FAILED,
     FAILED_WRITE_VERIFICATION,
-    USER_CONFIRMED
+    USER_CONFIRMED,
+    // Safe Metadata Pipeline States (Section 16)
+    VERIFIED,
+    REVIEW_REQUIRED,
+    CONFLICTING_RESULTS,
+    REJECTED,
+    APPROVED,
+    APPLIED,
+    RESTORED
 }
 
 enum class AnalysisState {

@@ -9,6 +9,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
 
 /**
  * File writing and read-back verification boundary (Sections 13, 15, 16, 17).
@@ -28,6 +30,16 @@ class MetadataFileWriter(private val context: Context) {
 
     companion object {
         private const val TAG = "MetadataFileWriter"
+    }
+
+    private fun isFileWritable(file: File): Boolean {
+        if (!file.canWrite()) return false
+        return try {
+            val perms = Files.getPosixFilePermissions(file.toPath())
+            perms.contains(PosixFilePermission.OWNER_WRITE)
+        } catch (e: Throwable) {
+            file.canWrite()
+        }
     }
 
     suspend fun writeAsync(
@@ -50,7 +62,7 @@ class MetadataFileWriter(private val context: Context) {
         if (!file.exists()) {
             return@withContext MetadataWriteResult.Failed("File does not exist: $path")
         }
-        if (!file.canWrite()) {
+        if (!isFileWritable(file)) {
             Log.w(TAG, "File is not writable (permission required): $path")
             return@withContext MetadataWriteResult.PermissionRequired(path)
         }

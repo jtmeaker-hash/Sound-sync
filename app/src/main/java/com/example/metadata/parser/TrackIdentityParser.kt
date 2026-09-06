@@ -5,19 +5,23 @@ import java.util.Locale
 data class ParsedTrackIdentity(
     val artist: String?,
     val title: String,
-    val album: String?,
-    val version: String?,
-    val isArtistMissing: Boolean,
-    val collaborations: List<String>,
-    val searchTerms: List<String>
+    val rawTitle: String = title,
+    val rawArtist: String? = artist,
+    val album: String? = null,
+    val version: String? = null,
+    val isArtistMissing: Boolean = artist.isNullOrBlank(),
+    val collaborations: List<String> = emptyList(),
+    val searchTerms: List<String> = emptyList(),
+    val sourceOfTruth: String = "TAGS"
 )
 
 /**
- * Robust track identity and tag parser.
+ * Robust track identity and tag parser (Sections 1 & 2).
  *
- * Extracts clean artist, title, and version signatures from filenames and broken ID3/embedded tags,
- * stripping website prefixes, download hashes, and bitrate tags while strictly preserving
- * version descriptors (Original Mix, Extended Mix, Radio Edit, Club Mix, Remix, VIP, etc.).
+ * Treats existing music titles and filenames as the strongest source of truth.
+ * Extracts probable artist and title from "Artist - Track" patterns in existing titles
+ * or filenames when artist tag is missing, while strictly preserving meaningful title
+ * information (Remix names, Extended Mix, Radio Edit, VIP, Dub, Instrumental, Live, Edit, Bootleg).
  */
 object TrackIdentityParser {
 
@@ -32,7 +36,7 @@ object TrackIdentityParser {
         "Acoustic", "Live", "Remaster", "Sped Up", "Slowed", "Clean", "Explicit"
     )
 
-    // Garbage patterns to strip from filenames / titles
+    // Garbage patterns to strip from filenames / titles (video downloaders, bitrate markers)
     private val GARBAGE_REGEXES = listOf(
         Regex("(?i)\\[(y2mate\\.com|yt1s\\.com|ssyoutube\\.com|flvto|snaptube|tubemate|mp3skull)[^\\]]*\\]"),
         Regex("(?i)\\((official (music )?video|official audio|lyric video|audio|video|visualizer)\\)"),
@@ -64,60 +68,111 @@ object TrackIdentityParser {
         // Clean website and encoding garbage from filename
         var cleanFilename = cleanGarbage(rawName).trim()
         cleanFilename = LEADING_TRACK_NUMBER_REGEX.replace(cleanFilename, "").trim()
-
-        // Normalise dashes
         cleanFilename = cleanFilename.replace('–', '-').replace('—', '-')
 
-        var extractedArtist: String? = null
-        var extractedTitle: String? = null
+        var sourceOfTruth = "TAGS"
+        var parsedArtist: String? = null
+        var parsedTitle: String? = null
 
-        // 1. Inspect filename structure
-        if (cleanFilename.contains(" - ")) {
-            val parts = cleanFilename.split(" - ", limit = 2)
-            if (parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
-                extractedArtist = parts[0].trim()
-                extractedTitle = parts[1].trim()
+        val validExistingArtist = existingArtist?.trim()?.takeIf { isArtistValid(it) }
+        val rawExistingTitle = existingTitle?.trim()?.takeIf { it.isNotBlank() }
+        val normalizedTitle = rawExistingTitle?.replace('–', '-')?.replace('—', '-')
+
+        // 1. If existing artist is missing or placeholder, extract from title or filename (Section 2)
+        if (validExistingArtist == null) {
+            // Check existing title for "Artist - Track"
+            if (normalizedTitle != null && normalizedTitle.contains(" - ")) {
+                val parts = normalizedTitle.split(" - ", limit = 2)
+                val left = parts[0].trim()
+                val right = parts[1].trim()
+                if (isArtistValid(left) && left.length >= 2 && isTitleValid(right)) {
+                    parsedArtist = left
+                    parsedTitle = right
+                    sourceOfTruth = "TITLE_PARSE"
+                }
+            } else if (normalizedTitle != null && normalizedTitle.contains(" by ", ignoreCase = true)) {
+                val parts = normalizedTitle.split(Regex("(?i)\\s+by\\s+"), limit = 2)
+                if (parts.size == 2 && isTitleValid(parts[0].trim()) && isArtistValid(parts[1].trim())) {
+                    parsedTitle = parts[0].trim()
+                    parsedArtist = parts[1].trim()
+                    sourceOfTruth = "TITLE_PARSE"
+                }
             }
-        } else if (cleanFilename.contains(" by ", ignoreCase = true)) {
-            val parts = cleanFilename.split(Regex("(?i)\\s+by\\s+"), limit = 2)
-            if (parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
-                extractedTitle = parts[0].trim()
-                extractedArtist = parts[1].trim()
+
+            // If not found in title, check filename for "Artist - Track"
+            if (parsedArtist == null) {
+                if (cleanFilename.contains(" - ")) {
+                    val parts = cleanFilename.split(" - ", limit = 2)
+                    val left = parts[0].trim()
+                    val right = parts[1].trim()
+                    if (isArtistValid(left) && left.length >= 2 && isTitleValid(right)) {
+                        parsedArtist = left
+                        parsedTitle = right
+                        sourceOfTruth = "FILENAME_PARSE"
+                    }
+                } else if (cleanFilename.contains(" by ", ignoreCase = true)) {
+                    val parts = cleanFilename.split(Regex("(?i)\\s+by\\s+"), limit = 2)
+                    if (parts.size == 2 && isTitleValid(parts[0].trim()) && isArtistValid(parts[1].trim())) {
+                        parsedTitle = parts[0].trim()
+                        parsedArtist = parts[1].trim()
+                        sourceOfTruth = "FILENAME_PARSE"
+                    }
+                }
+            }
+
+            // Fallback: check parent directory if valid artist name
+            if (parsedArtist == null && filename.isNotBlank()) {
+                val parentDir = filename.substringBeforeLast('/', "").substringAfterLast('/').trim()
+                if (isArtistValid(parentDir) && !isGenericDirectoryName(parentDir)) {
+                    parsedArtist = parentDir
+                    sourceOfTruth = "FOLDER_PARSE"
+                }
+            }
+        } else {
+            // Existing artist is already valid!
+            parsedArtist = validExistingArtist
+            sourceOfTruth = "TAGS"
+
+            // Check if existing title redundantly starts with "Artist - "
+            if (normalizedTitle != null) {
+                val prefix = "${validExistingArtist.lowercase(Locale.ROOT)} - "
+                val lowerTitle = normalizedTitle.lowercase(Locale.ROOT)
+                if (lowerTitle.startsWith(prefix)) {
+                    val stripped = normalizedTitle.substring(prefix.length).trim()
+                    if (isTitleValid(stripped)) {
+                        parsedTitle = stripped
+                    }
+                }
             }
         }
 
-        // 2. Validate against existing tags
-        val validExistingArtist = existingArtist?.trim()?.takeIf { isArtistValid(it) }
-        val validExistingTitle = existingTitle?.trim()?.takeIf { isTitleValid(it) }
+        val finalArtist = parsedArtist ?: validExistingArtist
+        val finalRawTitle = rawExistingTitle ?: cleanFilename.ifBlank { "Unknown Title" }
+        val finalTitle = parsedTitle ?: (rawExistingTitle?.takeIf { isTitleValid(it) } ?: cleanFilename.ifBlank { "Unknown Title" })
+        val cleanTitle = cleanGarbage(finalTitle)
 
-        val finalArtist = validExistingArtist ?: extractedArtist
         val isArtistMissing = finalArtist.isNullOrBlank() || !isArtistValid(finalArtist)
 
-        val rawTitle = validExistingTitle ?: extractedTitle ?: cleanFilename.ifBlank { "Unknown Title" }
-        val cleanTitle = cleanGarbage(rawTitle)
+        // Extract version signature strictly preserving mixes (Remix, Extended Mix, Radio Edit, VIP, etc.)
+        val version = extractVersion(cleanTitle) ?: extractVersion(finalRawTitle) ?: extractVersion(cleanFilename)
 
-        // 3. Extract version signature
-        val version = extractVersion(cleanTitle) ?: extractVersion(cleanFilename)
-
-        // 4. Extract collaboration tokens
         val collaborations = if (!finalArtist.isNullOrBlank()) {
             extractCollaborations(finalArtist)
         } else {
             emptyList()
         }
 
-        // 5. Generate search query candidates
+        // Generate search terms
         val searchTerms = mutableListOf<String>()
-
         if (!isArtistMissing && finalArtist != null) {
-            // "Artist Title"
             searchTerms.add("$finalArtist $cleanTitle")
-            // "Artist Title (Version)"
             if (version != null && !cleanTitle.contains(version, ignoreCase = true)) {
                 searchTerms.add("$finalArtist $cleanTitle ($version)")
             }
+            if (collaborations.size > 1) {
+                searchTerms.add("${collaborations[0]} $cleanTitle")
+            }
         } else {
-            // Missing artist: search by full title, and by stripped title
             searchTerms.add(cleanTitle)
             if (version != null) {
                 val titleWithoutVersion = cleanTitle.replace(Regex("(?i)[\\[(].*?$version.*?[\\])]"), "").trim()
@@ -130,11 +185,23 @@ object TrackIdentityParser {
         return ParsedTrackIdentity(
             artist = finalArtist?.takeIf { isArtistValid(it) },
             title = cleanTitle,
+            rawTitle = finalRawTitle,
+            rawArtist = existingArtist,
             album = album?.trim()?.takeIf { it.isNotBlank() && !it.equals("Unknown Album", ignoreCase = true) },
             version = version,
             isArtistMissing = isArtistMissing,
             collaborations = collaborations,
-            searchTerms = searchTerms.distinct()
+            searchTerms = searchTerms.distinct(),
+            sourceOfTruth = sourceOfTruth
+        )
+    }
+
+    private fun isGenericDirectoryName(dir: String): Boolean {
+        val lower = dir.lowercase(Locale.ROOT)
+        return lower in listOf(
+            "music", "download", "downloads", "audio", "sound", "sounds", "tracks",
+            "songs", "internal storage", "storage", "sdcard", "0", "emulated", "files",
+            "media", "album", "albums", "various", "unknown", "soundsync"
         )
     }
 
@@ -163,15 +230,18 @@ object TrackIdentityParser {
     }
 
     fun extractVersion(text: String): String? {
+        // Custom remixer pattern: "[Name] Remix" or "(Name Remix)"
+        val remixMatch = Regex("(?i)[\\[(]([^\\])]+?\\s+(remix|mix|dub|vip|bootleg|edit))[\\])]").find(text)
+        if (remixMatch != null) {
+            return remixMatch.groupValues[1].trim()
+        }
         for (version in VERSION_TAGS) {
             val pattern = Regex("(?i)(^|[\\[( /_-])$version([\\]) /_-]|$)")
             if (pattern.containsMatchIn(text)) {
                 return version
             }
         }
-        // Custom remixer pattern: "[Name] Remix" or "(Name Remix)"
-        val remixMatch = Regex("(?i)[\\[(]([^\\])]+?\\s+(remix|mix|dub|vip|bootleg|edit))[\\])]").find(text)
-        return remixMatch?.groupValues?.getOrNull(1)?.trim()
+        return null
     }
 
     fun cleanGarbage(text: String): String {

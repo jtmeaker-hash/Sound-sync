@@ -3,7 +3,9 @@ package com.example.ui.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -41,6 +43,14 @@ fun MetadataEnrichmentSettingsCard(
     onSetShowProvenanceBadges: (Boolean) -> Unit = {},
     onSetConcurrency: (Int) -> Unit,
     onSetBpmRange: (Int, Int) -> Unit,
+    onSetBackgroundScanningEnabled: (Boolean) -> Unit = {},
+    onSetAutoSearchEnabled: (Boolean) -> Unit = {},
+    onSetAutoQueueVerified: (Boolean) -> Unit = {},
+    onSetReplaceExistingTitle: (Boolean) -> Unit = {},
+    onSetReplaceExistingArtist: (Boolean) -> Unit = {},
+    onSetReplaceExistingArtwork: (Boolean) -> Unit = {},
+    onSetWriteMetadataOnlyAfterApproval: (Boolean) -> Unit = {},
+    onSetKeepOriginalMetadataBackup: (Boolean) -> Unit = {}
 ) {
     var minText by remember(settings.bpmMin) { mutableStateOf(settings.bpmMin.toString()) }
     var maxText by remember(settings.bpmMax) { mutableStateOf(settings.bpmMax.toString()) }
@@ -54,11 +64,22 @@ fun MetadataEnrichmentSettingsCard(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Metadata Enrichment & Catalogue", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text("Metadata Safety & Protection", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
             Text(
-                "Apple iTunes Search identifies tracks and catalog metadata; TheAudioDB resolves cover art; high-precision DSP analyzes BPM & Key locally.",
+                "Ensures correct titles/artists are never overwritten without explicit approval, and backups survive restarts.",
                 color = TextSecondary, fontSize = 10.sp
             )
+            SettingSwitch("Background metadata scanning", settings.backgroundScanningEnabled, onSetBackgroundScanningEnabled)
+            SettingSwitch("Automatically search for metadata", settings.autoSearchEnabled, onSetAutoSearchEnabled)
+            SettingSwitch("Automatically queue verified metadata", settings.autoQueueVerified, onSetAutoQueueVerified)
+            SettingSwitch("Replace existing title (Default: OFF)", settings.replaceExistingTitle, onSetReplaceExistingTitle)
+            SettingSwitch("Replace existing artist (Default: OFF)", settings.replaceExistingArtist, onSetReplaceExistingArtist)
+            SettingSwitch("Replace existing artwork (Default: OFF)", settings.replaceExistingArtwork, onSetReplaceExistingArtwork)
+            SettingSwitch("Write metadata only after approval (Default: ON)", settings.writeMetadataOnlyAfterApproval, onSetWriteMetadataOnlyAfterApproval)
+            SettingSwitch("Keep original metadata backup (Default: ON)", settings.keepOriginalMetadataBackup, onSetKeepOriginalMetadataBackup)
+
+            Spacer(Modifier.height(4.dp))
+            Text("External Catalogue & DSP Engine", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
             SettingSwitch("Enable enrichment engine", settings.enrichmentEnabled, onSetEnrichmentEnabled)
             SettingSwitch("Use Apple iTunes Search catalogue", settings.appleSearchEnabled, onSetAppleSearchEnabled)
             SettingSwitch("Use TheAudioDB for cover art", settings.theAudioDbEnabled, onSetTheAudioDbEnabled)
