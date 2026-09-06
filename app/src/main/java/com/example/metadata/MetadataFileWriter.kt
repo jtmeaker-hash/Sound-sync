@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 import java.util.Locale
@@ -56,12 +57,13 @@ class MetadataFileWriter(
     }
 
     private fun isFileWritable(file: File): Boolean {
-        if (!file.canWrite()) return false
+        if (!file.exists() || !file.isFile) return false
+        if (file.canWrite()) return true
         return try {
-            val perms = Files.getPosixFilePermissions(file.toPath())
-            perms.contains(PosixFilePermission.OWNER_WRITE)
-        } catch (e: Throwable) {
-            file.canWrite()
+            FileOutputStream(file, true).use {}
+            true
+        } catch (_: Throwable) {
+            false
         }
     }
 
@@ -91,6 +93,7 @@ class MetadataFileWriter(
 
         val isContentUri = path.startsWith("content://")
         val ext: String
+        var targetWritePath = path
 
         if (isContentUri) {
             var detectedExt = ""
@@ -133,10 +136,17 @@ class MetadataFileWriter(
                 return@withContext res
             }
             if (!isFileWritable(file)) {
-                Log.w(TAG, "File is not writable (read-only): $path")
-                val res = MetadataWriteResult.ReadOnlyFile(path)
-                updateDbState(track.id, res.writeState)
-                return@withContext res
+                Log.w(TAG, "Direct file write not permitted for $path, probing MediaStore URI fallback...")
+                val mediaStoreUri = AudioTagWriter.getMediaStoreUriForPath(context, file.absolutePath)
+                if (mediaStoreUri != null) {
+                    targetWritePath = mediaStoreUri.toString()
+                    Log.i(TAG, "Resolved MediaStore content URI fallback: $targetWritePath")
+                } else {
+                    Log.w(TAG, "File is not writable (read-only): $path")
+                    val res = MetadataWriteResult.ReadOnlyFile(path)
+                    updateDbState(track.id, res.writeState)
+                    return@withContext res
+                }
             }
             ext = file.extension.lowercase(Locale.ROOT)
         }
@@ -210,7 +220,7 @@ class MetadataFileWriter(
         )
 
         val writeSuccess = try {
-            AudioTagWriter.writeCompleteTags(context, path, payload)
+            AudioTagWriter.writeCompleteTags(context, targetWritePath, payload)
         } catch (e: SecurityException) {
             Log.w(TAG, "SecurityException writing tags to $path", e)
             val res = MetadataWriteResult.PermissionRequired(path)

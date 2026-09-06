@@ -18,6 +18,8 @@ import com.example.data.AppDatabase
 import com.example.data.SourceFolderEntity
 import com.example.data.TrackEntity
 import com.example.metadata.MetadataFileWriteQueue
+import com.example.metadata.PushMetadataProgress
+import com.example.metadata.PushMetadataReport
 import com.example.model.AudioQualityRating
 import com.example.model.DjCrate
 import com.example.model.DuplicateMatch
@@ -2728,6 +2730,35 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 showSnackbar("Saved & embedding metadata for '${updatedTrack.title}'")
             }
         }
+    }
+
+    val isPushingMetadata: StateFlow<Boolean> by lazy {
+        MetadataFileWriteQueue.getInstance(getApplication()).isPushingMetadata
+    }
+
+    val pushMetadataProgress: StateFlow<PushMetadataProgress?> by lazy {
+        MetadataFileWriteQueue.getInstance(getApplication()).pushProgress
+    }
+
+    val pushMetadataReport: StateFlow<PushMetadataReport?> by lazy {
+        MetadataFileWriteQueue.getInstance(getApplication()).lastPushReport
+    }
+
+    fun pushMetadataToFiles(forceAll: Boolean = true) {
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            showSnackbar("Pushing metadata to audio files across entire library...")
+            val report = MetadataFileWriteQueue.getInstance(app).pushMetadataToFiles(forceAll = forceAll)
+            withContext(Dispatchers.Main) {
+                showSnackbar("Push complete: ${report.successfullyWritten} written, ${report.alreadySynchronized} in sync, ${report.failed} failed")
+            }
+        }
+    }
+
+    fun cancelPushMetadata() {
+        val app = getApplication<Application>()
+        MetadataFileWriteQueue.getInstance(app).cancelPushMetadata()
+        showSnackbar("Push metadata to files cancelled.")
     }
 
     fun repairLibraryEmbeddedMetadata() {

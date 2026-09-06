@@ -370,6 +370,9 @@ class AudioMetadataWriteIntegrationTest {
                 "getCountNeedingFileWrite" -> {
                     tracks.values.count { it.metadataWriteState != MetadataWriteState.FILE_WRITE_SUCCESS.name }
                 }
+                "getAllTracksList", "getAllTracksSync" -> {
+                    tracks.values.toList()
+                }
                 else -> null
             }
         } as TrackDao
@@ -438,5 +441,106 @@ class AudioMetadataWriteIntegrationTest {
         val readBack = AudioEmbeddedMetadataReader.read(context, wavFile.absolutePath)
         assertEquals("Animals", readBack.title)
         assertEquals("Martin Garrix", readBack.artist)
+    }
+
+    @Test
+    fun `pushMetadataToFiles executes 12-step bulk library push with field diffing and verification`() = runBlocking {
+        val (trackDao, _) = createFakeTrackDao()
+
+        // Track 1: WAV track with missing tags on disk, but full metadata in DB
+        val wavFile1 = File(tempFolder.root, "Kamikaze.wav")
+        createSampleWavFile(wavFile1, ByteArray(1200) { 0x44 })
+        val track1 = Track(
+            id = "track-kamikaze",
+            title = "Kamikaze",
+            artist = "Act of Rage",
+            album = "Outrageous",
+            genre = "Rawstyle",
+            releaseYear = 2019,
+            bpm = 155.0,
+            musicalKey = "1B",
+            filePath = wavFile1.absolutePath,
+            metadataWriteState = MetadataWriteState.DATABASE_ONLY.name
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(track1))
+
+        // Track 2: WAV track already written to file and in sync
+        val wavFile2 = File(tempFolder.root, "Dance With Me.wav")
+        createSampleWavFile(wavFile2, ByteArray(800) { 0x77 })
+        AudioTagWriter.writeCompleteTags(
+            context,
+            wavFile2.absolutePath,
+            CompleteTagPayload(
+                title = "Dance With Me",
+                artist = "Primeshock",
+                album = "Dance With Me - Single",
+                genre = "Hardstyle",
+                releaseYear = 2021,
+                bpm = 150.0,
+                musicalKey = "8B"
+            )
+        )
+        val track2 = Track(
+            id = "track-dance-with-me",
+            title = "Dance With Me",
+            artist = "Primeshock",
+            album = "Dance With Me - Single",
+            genre = "Hardstyle",
+            releaseYear = 2021,
+            bpm = 150.0,
+            musicalKey = "8B",
+            filePath = wavFile2.absolutePath,
+            metadataWriteState = MetadataWriteState.FILE_WRITE_SUCCESS.name
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(track2))
+
+        val queue = MetadataFileWriteQueue.createForTesting(context, trackDao)
+        val progressList = mutableListOf<com.example.metadata.PushMetadataProgress>()
+
+        val report = queue.pushMetadataToFiles(forceAll = true) { progress ->
+            progressList.add(progress)
+        }
+
+        // Verify summary report
+        assertEquals(2, report.totalExamined)
+        assertEquals(1, report.successfullyWritten)
+        assertEquals(1, report.alreadySynchronized)
+        assertEquals(0, report.failed)
+
+        // Verify Track 1 tags were written and verified on disk
+        val readBack1 = AudioEmbeddedMetadataReader.read(context, wavFile1.absolutePath)
+        assertEquals("Kamikaze", readBack1.title)
+        assertEquals("Act of Rage", readBack1.artist)
+        assertEquals("Outrageous", readBack1.album)
+        assertEquals("Rawstyle", readBack1.genre)
+        assertEquals(2019, readBack1.releaseYear)
+        assertEquals(155.0, readBack1.bpm ?: 0.0, 0.5)
+        assertEquals("1B", readBack1.musicalKey)
+
+        // Verify DB write state updated
+        val updatedTrack1 = trackDao.getTrackById("track-kamikaze")
+        assertEquals(MetadataWriteState.FILE_WRITE_SUCCESS.name, updatedTrack1!!.metadataWriteState)
+
+        // Verify progress updates occurred across phases
+        assertTrue(progressList.isNotEmpty())
+        assertTrue(progressList.any { it.phase == com.example.metadata.PushMetadataPhase.READING_PHYSICAL })
+        assertTrue(progressList.any { it.phase == com.example.metadata.PushMetadataPhase.COMPARING })
+        assertTrue(progressList.any { it.phase == com.example.metadata.PushMetadataPhase.WRITING_TAGS || it.phase == com.example.metadata.PushMetadataPhase.DONE_SYNCED })
+    }
+
+    @Test
+    fun `replaceOriginalFile multi-tiered replacement preserves content verbatim`() {
+        val targetFile = File(tempFolder.root, "replace_target.bin")
+        targetFile.writeBytes(byteArrayOf(1, 2, 3, 4, 5))
+
+        val tempFile = File(tempFolder.root, "replace_staging.tmp")
+        val newContent = byteArrayOf(9, 8, 7, 6, 5, 4, 3, 2, 1)
+        tempFile.writeBytes(newContent)
+
+        val success = AudioTagWriter.replaceOriginalFile(targetFile, tempFile)
+        assertTrue(success)
+        assertTrue(targetFile.exists())
+        assertEquals(newContent.size, targetFile.readBytes().size)
+        assertTrue(newContent.contentEquals(targetFile.readBytes()))
     }
 }

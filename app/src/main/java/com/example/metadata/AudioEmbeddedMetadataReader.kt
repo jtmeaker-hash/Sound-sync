@@ -326,7 +326,7 @@ object AudioEmbeddedMetadataReader {
                 "IPRD" -> album = text
                 "IGNR" -> genre = text
                 "ITRK" -> trackNumber = parseIndexNumber(text)
-                "ICRD" -> {
+                "ICRD", "IYEAR" -> {
                     releaseDate = text
                     releaseYear = text.take(4).toIntOrNull()
                 }

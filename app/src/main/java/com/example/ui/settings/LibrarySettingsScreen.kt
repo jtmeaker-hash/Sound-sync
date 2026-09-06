@@ -65,6 +65,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metadata.MetadataSettings
+import com.example.metadata.PushMetadataProgress
+import com.example.metadata.PushMetadataReport
 import com.example.model.FileOperationType
 import com.example.model.MusicPlatform
 import com.example.model.OperationJournalItem
@@ -120,6 +122,11 @@ fun LibrarySettingsScreen(
     onOpenGoogleDrive: () -> Unit = {},
     onConnectGoogleDrive: () -> Unit = {},
     onDisconnectGoogleDrive: () -> Unit = {},
+    isPushingMetadata: Boolean = false,
+    pushProgress: PushMetadataProgress? = null,
+    pushReport: PushMetadataReport? = null,
+    onPushMetadataToFiles: () -> Unit = {},
+    onCancelPushMetadata: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val platformStatuses by CloudSyncManager.platformStatuses.collectAsState()
@@ -143,7 +150,12 @@ fun LibrarySettingsScreen(
                 onSetWriteToFileEnabled = onSetWriteToFileEnabled,
                 onSetShowProvenanceBadges = onSetShowProvenanceBadges,
                 onSetConcurrency = onSetConcurrency,
-                onSetBpmRange = onSetBpmRange
+                onSetBpmRange = onSetBpmRange,
+                isPushingMetadata = isPushingMetadata,
+                pushProgress = pushProgress,
+                pushReport = pushReport,
+                onPushMetadataToFiles = onPushMetadataToFiles,
+                onCancelPushMetadata = onCancelPushMetadata
             )
         }
 

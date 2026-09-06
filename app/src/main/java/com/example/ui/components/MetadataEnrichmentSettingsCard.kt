@@ -7,8 +7,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Publish
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -25,9 +35,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metadata.MetadataSettings
+import com.example.metadata.PushMetadataProgress
+import com.example.metadata.PushMetadataReport
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceDark
+import com.example.ui.theme.NeonGreen
+import com.example.ui.theme.NeonRed
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
@@ -50,7 +64,12 @@ fun MetadataEnrichmentSettingsCard(
     onSetReplaceExistingArtist: (Boolean) -> Unit = {},
     onSetReplaceExistingArtwork: (Boolean) -> Unit = {},
     onSetWriteMetadataOnlyAfterApproval: (Boolean) -> Unit = {},
-    onSetKeepOriginalMetadataBackup: (Boolean) -> Unit = {}
+    onSetKeepOriginalMetadataBackup: (Boolean) -> Unit = {},
+    isPushingMetadata: Boolean = false,
+    pushProgress: PushMetadataProgress? = null,
+    pushReport: PushMetadataReport? = null,
+    onPushMetadataToFiles: () -> Unit = {},
+    onCancelPushMetadata: () -> Unit = {}
 ) {
     var minText by remember(settings.bpmMin) { mutableStateOf(settings.bpmMin.toString()) }
     var maxText by remember(settings.bpmMax) { mutableStateOf(settings.bpmMax.toString()) }
@@ -89,6 +108,149 @@ fun MetadataEnrichmentSettingsCard(
             SettingSwitch("Write completed metadata to ID3 tags", settings.writeToFileEnabled, onSetWriteToFileEnabled)
 
             MetadataProvenanceLegend(modifier = Modifier.padding(vertical = 4.dp))
+
+            Spacer(Modifier.height(4.dp))
+            Text("Physical File Tag Embedding", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text(
+                "Embeds library metadata (Title, Artist, Album, Genre, Year, BPM, Key, Artwork) directly into audio files so it persists in external DJ apps and file managers.",
+                color = TextSecondary, fontSize = 10.sp
+            )
+
+            if (!isPushingMetadata && pushReport == null) {
+                Button(
+                    onClick = onPushMetadataToFiles,
+                    colors = ButtonDefaults.buttonColors(containerColor = DeckACyan.copy(alpha = 0.85f)),
+                    modifier = Modifier.fillMaxWidth().testTag("push_metadata_to_files_button"),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(Icons.Default.Publish, contentDescription = null, tint = androidx.compose.ui.graphics.Color.Black)
+                    Spacer(Modifier.padding(horizontal = 4.dp))
+                    Text("Push Metadata to Files", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.Bold)
+                }
+            } else if (isPushingMetadata) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DjSurfaceBorder.copy(alpha = 0.3f)),
+                    border = BorderStroke(1.dp, DeckACyan),
+                    modifier = Modifier.fillMaxWidth().testTag("push_metadata_progress_card")
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Pushing Metadata to Files...",
+                                color = DeckACyan,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                            OutlinedButton(
+                                onClick = onCancelPushMetadata,
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("Cancel", fontSize = 10.sp, color = NeonRed)
+                            }
+                        }
+
+                        val progressFraction = if ((pushProgress?.total ?: 0) > 0) {
+                            (pushProgress?.current ?: 0).toFloat() / (pushProgress?.total ?: 1).toFloat()
+                        } else 0f
+
+                        LinearProgressIndicator(
+                            progress = { progressFraction },
+                            modifier = Modifier.fillMaxWidth().height(6.dp),
+                            color = DeckACyan,
+                            trackColor = DjSurfaceBorder
+                        )
+
+                        Text(
+                            "Processing track ${pushProgress?.current ?: 0} of ${pushProgress?.total ?: 0}",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 11.sp
+                        )
+
+                        if (!pushProgress?.trackTitle.isNullOrBlank()) {
+                            Text(
+                                "${pushProgress?.trackTitle} — ${pushProgress?.trackArtist}",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                maxLines = 1
+                            )
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "Status: ${pushProgress?.phase?.label ?: "Processing"}",
+                                color = DeckACyan,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            Text("Written: ${pushProgress?.writtenCount ?: 0}", color = NeonGreen, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("In Sync: ${pushProgress?.syncedCount ?: 0}", color = DeckACyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            if ((pushProgress?.failedCount ?: 0) > 0) {
+                                Text("Failed: ${pushProgress?.failedCount}", color = NeonRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (pushReport != null && !isPushingMetadata) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DjSurfaceBorder.copy(alpha = 0.2f)),
+                    border = BorderStroke(1.dp, NeonGreen),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag("push_metadata_report_card")
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = NeonGreen)
+                                Text("Push Operation Summary", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = onPushMetadataToFiles,
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = DeckACyan.copy(alpha = 0.3f))
+                            ) {
+                                Text("Run Again", fontSize = 10.sp, color = DeckACyan)
+                            }
+                        }
+
+                        Text("Total tracks examined: ${pushReport.totalExamined}", color = TextSecondary, fontSize = 11.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text("Successfully written: ${pushReport.successfullyWritten}", color = NeonGreen, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Already in sync: ${pushReport.alreadySynchronized}", color = DeckACyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            if (pushReport.failed > 0) {
+                                Text("Failed: ${pushReport.failed}", color = NeonRed, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        if (pushReport.failureReasons.isNotEmpty()) {
+                            Text("Failures:", color = NeonRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                pushReport.failureReasons.take(5).forEach { failure ->
+                                    Text("• ${failure.title} (${failure.artist}): ${failure.reason}", color = TextSecondary, fontSize = 9.sp)
+                                }
+                                if (pushReport.failureReasons.size > 5) {
+                                    Text("+ ${pushReport.failureReasons.size - 5} more", color = TextSecondary, fontSize = 9.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             Text("BPM analysis range: ${settings.bpmMin}-${settings.bpmMax} BPM", color = TextSecondary, fontSize = 10.sp)
             Slider(

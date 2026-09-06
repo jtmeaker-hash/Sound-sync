@@ -1,9 +1,11 @@
 package com.example.storage
 
+import android.content.ContentUris
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
@@ -16,6 +18,8 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -101,7 +105,20 @@ object AudioTagWriter {
         }
 
         val file = File(filePathOrUri)
-        if (!file.exists() || !file.canWrite() || !file.isFile) {
+        if (!file.exists() || !file.isFile) {
+            Log.w(TAG, "Cannot write tags: file does not exist: ${file.absolutePath}")
+            return@withContext false
+        }
+
+        if (!isFileDirectlyWritable(file)) {
+            Log.w(TAG, "Direct file write not permitted for ${file.absolutePath}, checking MediaStore fallback...")
+            if (context != null) {
+                val mediaUri = getMediaStoreUriForPath(context, file.absolutePath)
+                if (mediaUri != null) {
+                    Log.i(TAG, "Using MediaStore URI fallback: $mediaUri for ${file.absolutePath}")
+                    return@withContext writeContentUriTags(context, mediaUri.toString(), payload)
+                }
+            }
             Log.w(TAG, "Cannot write tags: file is inaccessible or read-only: ${file.absolutePath}")
             return@withContext false
         }
@@ -182,6 +199,129 @@ object AudioTagWriter {
             false
         } finally {
             tempFile?.let { if (it.exists()) it.delete() }
+        }
+    }
+
+    /**
+     * Checks if a file can be written to directly, probing via FileOutputStream if needed.
+     */
+    fun isFileDirectlyWritable(file: File): Boolean {
+        if (!file.exists() || !file.isFile) return false
+        if (file.canWrite()) return true
+        return try {
+            FileOutputStream(file, true).use {}
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * Queries MediaStore for a content:// URI matching the file's absolute path.
+     */
+    fun getMediaStoreUriForPath(context: Context, path: String): Uri? {
+        return try {
+            val projection = arrayOf(MediaStore.Audio.Media._ID)
+            val selection = "${MediaStore.Audio.Media.DATA} = ?"
+            val selectionArgs = arrayOf(path)
+            context.contentResolver.query(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                    val id = cursor.getLong(idCol)
+                    ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+                } else null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not resolve MediaStore URI for path $path: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Safely creates a temporary staging file for atomic tag writing.
+     * Prefers the same directory to allow atomic rename, falling back to cache if unwritable.
+     */
+    fun createTempStagingFile(file: File): File {
+        return try {
+            val parent = file.parentFile
+            if (parent != null && parent.exists() && parent.canWrite()) {
+                File(parent, ".${file.name}.${System.currentTimeMillis()}.tmp")
+            } else {
+                File.createTempFile("ss_tag_", ".tmp")
+            }
+        } catch (_: Throwable) {
+            File.createTempFile("ss_tag_", ".tmp")
+        }
+    }
+
+    /**
+     * Multi-tiered file replacement ensuring writes succeed on Android FAT/FUSE emulated storage:
+     * Tier 1: Java NIO Files.move (ATOMIC_MOVE)
+     * Tier 2: Java NIO Files.move (REPLACE_EXISTING)
+     * Tier 3: Direct File.renameTo
+     * Tier 4: Original File.delete followed by renameTo
+     * Tier 5: In-place FileOutputStream overwrite with sync() (essential fallback on Android FUSE)
+     */
+    fun replaceOriginalFile(originalFile: File, tempFile: File): Boolean {
+        if (!tempFile.exists() || tempFile.length() == 0L) {
+            Log.e(TAG, "replaceOriginalFile: Temp staging file is missing or empty")
+            return false
+        }
+
+        // Tier 1: Atomic move via NIO
+        try {
+            Files.move(
+                tempFile.toPath(),
+                originalFile.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE
+            )
+            return true
+        } catch (_: Throwable) {}
+
+        // Tier 2: Replace existing via NIO
+        try {
+            Files.move(
+                tempFile.toPath(),
+                originalFile.toPath(),
+                StandardCopyOption.REPLACE_EXISTING
+            )
+            return true
+        } catch (_: Throwable) {}
+
+        // Tier 3: Direct renameTo
+        try {
+            if (tempFile.renameTo(originalFile)) {
+                return true
+            }
+        } catch (_: Throwable) {}
+
+        // Tier 4: Delete original and rename
+        try {
+            if (originalFile.delete() && tempFile.renameTo(originalFile)) {
+                return true
+            }
+        } catch (_: Throwable) {}
+
+        // Tier 5: In-place content stream overwrite
+        return try {
+            tempFile.inputStream().buffered().use { src ->
+                FileOutputStream(originalFile, false).use { dst ->
+                    src.copyTo(dst, 64 * 1024)
+                    dst.fd.sync()
+                }
+            }
+            tempFile.delete()
+            true
+        } catch (e: Throwable) {
+            Log.e(TAG, "replaceOriginalFile: All replacement tiers failed for ${originalFile.name}: ${e.message}", e)
+            false
         }
     }
 
@@ -390,6 +530,7 @@ object AudioTagWriter {
             doWrite("ITRK", payload.trackNumber?.takeIf { it > 0 }?.toString())
             val yearStr = payload.releaseYear?.takeIf { it > 0 }?.toString() ?: payload.releaseDate?.takeIf { it.isNotBlank() }
             doWrite("ICRD", yearStr)
+            doWrite("IYEAR", yearStr)
 
             // Preserve any other existing INFO subchunks (ICOP, IENG, etc.)
             for ((subId, subData) in existingInfoSubchunks) {
@@ -427,7 +568,7 @@ object AudioTagWriter {
 
             val totalRiffSize = 4L + fmtChunkTotalSize + id3ChunkBytes.size + listChunkBytes.size + preservedChunksTotalSize + dataChunkTotalSize
 
-            tempFile = File(file.parentFile, "${file.name}.${System.currentTimeMillis()}.tmp")
+            tempFile = createTempStagingFile(file)
             val fos = FileOutputStream(tempFile)
 
             fos.write("RIFF".toByteArray(StandardCharsets.US_ASCII))
@@ -492,12 +633,9 @@ object AudioTagWriter {
             fos.close()
 
             if (tempFile.length() >= (fileLength / 2)) {
-                if (file.delete()) {
-                    val renamed = tempFile.renameTo(file)
-                    if (renamed) {
-                        Log.d(TAG, "Successfully wrote RIFF INFO + ID3 tags to WAV ${file.name}")
-                        return true
-                    }
+                if (replaceOriginalFile(file, tempFile)) {
+                    Log.d(TAG, "Successfully wrote RIFF INFO + ID3 tags to WAV ${file.name}")
+                    return true
                 }
             }
         } catch (e: Exception) {
@@ -555,7 +693,7 @@ object AudioTagWriter {
 
             val id3TagBytes = buildId3v2Tag(payload, existingFrames)
 
-            tempFile = File(file.parentFile, "${file.name}.${System.currentTimeMillis()}.tmp")
+            tempFile = createTempStagingFile(file)
             val fos = FileOutputStream(tempFile)
             fos.write(id3TagBytes)
 
@@ -576,12 +714,9 @@ object AudioTagWriter {
             audioInputStream.close()
 
             if (tempFile.length() > (fileLength / 2)) {
-                if (file.delete()) {
-                    val renamed = tempFile.renameTo(file)
-                    if (renamed) {
-                        Log.d(TAG, "Successfully wrote complete ID3v2 tags and artwork to ${file.name}")
-                        return true
-                    }
+                if (replaceOriginalFile(file, tempFile)) {
+                    Log.d(TAG, "Successfully wrote complete ID3v2 tags and artwork to ${file.name}")
+                    return true
                 }
             }
         } catch (e: Exception) {
@@ -642,7 +777,7 @@ object AudioTagWriter {
             val vorbisCommentBytes = buildVorbisCommentBody(payload)
             val pictureBlockBytes = buildFlacPictureBlock(payload.artworkBytes, payload.artworkMimeType)
 
-            tempFile = File(file.parentFile, "${file.name}.${System.currentTimeMillis()}.tmp")
+            tempFile = createTempStagingFile(file)
             val fos = FileOutputStream(tempFile)
             fos.write(magic)
 
@@ -675,12 +810,9 @@ object AudioTagWriter {
             inputStream.close()
 
             if (tempFile.length() > (fileLength / 2)) {
-                if (file.delete()) {
-                    val renamed = tempFile.renameTo(file)
-                    if (renamed) {
-                        Log.d(TAG, "Successfully wrote complete FLAC tags and artwork to ${file.name}")
-                        return true
-                    }
+                if (replaceOriginalFile(file, tempFile)) {
+                    Log.d(TAG, "Successfully wrote complete FLAC tags and artwork to ${file.name}")
+                    return true
                 }
             }
         } catch (e: Exception) {
@@ -784,7 +916,7 @@ object AudioTagWriter {
 
             val finalMoovBox = buildMp4Box("moov", finalMoovPayload)
 
-            tempFile = File(file.parentFile, "${file.name}.${System.currentTimeMillis()}.tmp")
+            tempFile = createTempStagingFile(file)
             val fos = FileOutputStream(tempFile)
 
             val srcIn = FileInputStream(file)
@@ -809,12 +941,9 @@ object AudioTagWriter {
             fos.close()
 
             if (tempFile.length() > (fileLength / 2)) {
-                if (file.delete()) {
-                    val renamed = tempFile.renameTo(file)
-                    if (renamed) {
-                        Log.d(TAG, "Successfully wrote M4A tags and artwork to ${file.name}")
-                        return true
-                    }
+                if (replaceOriginalFile(file, tempFile)) {
+                    Log.d(TAG, "Successfully wrote M4A tags and artwork to ${file.name}")
+                    return true
                 }
             }
         } catch (e: Exception) {
@@ -975,7 +1104,7 @@ object AudioTagWriter {
 
             val seqDelta = newCommentPages.size - 1
 
-            tempFile = File(file.parentFile, "${file.name}.${System.currentTimeMillis()}.tmp")
+            tempFile = createTempStagingFile(file)
             val fos = FileOutputStream(tempFile)
 
             writeOggPage(fos, page0.headerType, page0.granulePos, page0.serial, page0.seqNum, page0.segments, page0.payload)
@@ -996,12 +1125,9 @@ object AudioTagWriter {
             inputStream.close()
 
             if (tempFile.length() > (fileLength / 2)) {
-                if (file.delete()) {
-                    val renamed = tempFile.renameTo(file)
-                    if (renamed) {
-                        Log.d(TAG, "Successfully wrote Ogg Vorbis/Opus comments and artwork to ${file.name}")
-                        return true
-                    }
+                if (replaceOriginalFile(file, tempFile)) {
+                    Log.d(TAG, "Successfully wrote Ogg Vorbis/Opus comments and artwork to ${file.name}")
+                    return true
                 }
             }
         } catch (e: Exception) {
@@ -1100,9 +1226,12 @@ object AudioTagWriter {
                 String.format(Locale.US, "%.1f", payload.bpm)
             }
             framesToWrite.add(Id3Frame("TBPM", buildTextFrameData(bpmStr)))
+            framesToWrite.add(Id3Frame("TXXX", buildUserTextFrameData("BPM", bpmStr)))
         }
-        if (!payload.musicalKey.isNullOrBlank() && payload.musicalKey != "—") {
-            framesToWrite.add(Id3Frame("TKEY", buildTextFrameData(payload.musicalKey.trim())))
+        if (!payload.musicalKey.isNullOrBlank() && payload.musicalKey != "—" && payload.musicalKey != "-") {
+            val keyStr = payload.musicalKey.trim()
+            framesToWrite.add(Id3Frame("TKEY", buildTextFrameData(keyStr)))
+            framesToWrite.add(Id3Frame("TXXX", buildUserTextFrameData("INITIALKEY", keyStr)))
         }
 
         if (payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()) {
@@ -1520,6 +1649,15 @@ object AudioTagWriter {
             System.arraycopy(textBytes, 0, result, 3, textBytes.size)
             result
         }
+    }
+
+    private fun buildUserTextFrameData(description: String, value: String): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(0x00) // ISO-8859-1 encoding
+        out.write(description.toByteArray(StandardCharsets.ISO_8859_1))
+        out.write(0x00) // 0-terminator delimiter
+        out.write(value.toByteArray(StandardCharsets.ISO_8859_1))
+        return out.toByteArray()
     }
 
     private fun buildCommentFrameData(text: String): ByteArray {

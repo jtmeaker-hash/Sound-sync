@@ -1383,7 +1383,12 @@ private fun SideDestinationScreen(
                         onCancelScan = { viewModel.cancelScanService() },
                         onOpenGoogleDrive = { viewModel.openGoogleDriveBrowser() },
                         onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
-                        onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() }
+                        onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() },
+                        isPushingMetadata = viewModel.isPushingMetadata.collectAsState().value,
+                        pushProgress = viewModel.pushMetadataProgress.collectAsState().value,
+                        pushReport = viewModel.pushMetadataReport.collectAsState().value,
+                        onPushMetadataToFiles = { viewModel.pushMetadataToFiles() },
+                        onCancelPushMetadata = { viewModel.cancelPushMetadata() }
                     )
                 }
                 SideMenuDestination.MetadataSettings -> {
@@ -1415,7 +1420,12 @@ private fun SideDestinationScreen(
                         onCancelScan = { viewModel.cancelScanService() },
                         onOpenGoogleDrive = { viewModel.openGoogleDriveBrowser() },
                         onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
-                        onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() }
+                        onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() },
+                        isPushingMetadata = viewModel.isPushingMetadata.collectAsState().value,
+                        pushProgress = viewModel.pushMetadataProgress.collectAsState().value,
+                        pushReport = viewModel.pushMetadataReport.collectAsState().value,
+                        onPushMetadataToFiles = { viewModel.pushMetadataToFiles() },
+                        onCancelPushMetadata = { viewModel.cancelPushMetadata() }
                     )
                 }
                 SideMenuDestination.AppearanceSettings -> {
