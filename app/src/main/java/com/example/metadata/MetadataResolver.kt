@@ -125,24 +125,40 @@ class MetadataResolver(
         } else {
             val primaryTerm = parsed.searchTerms.firstOrNull() ?: "${parsed.artist} ${parsed.title}"
             val candidates = appleProvider.searchTracks(primaryTerm)
-            allCandidatesList = candidates
+            if (candidates.isEmpty() && parsed.sourceOfTruth == "FOLDER_PARSE") {
+                val missingArtistResolution = resolveMissingArtist(track, parsed)
+                if (missingArtistResolution != null) {
+                    selectedCandidate = missingArtistResolution.first
+                    candidateScore = missingArtistResolution.second
+                    wasArtistRepaired = true
+                    candidateEvaluation = CandidateEvaluationResult(
+                        bestCandidate = MetadataConfidenceScorer.scoreCandidate(parsed.title, selectedCandidate.artistName, parsed.album, track.durationSeconds, selectedCandidate),
+                        matchStatus = if (candidateScore >= MetadataConfidenceScorer.VERIFIED_CONFIDENCE_THRESHOLD) MetadataScanState.VERIFIED else MetadataScanState.REVIEW_REQUIRED,
+                        allCandidates = emptyList(),
+                        isMultipleMatches = false,
+                        summary = "Recovered artist from iTunes Search"
+                    )
+                }
+            } else {
+                allCandidatesList = candidates
 
-            val evaluation = MetadataConfidenceScorer.evaluateCandidates(
-                localTitle = parsed.title,
-                localArtist = parsed.artist,
-                localAlbum = parsed.album,
-                localDurationSeconds = track.durationSeconds,
-                candidates = candidates
-            )
-            candidateEvaluation = evaluation
+                val evaluation = MetadataConfidenceScorer.evaluateCandidates(
+                    localTitle = parsed.title,
+                    localArtist = parsed.artist,
+                    localAlbum = parsed.album,
+                    localDurationSeconds = track.durationSeconds,
+                    candidates = candidates
+                )
+                candidateEvaluation = evaluation
 
-            evaluation.allCandidates.take(3).forEach {
-                Log.d("MetadataConfidenceScorer", "candidate: \"${it.candidate.artistName} - ${it.candidate.trackName}\" score: ${"%.1f".format(it.totalScore)} breakdown: [${it.scoreBreakdown}]")
-            }
+                evaluation.allCandidates.take(3).forEach {
+                    Log.d("MetadataConfidenceScorer", "candidate: \"${it.candidate.artistName} - ${it.candidate.trackName}\" score: ${"%.1f".format(it.totalScore)} breakdown: [${it.scoreBreakdown}]")
+                }
 
-            if (evaluation.bestCandidate != null && evaluation.bestCandidate.totalScore >= MetadataConfidenceScorer.MINIMUM_ACCEPTABLE_THRESHOLD) {
-                selectedCandidate = evaluation.bestCandidate.candidate
-                candidateScore = evaluation.bestCandidate.totalScore
+                if (evaluation.bestCandidate != null && evaluation.bestCandidate.totalScore >= MetadataConfidenceScorer.MINIMUM_ACCEPTABLE_THRESHOLD) {
+                    selectedCandidate = evaluation.bestCandidate.candidate
+                    candidateScore = evaluation.bestCandidate.totalScore
+                }
             }
         }
 
@@ -303,15 +319,38 @@ class MetadataResolver(
                 !track.filePath.startsWith("demo://") &&
                 File(track.filePath).exists()
 
-        val shouldWritePhysicalFile = !settings.writeMetadataOnlyAfterApproval && embedArtworkToFile && isLocalPhysicalFile
+        val shouldWritePhysicalFile = embedArtworkToFile && isLocalPhysicalFile &&
+                (!settings.writeMetadataOnlyAfterApproval || forceRefresh || matchState == MetadataScanState.VERIFIED)
+
+        var finalScanState = matchState
 
         if (shouldWritePhysicalFile) {
-            Log.d("MetadataWriter", "writeMetadataOnlyAfterApproval is OFF; writing tags to ${track.filePath}")
-            fileWriter.writeAsync(
+            Log.d("MetadataWriter", "Physical tag writing for ${track.filePath}")
+            val writeResult = fileWriter.writeAsync(
                 track = intermediateTrack,
                 artworkBytes = activeArtworkBytes,
                 artworkMimeType = activeArtworkMime
             )
+            when (writeResult) {
+                is MetadataWriteResult.Written -> {
+                    Log.d("MetadataWriter", "Physical tag writing and readback verification PASSED for ${track.filePath}")
+                    finalScanState = MetadataScanState.COMPLETE
+                }
+                is MetadataWriteResult.VerificationFailed -> {
+                    Log.e("MetadataWriter", "Write verification FAILED on field ${writeResult.field}: expected \"${writeResult.expected}\" but found \"${writeResult.actual}\"")
+                    finalScanState = MetadataScanState.FAILED_WRITE_VERIFICATION
+                }
+                is MetadataWriteResult.PermissionRequired -> {
+                    Log.w("MetadataWriter", "Physical write requires Android storage write permission for ${track.filePath}")
+                    finalScanState = MetadataScanState.NEEDS_WRITE_PERMISSION
+                }
+                is MetadataWriteResult.Unsupported -> {
+                    Log.d("MetadataWriter", "Physical write not supported: ${writeResult.reason}")
+                }
+                is MetadataWriteResult.Failed -> {
+                    Log.e("MetadataWriter", "Physical write failed: ${writeResult.reason}")
+                }
+            }
         } else {
             Log.d("MetadataWriter", "Physical file write safely DEFERRED until user approval for ${track.filePath}")
         }
@@ -320,17 +359,17 @@ class MetadataResolver(
             artworkUrl = finalArtworkUrl,
             artworkSource = artworkSource,
             artworkCachePath = artworkCachePath,
-            metadataScanState = matchState.name
+            metadataScanState = finalScanState.name
         )
 
         Log.d("MetadataWriter", "database write: updated track id=${finalTrack.id} state=${finalTrack.metadataScanState}")
 
         MetadataResolutionResult(
             updatedTrack = finalTrack,
-            scanState = matchState,
+            scanState = finalScanState,
             confidence = candidateScore,
             wasRepaired = wasArtistRepaired || (candidateScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD),
-            message = "Identified via Apple + Cover Art Archive (score: ${"%.1f".format(candidateScore)}, state: $matchState)"
+            message = "Identified via Apple + Cover Art Archive (score: ${"%.1f".format(candidateScore)}, state: $finalScanState)"
         )
     }
 

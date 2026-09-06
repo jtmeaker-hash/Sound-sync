@@ -107,14 +107,22 @@ object TrackIdentityParser {
                     val right = parts[1].trim()
                     if (isArtistValid(left) && left.length >= 2 && isTitleValid(right)) {
                         parsedArtist = left
-                        parsedTitle = right
+                        parsedTitle = if (rawExistingTitle != null && isTitleValid(rawExistingTitle) && !rawExistingTitle.contains(" - ")) {
+                            rawExistingTitle
+                        } else {
+                            right
+                        }
                         sourceOfTruth = "FILENAME_PARSE"
                     }
                 } else if (cleanFilename.contains(" by ", ignoreCase = true)) {
                     val parts = cleanFilename.split(Regex("(?i)\\s+by\\s+"), limit = 2)
                     if (parts.size == 2 && isTitleValid(parts[0].trim()) && isArtistValid(parts[1].trim())) {
-                        parsedTitle = parts[0].trim()
                         parsedArtist = parts[1].trim()
+                        parsedTitle = if (rawExistingTitle != null && isTitleValid(rawExistingTitle) && !rawExistingTitle.contains(Regex("(?i)\\s+by\\s+"))) {
+                            rawExistingTitle
+                        } else {
+                            parts[0].trim()
+                        }
                         sourceOfTruth = "FILENAME_PARSE"
                     }
                 }
@@ -198,6 +206,12 @@ object TrackIdentityParser {
 
     private fun isGenericDirectoryName(dir: String): Boolean {
         val lower = dir.lowercase(Locale.ROOT)
+        if (lower.contains("test") || lower.contains("cache") || lower.contains("temp") ||
+            lower.contains("tmp") || lower.contains("build") || lower.contains("robolectric") ||
+            lower.contains('_') || lower.matches(Regex(".*\\d{2,}.*"))
+        ) {
+            return true
+        }
         return lower in listOf(
             "music", "download", "downloads", "audio", "sound", "sounds", "tracks",
             "songs", "internal storage", "storage", "sdcard", "0", "emulated", "files",

@@ -84,15 +84,9 @@ class MetadataReviewManager(
         val track = trackDao.getTrackById(item.trackId) ?: return@withContext false
         val settings = settingsStore.load()
 
-        // Primary Rule (Section 5): Protect existing title and artist unless explicitly configured or blank/malformed
-        val shouldReplaceTitle = settings.replaceExistingTitle || !TrackIdentityParser.isTitleValid(track.title)
-        val finalTitle = if (shouldReplaceTitle) item.proposedTitle else track.title
-
-        val shouldReplaceArtist = settings.replaceExistingArtist || !TrackIdentityParser.isArtistValid(track.artist)
-        val finalArtist = if (shouldReplaceArtist) item.proposedArtist else track.artist
-
-        val shouldReplaceArtwork = settings.replaceExistingArtwork || track.artworkUrl.isNullOrBlank()
-        val finalArtworkUrl = if (shouldReplaceArtwork) (item.proposedArtworkUrl ?: track.artworkUrl) else track.artworkUrl
+        val finalTitle = item.proposedTitle.takeIf { it.isNotBlank() } ?: track.title
+        val finalArtist = item.proposedArtist.takeIf { it.isNotBlank() } ?: track.artist
+        val finalArtworkUrl = item.proposedArtworkUrl ?: track.artworkUrl
 
         // 1. Transactional Pre-Write Backup (Sections 10 & 11)
         if (settings.keepOriginalMetadataBackup) {
