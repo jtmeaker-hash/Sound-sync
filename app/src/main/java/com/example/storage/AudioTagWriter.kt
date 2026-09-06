@@ -330,9 +330,14 @@ object AudioTagWriter {
             "wav" -> writeWavTags(file, payload)
             "mp3" -> writeMp3Tags(file, payload)
             "flac" -> writeFlacTags(file, payload)
-            "m4a", "mp4", "aac" -> writeM4aTags(file, payload)
+            "m4a", "mp4" -> writeM4aTags(file, payload)
+            "aac" -> {
+                if (writeM4aTags(file, payload)) true
+                else writeMp3Tags(file, payload)
+            }
             "ogg" -> writeOggVorbisTags(file, payload)
             "opus" -> writeOggOpusTags(file, payload)
+            "aif", "aiff" -> writeAiffTags(file, payload)
             else -> {
                 Log.w(TAG, "Tag writing not supported for extension .$ext; file preserved unmodified.")
                 false
@@ -640,6 +645,225 @@ object AudioTagWriter {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed writing WAV tags to ${file.name}: ${e.message}", e)
+        } finally {
+            tempFile?.let { if (it.exists()) it.delete() }
+        }
+        return false
+    }
+
+    // =========================================================================
+    // AIFF (EA IFF 85) IMPLEMENTATION: Writes 'ID3 ' chunk with ID3v2.3 tags
+    // =========================================================================
+
+    private fun writeAiffTags(file: File, payload: CompleteTagPayload): Boolean {
+        var tempFile: File? = null
+        try {
+            val fileLength = file.length()
+            if (fileLength < 12) return false
+
+            val inputStream = FileInputStream(file)
+            val header = ByteArray(12)
+            if (inputStream.read(header) < 12) {
+                inputStream.close()
+                return false
+            }
+
+            if (header[0] != 'F'.code.toByte() || header[1] != 'O'.code.toByte() ||
+                header[2] != 'R'.code.toByte() || header[3] != 'M'.code.toByte()) {
+                inputStream.close()
+                Log.w(TAG, "File ${file.name} is not a valid IFF FORM file")
+                return false
+            }
+
+            val subtype = String(header, 8, 4, StandardCharsets.US_ASCII)
+            if (subtype != "AIFF" && subtype != "AIFC") {
+                inputStream.close()
+                Log.w(TAG, "File ${file.name} is not an AIFF or AIFC file")
+                return false
+            }
+
+            data class IffChunk(val id: String, val data: ByteArray)
+            var commChunk: IffChunk? = null
+            var ssndChunkOffset = 0L
+            var ssndChunkSize = 0L
+            val preservedChunks = mutableListOf<IffChunk>()
+            val existingId3Frames = mutableListOf<Id3Frame>()
+
+            var currentOffset = 12L
+            val chunkHdr = ByteArray(8)
+
+            while (currentOffset + 8 <= fileLength) {
+                val r = inputStream.read(chunkHdr)
+                if (r < 8) break
+                currentOffset += 8
+
+                val chunkId = String(chunkHdr, 0, 4, StandardCharsets.US_ASCII)
+                val chunkSize = ((chunkHdr[4].toInt() and 0xFF) shl 24) or
+                        ((chunkHdr[5].toInt() and 0xFF) shl 16) or
+                        ((chunkHdr[6].toInt() and 0xFF) shl 8) or
+                        (chunkHdr[7].toInt() and 0xFF)
+                val padSize = if (chunkSize % 2 != 0) 1 else 0
+
+                when {
+                    chunkId == "COMM" -> {
+                        val commData = ByteArray(chunkSize)
+                        var readTotal = 0
+                        while (readTotal < chunkSize) {
+                            val count = inputStream.read(commData, readTotal, chunkSize - readTotal)
+                            if (count <= 0) break
+                            readTotal += count
+                        }
+                        if (padSize > 0) inputStream.skip(padSize.toLong())
+                        currentOffset += chunkSize + padSize
+                        commChunk = IffChunk(chunkId, commData)
+                    }
+                    chunkId == "SSND" -> {
+                        ssndChunkOffset = currentOffset
+                        ssndChunkSize = chunkSize.toLong() and 0xFFFFFFFFL
+                        skipFully(inputStream, ssndChunkSize + padSize)
+                        currentOffset += ssndChunkSize + padSize
+                    }
+                    chunkId.equals("id3 ", ignoreCase = true) -> {
+                        val id3Data = ByteArray(chunkSize)
+                        var readTotal = 0
+                        while (readTotal < chunkSize) {
+                            val count = inputStream.read(id3Data, readTotal, chunkSize - readTotal)
+                            if (count <= 0) break
+                            readTotal += count
+                        }
+                        if (padSize > 0) inputStream.skip(padSize.toLong())
+                        currentOffset += chunkSize + padSize
+
+                        if (id3Data.size >= 10 && id3Data[0] == 'I'.code.toByte() && id3Data[1] == 'D'.code.toByte() && id3Data[2] == '3'.code.toByte()) {
+                            val majorVer = id3Data[3].toInt()
+                            val tagBodySize = decodeSyncSafe(id3Data, 6)
+                            if (tagBodySize > 0 && 10 + tagBodySize <= id3Data.size) {
+                                val bodyBuf = ByteArray(tagBodySize)
+                                System.arraycopy(id3Data, 10, bodyBuf, 0, tagBodySize)
+                                parseId3Frames(bodyBuf, majorVer, existingId3Frames)
+                            }
+                        }
+                    }
+                    else -> {
+                        if (chunkSize in 1..1048576) {
+                            val otherData = ByteArray(chunkSize)
+                            var readTotal = 0
+                            while (readTotal < chunkSize) {
+                                val count = inputStream.read(otherData, readTotal, chunkSize - readTotal)
+                                if (count <= 0) break
+                                readTotal += count
+                            }
+                            if (padSize > 0) inputStream.skip(padSize.toLong())
+                            currentOffset += chunkSize + padSize
+                            preservedChunks.add(IffChunk(chunkId, otherData))
+                        } else {
+                            skipFully(inputStream, chunkSize.toLong() + padSize)
+                            currentOffset += chunkSize + padSize
+                        }
+                    }
+                }
+            }
+            inputStream.close()
+
+            if (commChunk == null || ssndChunkOffset <= 0L) {
+                Log.w(TAG, "AIFF file ${file.name} missing essential COMM or SSND chunk")
+                return false
+            }
+
+            val id3TagBytes = buildId3v2Tag(payload, existingId3Frames)
+            val id3Pad = if (id3TagBytes.size % 2 != 0) 1 else 0
+
+            var formPayloadLength = 4L // "AIFF" subtype
+            formPayloadLength += 8L + commChunk.data.size + (if (commChunk.data.size % 2 != 0) 1 else 0)
+            formPayloadLength += 8L + id3TagBytes.size + id3Pad
+            for (p in preservedChunks) {
+                formPayloadLength += 8L + p.data.size + (if (p.data.size % 2 != 0) 1 else 0)
+            }
+            formPayloadLength += 8L + ssndChunkSize + (if (ssndChunkSize % 2L != 0L) 1 else 0)
+
+            tempFile = createTempStagingFile(file)
+            val fos = FileOutputStream(tempFile)
+
+            fos.write("FORM".toByteArray(StandardCharsets.US_ASCII))
+            val formLenBuf = ByteArray(4)
+            formLenBuf[0] = ((formPayloadLength shr 24) and 0xFF).toByte()
+            formLenBuf[1] = ((formPayloadLength shr 16) and 0xFF).toByte()
+            formLenBuf[2] = ((formPayloadLength shr 8) and 0xFF).toByte()
+            formLenBuf[3] = (formPayloadLength and 0xFF).toByte()
+            fos.write(formLenBuf)
+            fos.write(subtype.toByteArray(StandardCharsets.US_ASCII))
+
+            // Write COMM chunk
+            fos.write("COMM".toByteArray(StandardCharsets.US_ASCII))
+            val commLenBuf = ByteArray(4)
+            commLenBuf[0] = ((commChunk.data.size shr 24) and 0xFF).toByte()
+            commLenBuf[1] = ((commChunk.data.size shr 16) and 0xFF).toByte()
+            commLenBuf[2] = ((commChunk.data.size shr 8) and 0xFF).toByte()
+            commLenBuf[3] = (commChunk.data.size and 0xFF).toByte()
+            fos.write(commLenBuf)
+            fos.write(commChunk.data)
+            if (commChunk.data.size % 2 != 0) fos.write(0)
+
+            // Write ID3 chunk
+            fos.write("ID3 ".toByteArray(StandardCharsets.US_ASCII))
+            val id3LenBuf = ByteArray(4)
+            id3LenBuf[0] = ((id3TagBytes.size shr 24) and 0xFF).toByte()
+            id3LenBuf[1] = ((id3TagBytes.size shr 16) and 0xFF).toByte()
+            id3LenBuf[2] = ((id3TagBytes.size shr 8) and 0xFF).toByte()
+            id3LenBuf[3] = (id3TagBytes.size and 0xFF).toByte()
+            fos.write(id3LenBuf)
+            fos.write(id3TagBytes)
+            if (id3Pad > 0) fos.write(0)
+
+            // Write preserved chunks
+            for (p in preservedChunks) {
+                fos.write(p.id.toByteArray(StandardCharsets.US_ASCII))
+                val pLenBuf = ByteArray(4)
+                pLenBuf[0] = ((p.data.size shr 24) and 0xFF).toByte()
+                pLenBuf[1] = ((p.data.size shr 16) and 0xFF).toByte()
+                pLenBuf[2] = ((p.data.size shr 8) and 0xFF).toByte()
+                pLenBuf[3] = (p.data.size and 0xFF).toByte()
+                fos.write(pLenBuf)
+                fos.write(p.data)
+                if (p.data.size % 2 != 0) fos.write(0)
+            }
+
+            // Write SSND chunk
+            fos.write("SSND".toByteArray(StandardCharsets.US_ASCII))
+            val ssndLenBuf = ByteArray(4)
+            ssndLenBuf[0] = ((ssndChunkSize shr 24) and 0xFF).toByte()
+            ssndLenBuf[1] = ((ssndChunkSize shr 16) and 0xFF).toByte()
+            ssndLenBuf[2] = ((ssndChunkSize shr 8) and 0xFF).toByte()
+            ssndLenBuf[3] = (ssndChunkSize and 0xFF).toByte()
+            fos.write(ssndLenBuf)
+
+            val audioIn = FileInputStream(file)
+            skipFully(audioIn, ssndChunkOffset)
+            val copyBuf = ByteArray(64 * 1024)
+            var bytesRemaining = ssndChunkSize
+            while (bytesRemaining > 0) {
+                val toRead = minOf(copyBuf.size.toLong(), bytesRemaining).toInt()
+                val read = audioIn.read(copyBuf, 0, toRead)
+                if (read <= 0) break
+                fos.write(copyBuf, 0, read)
+                bytesRemaining -= read
+            }
+            if (ssndChunkSize % 2L != 0L) {
+                fos.write(0)
+            }
+            audioIn.close()
+
+            fos.flush()
+            fos.close()
+
+            if (tempFile.length() >= (fileLength / 2)) {
+                if (replaceOriginalFile(file, tempFile)) {
+                    Log.d(TAG, "Successfully wrote ID3 chunk to AIFF ${file.name}")
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed writing AIFF tags to ${file.name}: ${e.message}", e)
         } finally {
             tempFile?.let { if (it.exists()) it.delete() }
         }
@@ -1030,9 +1254,14 @@ object AudioTagWriter {
                 return false
             }
 
-            var commentPage = readNextOggPage()
-            while (commentPage != null && (commentPage.headerType and 0x01) != 0) {
-                commentPage = readNextOggPage()
+            val firstCommentPage = readNextOggPage()
+            if (firstCommentPage != null) {
+                var lastSeg = firstCommentPage.segments.lastOrNull()?.let { it.toInt() and 0xFF } ?: 0
+                while (lastSeg == 255) {
+                    val contPage = readNextOggPage() ?: break
+                    lastSeg = contPage.segments.lastOrNull()?.let { it.toInt() and 0xFF } ?: 0
+                    if ((contPage.headerType and 0x01) == 0) break
+                }
             }
 
             val commentPacketStream = ByteArrayOutputStream()
@@ -1058,8 +1287,13 @@ object AudioTagWriter {
                 commentsList.add("DISCNUMBER=$it")
                 payload.totalDiscs?.takeIf { tot -> tot > 0 }?.let { tot -> commentsList.add("DISCTOTAL=$tot") }
             }
-            payload.releaseYear?.takeIf { it > 0 }?.let { commentsList.add("DATE=$it") }
-                ?: payload.releaseDate?.takeIf { it.isNotBlank() }?.let { commentsList.add("DATE=$it") }
+            payload.releaseYear?.takeIf { it > 0 }?.let {
+                commentsList.add("DATE=$it")
+                commentsList.add("YEAR=$it")
+            } ?: payload.releaseDate?.takeIf { it.isNotBlank() }?.let {
+                commentsList.add("DATE=$it")
+                it.take(4).toIntOrNull()?.let { y -> commentsList.add("YEAR=$y") }
+            }
             payload.bpm?.takeIf { it in 30.0..300.0 }?.let {
                 val bStr = if (it == it.roundToInt().toDouble()) it.toInt().toString() else String.format(Locale.US, "%.1f", it)
                 commentsList.add("BPM=$bStr")
@@ -1312,8 +1546,13 @@ object AudioTagWriter {
                 comments.add("DISCNUMBER=$it")
             }
         }
-        payload.releaseYear?.takeIf { it > 0 }?.let { comments.add("DATE=$it") }
-            ?: payload.releaseDate?.takeIf { it.isNotBlank() }?.let { comments.add("DATE=$it") }
+        payload.releaseYear?.takeIf { it > 0 }?.let {
+            comments.add("DATE=$it")
+            comments.add("YEAR=$it")
+        } ?: payload.releaseDate?.takeIf { it.isNotBlank() }?.let {
+            comments.add("DATE=$it")
+            it.take(4).toIntOrNull()?.let { y -> comments.add("YEAR=$y") }
+        }
         payload.bpm?.takeIf { it in 30.0..300.0 }?.let {
             val bStr = if (it == it.roundToInt().toDouble()) it.toInt().toString() else String.format(Locale.US, "%.1f", it)
             comments.add("BPM=$bStr")

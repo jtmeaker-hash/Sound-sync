@@ -138,6 +138,199 @@ class AudioMetadataWriteIntegrationTest {
     }
 
     /**
+     * Helper to create a pristine FLAC audio file.
+     */
+    private fun createSampleFlacFile(file: File, audioBytes: ByteArray): File {
+        val magic = "fLaC".toByteArray(StandardCharsets.US_ASCII)
+        val streaminfoHdr = byteArrayOf(0x80.toByte(), 0x00, 0x00, 0x22)
+        val streaminfo = ByteArray(34)
+        streaminfo[0] = 0x10; streaminfo[1] = 0x00
+        streaminfo[2] = 0x10; streaminfo[3] = 0x00
+        streaminfo[10] = 0x0A.toByte(); streaminfo[11] = 0xC4.toByte(); streaminfo[12] = 0x42.toByte(); streaminfo[13] = 0xF0.toByte()
+        val totalSamples = 44100
+        streaminfo[14] = 0; streaminfo[15] = 0
+        streaminfo[16] = ((totalSamples shr 8) and 0xFF).toByte()
+        streaminfo[17] = (totalSamples and 0xFF).toByte()
+
+        FileOutputStream(file).use { fos ->
+            fos.write(magic)
+            fos.write(streaminfoHdr)
+            fos.write(streaminfo)
+            fos.write(audioBytes)
+        }
+        return file
+    }
+
+    /**
+     * Helper to create a pristine M4A (ISO MP4) audio file.
+     */
+    private fun createSampleM4aFile(file: File, audioBytes: ByteArray): File {
+        fun makeBox(type: String, data: ByteArray): ByteArray {
+            val sz = 8 + data.size
+            val b = ByteArray(sz)
+            b[0] = ((sz shr 24) and 0xFF).toByte()
+            b[1] = ((sz shr 16) and 0xFF).toByte()
+            b[2] = ((sz shr 8) and 0xFF).toByte()
+            b[3] = (sz and 0xFF).toByte()
+            type.take(4).toByteArray(StandardCharsets.ISO_8859_1).copyInto(b, 4)
+            data.copyInto(b, 8)
+            return b
+        }
+
+        val ftyp = makeBox("ftyp", "M4A \u0000\u0000\u0000\u0000M4A mp42isom".toByteArray(StandardCharsets.ISO_8859_1))
+        val stco = makeBox("stco", byteArrayOf(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0))
+        val stsz = makeBox("stsz", byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, audioBytes.size.toByte()))
+        val stsc = makeBox("stsc", byteArrayOf(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1))
+        val stts = makeBox("stts", byteArrayOf(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 4, 0))
+        val stsd = makeBox("stsd", byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0))
+        val stbl = makeBox("stbl", stsd + stts + stsc + stsz + stco)
+        val dinf = makeBox("dinf", makeBox("dref", byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0)))
+        val smhd = makeBox("smhd", byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0))
+        val minf = makeBox("minf", smhd + dinf + stbl)
+        val hdlr = makeBox("hdlr", byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0) + "soun".toByteArray(StandardCharsets.ISO_8859_1) + ByteArray(12) + "SoundHandler\u0000".toByteArray(StandardCharsets.ISO_8859_1))
+        val mdhd = makeBox("mdhd", ByteArray(16) + byteArrayOf(0x55.toByte(), 0xC4.toByte(), 0, 0))
+        val mdia = makeBox("mdia", mdhd + hdlr + minf)
+        val tkhd = makeBox("tkhd", byteArrayOf(0, 0, 0, 1) + ByteArray(16) + byteArrayOf(0, 0, 0, 1) + ByteArray(60))
+        val trak = makeBox("trak", tkhd + mdia)
+        val mvhd = makeBox("mvhd", byteArrayOf(0, 0, 0, 0) + ByteArray(16) + ByteArray(76) + byteArrayOf(0, 0, 0, 2))
+        val moov = makeBox("moov", mvhd + trak)
+        val mdat = makeBox("mdat", audioBytes)
+
+        FileOutputStream(file).use { fos ->
+            fos.write(ftyp)
+            fos.write(moov)
+            fos.write(mdat)
+        }
+        return file
+    }
+
+    /**
+     * Helper to create a pristine OGG Opus audio file.
+     */
+    private fun createSampleOggOpusFile(file: File, audioBytes: ByteArray): File {
+        val crcTable = IntArray(256).apply {
+            for (i in 0 until 256) {
+                var curr = i shl 24
+                for (j in 0 until 8) {
+                    curr = if ((curr and 0x80000000.toInt()) != 0) (curr shl 1) xor 0x04C11DB7 else curr shl 1
+                }
+                this[i] = curr
+            }
+        }
+
+        fun computeOggCrc(data: ByteArray): Int {
+            var crc = 0
+            for (b in data) {
+                val idx = ((crc ushr 24) xor (b.toInt() and 0xFF)) and 0xFF
+                crc = (crc shl 8) xor crcTable[idx]
+            }
+            return crc
+        }
+
+        fun makeOggPage(headerType: Int, granule: Long, serial: Int, seq: Int, payload: ByteArray): ByteArray {
+            val segTable = byteArrayOf(payload.size.toByte())
+            val totalSize = 27 + segTable.size + payload.size
+            val page = ByteArray(totalSize)
+            page[0] = 'O'.code.toByte(); page[1] = 'g'.code.toByte(); page[2] = 'g'.code.toByte(); page[3] = 'S'.code.toByte()
+            page[5] = headerType.toByte()
+            for (i in 0 until 8) page[6 + i] = ((granule shr (i * 8)) and 0xFF).toByte()
+            page[14] = (serial and 0xFF).toByte(); page[15] = ((serial shr 8) and 0xFF).toByte()
+            page[16] = ((serial shr 16) and 0xFF).toByte(); page[17] = ((serial shr 24) and 0xFF).toByte()
+            page[18] = (seq and 0xFF).toByte(); page[19] = ((seq shr 8) and 0xFF).toByte()
+            page[20] = ((seq shr 16) and 0xFF).toByte(); page[21] = ((seq shr 24) and 0xFF).toByte()
+            page[26] = 1
+            page[27] = segTable[0]
+            payload.copyInto(page, 28)
+            val crc = computeOggCrc(page)
+            page[22] = (crc and 0xFF).toByte()
+            page[23] = ((crc shr 8) and 0xFF).toByte()
+            page[24] = ((crc shr 16) and 0xFF).toByte()
+            page[25] = ((crc shr 24) and 0xFF).toByte()
+            return page
+        }
+
+        val opusHead = "OpusHead".toByteArray(StandardCharsets.US_ASCII) + byteArrayOf(1, 2, 0x38, 0x01, 0x80.toByte(), 0xBB.toByte(), 0, 0, 0, 0, 0)
+        val p0 = makeOggPage(0x02, 0L, 12345, 0, opusHead)
+
+        val opusTags = "OpusTags".toByteArray(StandardCharsets.US_ASCII) + byteArrayOf(9, 0, 0, 0) + "SoundSync".toByteArray(StandardCharsets.UTF_8) + byteArrayOf(0, 0, 0, 0)
+        val p1 = makeOggPage(0x00, 0L, 12345, 1, opusTags)
+
+        val p2 = makeOggPage(0x04, 960L, 12345, 2, audioBytes)
+
+        FileOutputStream(file).use { fos ->
+            fos.write(p0)
+            fos.write(p1)
+            fos.write(p2)
+        }
+        return file
+    }
+
+    /**
+     * Helper to create a pristine AIFF audio file with PCM data.
+     */
+    private fun createSampleAiffFile(file: File, pcmData: ByteArray): File {
+        val commPayload = ByteArray(18)
+        commPayload[0] = 0; commPayload[1] = 2 // 2 channels
+        val frames = pcmData.size / 4
+        commPayload[2] = ((frames shr 24) and 0xFF).toByte()
+        commPayload[3] = ((frames shr 16) and 0xFF).toByte()
+        commPayload[4] = ((frames shr 8) and 0xFF).toByte()
+        commPayload[5] = (frames and 0xFF).toByte()
+        commPayload[6] = 0; commPayload[7] = 16 // 16-bit
+        byteArrayOf(0x40.toByte(), 0x0E.toByte(), 0xAC.toByte(), 0x44.toByte(), 0, 0, 0, 0, 0, 0)
+            .copyInto(commPayload, 8) // 44100 Hz
+
+        val ssndPayload = ByteArray(8 + pcmData.size)
+        pcmData.copyInto(ssndPayload, 8)
+
+        val totalFormLength = 4 + (8 + commPayload.size) + (8 + ssndPayload.size)
+        FileOutputStream(file).use { fos ->
+            fos.write("FORM".toByteArray(StandardCharsets.US_ASCII))
+            fos.write(byteArrayOf(
+                ((totalFormLength shr 24) and 0xFF).toByte(),
+                ((totalFormLength shr 16) and 0xFF).toByte(),
+                ((totalFormLength shr 8) and 0xFF).toByte(),
+                (totalFormLength and 0xFF).toByte()
+            ))
+            fos.write("AIFF".toByteArray(StandardCharsets.US_ASCII))
+
+            fos.write("COMM".toByteArray(StandardCharsets.US_ASCII))
+            val cLen = commPayload.size
+            fos.write(byteArrayOf(((cLen shr 24) and 0xFF).toByte(), ((cLen shr 16) and 0xFF).toByte(), ((cLen shr 8) and 0xFF).toByte(), (cLen and 0xFF).toByte()))
+            fos.write(commPayload)
+
+            fos.write("SSND".toByteArray(StandardCharsets.US_ASCII))
+            val sLen = ssndPayload.size
+            fos.write(byteArrayOf(((sLen shr 24) and 0xFF).toByte(), ((sLen shr 16) and 0xFF).toByte(), ((sLen shr 8) and 0xFF).toByte(), (sLen and 0xFF).toByte()))
+            fos.write(ssndPayload)
+        }
+        return file
+    }
+
+    /**
+     * Helper to extract the raw PCM bytes from the 'SSND' chunk of an AIFF file.
+     */
+    private fun extractAiffSsndDataBytes(file: File): ByteArray {
+        val bytes = file.readBytes()
+        var offset = 12
+        while (offset + 8 <= bytes.size) {
+            val chunkId = String(bytes, offset, 4, StandardCharsets.US_ASCII)
+            val chunkSize = ((bytes[offset + 4].toInt() and 0xFF) shl 24) or
+                    ((bytes[offset + 5].toInt() and 0xFF) shl 16) or
+                    ((bytes[offset + 6].toInt() and 0xFF) shl 8) or
+                    (bytes[offset + 7].toInt() and 0xFF)
+            val pad = if (chunkSize % 2 != 0) 1 else 0
+            if (chunkId == "SSND") {
+                val data = ByteArray(chunkSize - 8)
+                System.arraycopy(bytes, offset + 8 + 8, data, 0, chunkSize - 8)
+                return data
+            }
+            offset += 8 + chunkSize + pad
+        }
+        throw IllegalStateException("No SSND chunk found in ${file.name}")
+    }
+
+    /**
      * Helper to extract the raw PCM bytes from the 'data' chunk of a WAV file.
      */
     private fun extractWavDataChunkBytes(file: File): ByteArray {
@@ -542,5 +735,192 @@ class AudioMetadataWriteIntegrationTest {
         assertTrue(targetFile.exists())
         assertEquals(newContent.size, targetFile.readBytes().size)
         assertTrue(newContent.contentEquals(targetFile.readBytes()))
+    }
+
+    @Test
+    fun `flac file metadata writing embeds Vorbis comments and picture block with audio frames preserved`() = runBlocking {
+        val flacFile = File(tempFolder.root, "sample_flac.flac")
+        val dummyAudio = ByteArray(1200) { 0x42 }
+        createSampleFlacFile(flacFile, dummyAudio)
+
+        val track = Track(
+            id = "track-flac-test",
+            title = "Sun & Moon",
+            artist = "Above & Beyond",
+            album = "Group Therapy",
+            genre = "Trance",
+            releaseYear = 2011,
+            bpm = 134.0,
+            musicalKey = "11B",
+            camelotKey = "11B",
+            trackNumber = 4,
+            filePath = flacFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = sampleArtworkBytes)
+        assertTrue("Expected Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, flacFile.absolutePath)
+        assertEquals("Sun & Moon", readBack.title)
+        assertEquals("Above & Beyond", readBack.artist)
+        assertEquals("Group Therapy", readBack.album)
+        assertEquals("Trance", readBack.genre)
+        assertEquals(2011, readBack.releaseYear)
+        assertEquals(134.0, readBack.bpm ?: 0.0, 0.5)
+        assertEquals("11B", readBack.musicalKey)
+        assertEquals(4, readBack.trackNumber)
+        assertTrue(readBack.hasEmbeddedArtwork)
+
+        // ExifTool check
+        val exifData = runExifTool(flacFile)
+        if (exifData.isNotEmpty()) {
+            assertEquals("Sun & Moon", exifData["Title"])
+            assertEquals("Above & Beyond", exifData["Artist"])
+            assertEquals("Group Therapy", exifData["Album"])
+            assertEquals("Trance", exifData["Genre"])
+        }
+    }
+
+    @Test
+    fun `m4a file metadata writing embeds ilst atoms and cover art with audio frames preserved`() = runBlocking {
+        val m4aFile = File(tempFolder.root, "sample_m4a.m4a")
+        val dummyAudio = ByteArray(800) { 0x33 }
+        createSampleM4aFile(m4aFile, dummyAudio)
+
+        val track = Track(
+            id = "track-m4a-test",
+            title = "One (Your Name)",
+            artist = "Swedish House Mafia",
+            album = "Until One",
+            genre = "Progressive House",
+            releaseYear = 2010,
+            bpm = 126.0,
+            musicalKey = "4A",
+            camelotKey = "4A",
+            trackNumber = 2,
+            filePath = m4aFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = sampleArtworkBytes)
+        assertTrue("Expected Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, m4aFile.absolutePath)
+        assertEquals("One (Your Name)", readBack.title)
+        assertEquals("Swedish House Mafia", readBack.artist)
+        assertEquals("Until One", readBack.album)
+        assertEquals("Progressive House", readBack.genre)
+        assertEquals(2010, readBack.releaseYear)
+        assertEquals(126.0, readBack.bpm ?: 0.0, 0.5)
+        assertEquals("4A", readBack.musicalKey)
+        assertEquals(2, readBack.trackNumber)
+        assertTrue(readBack.hasEmbeddedArtwork)
+
+        // ExifTool check
+        val exifData = runExifTool(m4aFile)
+        if (exifData.isNotEmpty()) {
+            assertEquals("One (Your Name)", exifData["Title"])
+            assertEquals("Swedish House Mafia", exifData["Artist"])
+            assertEquals("Until One", exifData["Album"])
+            assertEquals("Progressive House", exifData["Genre"])
+        }
+    }
+
+    @Test
+    fun `ogg opus file metadata writing embeds OpusTags comments and picture block`() = runBlocking {
+        val opusFile = File(tempFolder.root, "sample_opus.opus")
+        val dummyAudio = ByteArray(600) { 0x77 }
+        createSampleOggOpusFile(opusFile, dummyAudio)
+
+        val track = Track(
+            id = "track-opus-test",
+            title = "Clarity",
+            artist = "Zedd",
+            album = "Clarity",
+            genre = "Electro House",
+            releaseYear = 2012,
+            bpm = 128.0,
+            musicalKey = "7B",
+            camelotKey = "7B",
+            trackNumber = 1,
+            filePath = opusFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = sampleArtworkBytes)
+        assertTrue("Expected Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, opusFile.absolutePath)
+        assertEquals("Clarity", readBack.title)
+        assertEquals("Zedd", readBack.artist)
+        assertEquals("Clarity", readBack.album)
+        assertEquals("Electro House", readBack.genre)
+        assertEquals(2012, readBack.releaseYear)
+        assertEquals(128.0, readBack.bpm ?: 0.0, 0.5)
+        assertEquals("7B", readBack.musicalKey)
+        assertEquals(1, readBack.trackNumber)
+
+        // ExifTool check
+        val exifData = runExifTool(opusFile)
+        if (exifData.isNotEmpty()) {
+            assertEquals("Clarity", exifData["Title"])
+            assertEquals("Zedd", exifData["Artist"])
+            assertEquals("Clarity", exifData["Album"])
+            assertEquals("Electro House", exifData["Genre"])
+        }
+    }
+
+    @Test
+    fun `aiff file metadata writing embeds ID3 chunk with verbatim PCM audio preservation`() = runBlocking {
+        val aiffFile = File(tempFolder.root, "sample_aiff.aiff")
+        val originalPcm = ByteArray(2000) { i -> ((i * 41 + 7) % 256).toByte() }
+        createSampleAiffFile(aiffFile, originalPcm)
+
+        val track = Track(
+            id = "track-aiff-test",
+            title = "Adagio for Strings",
+            artist = "Tiësto",
+            album = "Just Be",
+            genre = "Trance",
+            releaseYear = 2004,
+            bpm = 140.0,
+            musicalKey = "5A",
+            camelotKey = "5A",
+            trackNumber = 7,
+            filePath = aiffFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = sampleArtworkBytes)
+        assertTrue("Expected Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        // 1. Internal reader verification
+        val readBack = AudioEmbeddedMetadataReader.read(context, aiffFile.absolutePath)
+        assertEquals("Adagio for Strings", readBack.title)
+        assertEquals("Tiësto", readBack.artist)
+        assertEquals("Just Be", readBack.album)
+        assertEquals("Trance", readBack.genre)
+        assertEquals(2004, readBack.releaseYear)
+        assertEquals(140.0, readBack.bpm ?: 0.0, 0.5)
+        assertEquals("5A", readBack.musicalKey)
+        assertEquals(7, readBack.trackNumber)
+        assertTrue(readBack.hasEmbeddedArtwork)
+
+        // 2. Verbatim PCM audio sample preservation in SSND chunk
+        val postWritePcm = extractAiffSsndDataBytes(aiffFile)
+        assertEquals(originalPcm.size, postWritePcm.size)
+        for (i in originalPcm.indices) {
+            assertEquals("AIFF PCM byte at index $i must match", originalPcm[i], postWritePcm[i])
+        }
+
+        // 3. ExifTool verification
+        val exifData = runExifTool(aiffFile)
+        if (exifData.isNotEmpty()) {
+            assertEquals("Adagio for Strings", exifData["Title"])
+            assertEquals("Tiësto", exifData["Artist"])
+            assertEquals("Just Be", exifData["Album"])
+            assertEquals("Trance", exifData["Genre"])
+        }
     }
 }

@@ -53,7 +53,7 @@ class MetadataFileWriter(
 
     companion object {
         private const val TAG = "MetadataFileWriter"
-        private val SUPPORTED_EXTENSIONS = setOf("wav", "mp3", "flac", "m4a", "mp4", "aac", "ogg", "opus")
+        private val SUPPORTED_EXTENSIONS = setOf("wav", "mp3", "flac", "m4a", "mp4", "aac", "ogg", "opus", "aif", "aiff")
     }
 
     private fun isFileWritable(file: File): Boolean {
