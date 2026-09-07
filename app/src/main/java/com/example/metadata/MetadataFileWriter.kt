@@ -1,6 +1,7 @@
 package com.example.metadata
 
 import android.content.Context
+import android.content.IntentSender
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
@@ -10,13 +11,13 @@ import com.example.model.MetadataWriteState
 import com.example.model.Track
 import com.example.storage.AudioTagWriter
 import com.example.storage.CompleteTagPayload
+import com.example.storage.StorageWritePermissionHelper
+import com.example.storage.TagWriteResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.file.Files
-import java.nio.file.attribute.PosixFilePermission
 import java.util.Locale
 
 /**
@@ -28,17 +29,26 @@ import java.util.Locale
  */
 sealed interface MetadataWriteResult {
     data class Written(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
+    data class AlreadyInSync(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
     data class Partial(val verifiedTags: EmbeddedAudioMetadata, val unverifiedFields: List<String>) : MetadataWriteResult
+    data class Skipped(val reason: String) : MetadataWriteResult
     data class Unsupported(val reason: String) : MetadataWriteResult
-    data class Failed(val reason: String) : MetadataWriteResult
+    data class Failed(val reason: String, val cause: Throwable? = null) : MetadataWriteResult
     data class VerificationFailed(val field: String, val expected: String, val actual: String) : MetadataWriteResult
-    data class PermissionRequired(val path: String) : MetadataWriteResult
+    data class PermissionRequired(
+        val path: String,
+        val intentSender: IntentSender? = null,
+        val uri: Uri? = null,
+        val reason: String = "Permission required to access file or content URI",
+        val exception: Throwable? = null
+    ) : MetadataWriteResult
     data class ReadOnlyFile(val path: String) : MetadataWriteResult
 
     val writeState: MetadataWriteState
         get() = when (this) {
-            is Written -> MetadataWriteState.FILE_WRITE_SUCCESS
+            is Written, is AlreadyInSync -> MetadataWriteState.FILE_WRITE_SUCCESS
             is Partial -> MetadataWriteState.FILE_WRITE_PARTIAL
+            is Skipped -> MetadataWriteState.DATABASE_ONLY
             is Unsupported -> MetadataWriteState.FORMAT_WRITE_UNSUPPORTED
             is PermissionRequired -> MetadataWriteState.PERMISSION_REQUIRED
             is ReadOnlyFile -> MetadataWriteState.READ_ONLY_FILE
@@ -57,14 +67,7 @@ class MetadataFileWriter(
     }
 
     private fun isFileWritable(file: File): Boolean {
-        if (!file.exists() || !file.isFile) return false
-        if (file.canWrite()) return true
-        return try {
-            FileOutputStream(file, true).use {}
-            true
-        } catch (_: Throwable) {
-            false
-        }
+        return StorageWritePermissionHelper.isDirectlyWritableFile(file)
     }
 
     private suspend fun updateDbState(trackId: String, state: MetadataWriteState) {
@@ -92,67 +95,123 @@ class MetadataFileWriter(
         }
 
         val isContentUri = path.startsWith("content://")
-        val ext: String
+        var ext: String = ""
+        var mimeType: String = "audio/mpeg"
         var targetWritePath = path
 
         if (isContentUri) {
-            var detectedExt = ""
+            val uri = Uri.parse(path)
             try {
-                val uri = Uri.parse(path)
+                mimeType = context.contentResolver.getType(uri).orEmpty().lowercase(Locale.ROOT)
                 context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) {
                         val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                         if (idx != -1) {
                             val name = cursor.getString(idx)
                             if (!name.isNullOrBlank()) {
-                                detectedExt = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                                ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
                             }
                         }
                     }
                 }
-                if (detectedExt.isBlank()) {
-                    val mime = context.contentResolver.getType(uri).orEmpty().lowercase(Locale.ROOT)
-                    detectedExt = when {
-                        mime.contains("wav") -> "wav"
-                        mime.contains("flac") -> "flac"
-                        mime.contains("mp4") || mime.contains("m4a") || mime.contains("aac") -> "m4a"
-                        mime.contains("ogg") -> "ogg"
-                        mime.contains("opus") -> "opus"
-                        else -> "mp3"
-                    }
-                }
             } catch (e: SecurityException) {
                 Log.w(TAG, "Permission required for SAF URI: $path", e)
-                val res = MetadataWriteResult.PermissionRequired(path)
+                val intentSender = StorageWritePermissionHelper.createSingleWriteRequest(context, uri, e)
+                PhysicalTagWriteLogger.logFailure(
+                    tag = TAG,
+                    track = track,
+                    uri = path,
+                    filePath = null,
+                    mimeType = mimeType,
+                    extension = ext.ifBlank { "unknown" },
+                    isWritable = false,
+                    exception = e
+                )
+                val res = MetadataWriteResult.PermissionRequired(path, intentSender, uri, e.message ?: "Permission required")
                 updateDbState(track.id, res.writeState)
                 return@withContext res
             } catch (_: Exception) {}
-            ext = detectedExt.ifBlank { "mp3" }
+
+            if (ext.isBlank()) {
+                ext = when {
+                    mimeType.contains("wav") -> "wav"
+                    mimeType.contains("flac") -> "flac"
+                    mimeType.contains("mp4") || mimeType.contains("m4a") -> "m4a"
+                    mimeType.contains("aac") -> "aac"
+                    mimeType.contains("ogg") -> "ogg"
+                    mimeType.contains("opus") -> "opus"
+                    mimeType.contains("aiff") || mimeType.contains("aif") -> "aiff"
+                    else -> "mp3"
+                }
+            }
         } else {
             val file = File(path)
+            ext = file.extension.lowercase(Locale.ROOT)
+            mimeType = when (ext) {
+                "wav" -> "audio/wav"
+                "flac" -> "audio/flac"
+                "m4a", "mp4" -> "audio/mp4"
+                "aac" -> "audio/aac"
+                "ogg" -> "audio/ogg"
+                "opus" -> "audio/opus"
+                "aif", "aiff" -> "audio/x-aiff"
+                else -> "audio/mpeg"
+            }
+
             if (!file.exists()) {
-                val res = MetadataWriteResult.Failed("File does not exist: $path")
+                val ex = java.io.FileNotFoundException("File does not exist: $path")
+                PhysicalTagWriteLogger.logFailure(
+                    tag = TAG,
+                    track = track,
+                    uri = path,
+                    filePath = path,
+                    mimeType = mimeType,
+                    extension = ext,
+                    isWritable = false,
+                    exception = ex
+                )
+                val res = MetadataWriteResult.Failed("File does not exist: $path", ex)
                 updateDbState(track.id, res.writeState)
                 return@withContext res
             }
+
             if (!isFileWritable(file)) {
                 Log.w(TAG, "Direct file write not permitted for $path, probing MediaStore URI fallback...")
-                val mediaStoreUri = AudioTagWriter.getMediaStoreUriForPath(context, file.absolutePath)
+                val mediaStoreUri = StorageWritePermissionHelper.resolveTargetUri(context, track)
                 if (mediaStoreUri != null) {
                     targetWritePath = mediaStoreUri.toString()
                     Log.i(TAG, "Resolved MediaStore content URI fallback: $targetWritePath")
                 } else {
-                    Log.w(TAG, "File is not writable (read-only): $path")
+                    val ex = SecurityException("File is not writable (read-only on storage): $path")
+                    PhysicalTagWriteLogger.logFailure(
+                        tag = TAG,
+                        track = track,
+                        uri = path,
+                        filePath = path,
+                        mimeType = mimeType,
+                        extension = ext,
+                        isWritable = false,
+                        exception = ex
+                    )
                     val res = MetadataWriteResult.ReadOnlyFile(path)
                     updateDbState(track.id, res.writeState)
                     return@withContext res
                 }
             }
-            ext = file.extension.lowercase(Locale.ROOT)
         }
 
         if (ext !in SUPPORTED_EXTENSIONS) {
             Log.w(TAG, "Format .$ext not currently supported by tag writer.")
+            PhysicalTagWriteLogger.logFailure(
+                tag = TAG,
+                track = track,
+                uri = targetWritePath,
+                filePath = path.takeIf { !it.startsWith("content://") },
+                mimeType = mimeType,
+                extension = ext,
+                isWritable = true,
+                exception = UnsupportedOperationException("Unsupported container .$ext")
+            )
             val res = MetadataWriteResult.Unsupported(
                 "A format-preserving tag writer is not available for .$ext files; audio preserved untouched."
             )
@@ -164,7 +223,7 @@ class MetadataFileWriter(
         updateDbState(track.id, MetadataWriteState.WRITING_TO_FILE)
 
         // Sensible merge: read existing embedded metadata before overwriting
-        val existing = AudioEmbeddedMetadataReader.read(context, path)
+        val existing = AudioEmbeddedMetadataReader.read(context, targetWritePath)
 
         val mergedTitle = track.title.takeIf { it.isNotBlank() && it != "Unknown Title" }
             ?: existing.title?.takeIf { it.isNotBlank() }
@@ -173,6 +232,10 @@ class MetadataFileWriter(
         val mergedArtist = track.artist.takeIf { it.isNotBlank() && it != "Unknown Artist" }
             ?: existing.artist?.takeIf { it.isNotBlank() }
             ?: track.artist
+
+        val mergedAlbumArtist = track.albumArtist.takeIf { it.isNotBlank() && it != "Unknown Artist" }
+            ?: existing.albumArtist?.takeIf { it.isNotBlank() }
+            ?: mergedArtist
 
         val mergedAlbum = track.album.takeIf { it.isNotBlank() && it != "Single" && it != "Unknown Album" }
             ?: existing.album?.takeIf { it.isNotBlank() && it != "Single" && it != "Unknown Album" }
@@ -200,12 +263,25 @@ class MetadataFileWriter(
                     if (f.exists() && f.canRead()) f.readBytes() else null
                 } catch (_: Exception) { null }
             }
+            ?: try {
+                ArtworkCache(context).getCachedArtworkFile(track.artist, track.album)?.let { f ->
+                    if (f.exists() && f.canRead()) f.readBytes() else null
+                }
+            } catch (_: Throwable) { null }
+
+        val activeArtworkMime = activeArtworkBytes?.let { bytes ->
+            if (bytes.size > 8 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte()) {
+                "image/png"
+            } else {
+                "image/jpeg"
+            }
+        } ?: artworkMimeType
 
         val payload = CompleteTagPayload(
             title = mergedTitle,
             artist = mergedArtist,
             album = mergedAlbum,
-            albumArtist = mergedArtist,
+            albumArtist = mergedAlbumArtist,
             genre = mergedGenre,
             trackNumber = mergedTrackNumber,
             discNumber = mergedDiscNumber,
@@ -216,47 +292,136 @@ class MetadataFileWriter(
             composer = mergedComposer,
             comment = mergedComment,
             artworkBytes = activeArtworkBytes,
-            artworkMimeType = artworkMimeType
+            artworkMimeType = activeArtworkMime
         )
 
-        val writeSuccess = try {
-            AudioTagWriter.writeCompleteTags(context, targetWritePath, payload)
+        val writeTagResult = try {
+            AudioTagWriter.writeCompleteTagsWithResult(context, targetWritePath, payload)
         } catch (e: SecurityException) {
-            Log.w(TAG, "SecurityException writing tags to $path", e)
-            val res = MetadataWriteResult.PermissionRequired(path)
+            val uri = if (targetWritePath.startsWith("content://")) Uri.parse(targetWritePath) else null
+            val intentSender = uri?.let { StorageWritePermissionHelper.createSingleWriteRequest(context, it, e) }
+            PhysicalTagWriteLogger.logFailure(
+                tag = TAG,
+                track = track,
+                uri = targetWritePath,
+                filePath = path.takeIf { !it.startsWith("content://") },
+                mimeType = mimeType,
+                extension = ext,
+                isWritable = false,
+                exception = e
+            )
+            val res = MetadataWriteResult.PermissionRequired(targetWritePath, intentSender, uri, e.message ?: "Permission required", e)
             updateDbState(track.id, res.writeState)
             return@withContext res
         } catch (e: Exception) {
-            Log.e(TAG, "Exception writing tags to $path: ${e.message}", e)
-            val res = MetadataWriteResult.Failed("Exception writing tags: ${e.message}")
+            PhysicalTagWriteLogger.logFailure(
+                tag = TAG,
+                track = track,
+                uri = targetWritePath,
+                filePath = path.takeIf { !it.startsWith("content://") },
+                mimeType = mimeType,
+                extension = ext,
+                isWritable = false,
+                exception = e
+            )
+            val res = MetadataWriteResult.Failed("Exception writing tags: ${e.message}", e)
             updateDbState(track.id, res.writeState)
             return@withContext res
         }
 
-        if (!writeSuccess) {
-            Log.e(TAG, "AudioTagWriter returned false for $path")
-            val res = MetadataWriteResult.Failed("AudioTagWriter failed writing tags to file")
-            updateDbState(track.id, res.writeState)
-            return@withContext res
+        when (writeTagResult) {
+            is TagWriteResult.PermissionRequired -> {
+                PhysicalTagWriteLogger.logFailure(
+                    tag = TAG,
+                    track = track,
+                    uri = targetWritePath,
+                    filePath = path.takeIf { !it.startsWith("content://") },
+                    mimeType = mimeType,
+                    extension = ext,
+                    isWritable = false,
+                    exception = writeTagResult.cause
+                )
+                val res = MetadataWriteResult.PermissionRequired(
+                    path = targetWritePath,
+                    intentSender = writeTagResult.intentSender,
+                    uri = writeTagResult.uri,
+                    reason = writeTagResult.cause.message ?: "Permission required to access file or content URI"
+                )
+                updateDbState(track.id, res.writeState)
+                return@withContext res
+            }
+            is TagWriteResult.Unsupported -> {
+                PhysicalTagWriteLogger.logFailure(
+                    tag = TAG,
+                    track = track,
+                    uri = targetWritePath,
+                    filePath = path.takeIf { !it.startsWith("content://") },
+                    mimeType = mimeType,
+                    extension = ext,
+                    isWritable = true,
+                    exception = UnsupportedOperationException(writeTagResult.message)
+                )
+                val res = MetadataWriteResult.Unsupported(writeTagResult.message)
+                updateDbState(track.id, res.writeState)
+                return@withContext res
+            }
+            is TagWriteResult.Failed -> {
+                PhysicalTagWriteLogger.logFailure(
+                    tag = TAG,
+                    track = track,
+                    uri = targetWritePath,
+                    filePath = path.takeIf { !it.startsWith("content://") },
+                    mimeType = mimeType,
+                    extension = ext,
+                    isWritable = false,
+                    exception = writeTagResult.cause ?: Exception(writeTagResult.message)
+                )
+                val res = MetadataWriteResult.Failed(writeTagResult.message, writeTagResult.cause)
+                updateDbState(track.id, res.writeState)
+                return@withContext res
+            }
+            is TagWriteResult.Success -> {
+                // Proceed to readback verification
+            }
         }
 
-        Log.d(TAG, "File write completed successfully for $path; starting read-back verification...")
+        Log.d(TAG, "File write completed successfully for $targetWritePath; starting read-back verification...")
 
         // Mandatory read-back verification: close writer, reopen with reader
-        val verified = AudioEmbeddedMetadataReader.read(context, path)
+        val verified = AudioEmbeddedMetadataReader.read(context, targetWritePath)
         Log.d(TAG, "File reread result: title=\"${verified.title}\", artist=\"${verified.artist}\", album=\"${verified.album}\", bpm=${verified.bpm}, key=\"${verified.musicalKey}\", artwork=${verified.hasEmbeddedArtwork} (${verified.embeddedArtworkSize} bytes)")
 
         // 1. Verify title
-        if (!mergedTitle.isNullOrBlank() && (verified.title == null || !verified.title.equals(mergedTitle, ignoreCase = true))) {
-            Log.e(TAG, "Write verification failed on title: expected \"$mergedTitle\", found \"${verified.title}\"")
+        if (!mergedTitle.isNullOrBlank() && (verified.title == null || !verified.title.trim().equals(mergedTitle.trim(), ignoreCase = true))) {
+            val ex = IllegalStateException("Write verification failed on title: expected \"$mergedTitle\", found \"${verified.title}\"")
+            PhysicalTagWriteLogger.logFailure(
+                tag = TAG,
+                track = track,
+                uri = targetWritePath,
+                filePath = path.takeIf { !it.startsWith("content://") },
+                mimeType = mimeType,
+                extension = ext,
+                isWritable = true,
+                exception = ex
+            )
             val res = MetadataWriteResult.VerificationFailed("title", mergedTitle, verified.title ?: "<null>")
             updateDbState(track.id, res.writeState)
             return@withContext res
         }
 
         // 2. Verify artist
-        if (!mergedArtist.isNullOrBlank() && (verified.artist == null || !verified.artist.equals(mergedArtist, ignoreCase = true))) {
-            Log.e(TAG, "Write verification failed on artist: expected \"$mergedArtist\", found \"${verified.artist}\"")
+        if (!mergedArtist.isNullOrBlank() && (verified.artist == null || !verified.artist.trim().equals(mergedArtist.trim(), ignoreCase = true))) {
+            val ex = IllegalStateException("Write verification failed on artist: expected \"$mergedArtist\", found \"${verified.artist}\"")
+            PhysicalTagWriteLogger.logFailure(
+                tag = TAG,
+                track = track,
+                uri = targetWritePath,
+                filePath = path.takeIf { !it.startsWith("content://") },
+                mimeType = mimeType,
+                extension = ext,
+                isWritable = true,
+                exception = ex
+            )
             val res = MetadataWriteResult.VerificationFailed("artist", mergedArtist, verified.artist ?: "<null>")
             updateDbState(track.id, res.writeState)
             return@withContext res
@@ -267,7 +432,7 @@ class MetadataFileWriter(
 
         // 3. Verify album
         if (!mergedAlbum.isNullOrBlank() && mergedAlbum != "Single" && mergedAlbum != "Unknown Album") {
-            if (verified.album == null || !verified.album.equals(mergedAlbum, ignoreCase = true)) {
+            if (verified.album == null || !verified.album.trim().equals(mergedAlbum.trim(), ignoreCase = true)) {
                 Log.w(TAG, "Write verification notice on album: expected \"$mergedAlbum\", found \"${verified.album}\"")
                 unverifiedFields.add("album")
             }
@@ -308,7 +473,7 @@ class MetadataFileWriter(
         }
 
         val result = if (unverifiedFields.isEmpty()) {
-            Log.d(TAG, "Full file write and read-back verification PASSED for $path")
+            Log.d(TAG, "Full file write and read-back verification PASSED for $targetWritePath")
             MetadataWriteResult.Written(verified)
         } else {
             Log.w(TAG, "File write succeeded with unverified optional fields: $unverifiedFields")

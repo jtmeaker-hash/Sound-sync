@@ -18,6 +18,7 @@ import com.example.data.AppDatabase
 import com.example.data.SourceFolderEntity
 import com.example.data.TrackEntity
 import com.example.metadata.MetadataFileWriteQueue
+import com.example.metadata.PendingWritePermissionRequest
 import com.example.metadata.PushMetadataProgress
 import com.example.metadata.PushMetadataReport
 import com.example.model.AudioQualityRating
@@ -2744,13 +2745,25 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         MetadataFileWriteQueue.getInstance(getApplication()).lastPushReport
     }
 
+    val pendingWritePermissionRequest: StateFlow<PendingWritePermissionRequest?> by lazy {
+        MetadataFileWriteQueue.getInstance(getApplication()).pendingPermissionRequest
+    }
+
+    fun onWritePermissionResult(isGranted: Boolean) {
+        MetadataFileWriteQueue.getInstance(getApplication()).onWritePermissionResult(isGranted)
+    }
+
     fun pushMetadataToFiles(forceAll: Boolean = true) {
         val app = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             showSnackbar("Pushing metadata to audio files across entire library...")
             val report = MetadataFileWriteQueue.getInstance(app).pushMetadataToFiles(forceAll = forceAll)
             withContext(Dispatchers.Main) {
-                showSnackbar("Push complete: ${report.successfullyWritten} written, ${report.alreadySynchronized} in sync, ${report.failed} failed")
+                if (report.wasCancelled) {
+                    showSnackbar("Push cancelled: ${report.successfullyWritten} written, ${report.alreadySynchronized} in sync, ${report.failed} failed")
+                } else {
+                    showSnackbar("Push complete: ${report.successfullyWritten} written, ${report.alreadySynchronized} in sync, ${report.failed} failed")
+                }
             }
         }
     }

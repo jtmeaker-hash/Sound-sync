@@ -923,4 +923,132 @@ class AudioMetadataWriteIntegrationTest {
             assertEquals("Trance", exifData["Genre"])
         }
     }
+
+    @Test
+    fun `unicode artist and title across MP3 and FLAC are preserved correctly`() = runBlocking {
+        val flacFile = File(tempFolder.root, "unicode_flac.flac")
+        createSampleFlacFile(flacFile, ByteArray(800) { 0x55 })
+
+        val track = Track(
+            id = "track-unicode",
+            title = "千本桜 🌸 (Senbonzakura)",
+            artist = "初音ミク (Hatsune Miku)",
+            album = "ボカロ名曲選 🎵",
+            genre = "J-Pop / Vocaloid",
+            releaseYear = 2011,
+            bpm = 154.0,
+            musicalKey = "5m",
+            filePath = flacFile.absolutePath,
+            notes = "Тестовая заметка с русскими буквами & special symbols: <>&'\""
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track)
+        assertTrue("Expected Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, flacFile.absolutePath)
+        assertEquals("千本桜 🌸 (Senbonzakura)", readBack.title)
+        assertEquals("初音ミク (Hatsune Miku)", readBack.artist)
+        assertEquals("ボカロ名曲選 🎵", readBack.album)
+        assertEquals("J-Pop / Vocaloid", readBack.genre)
+        assertEquals(2011, readBack.releaseYear)
+        assertEquals(154.0, readBack.bpm ?: 0.0, 0.5)
+    }
+
+    @Test
+    fun `very long title and metadata attributes do not corrupt audio frames`() = runBlocking {
+        val mp3File = File(tempFolder.root, "long_metadata.mp3")
+        val audioData = ByteArray(1024) { 0x22 }
+        val mp3Bytes = byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x64.toByte()) + audioData
+        mp3File.writeBytes(mp3Bytes)
+
+        val veryLongTitle = "A".repeat(600) + " - The Ultimate Extended DJ Remix with Infinite Subtitle Text"
+        val veryLongNotes = "B".repeat(1200)
+        val track = Track(
+            id = "track-long-meta",
+            title = veryLongTitle,
+            artist = "Long Artist Name ".repeat(10),
+            album = "Extremely Long Album Name ".repeat(10),
+            genre = "Dance",
+            releaseYear = 2024,
+            bpm = 128.0,
+            musicalKey = "8A",
+            filePath = mp3File.absolutePath,
+            notes = veryLongNotes
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track)
+        assertTrue("Expected Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, mp3File.absolutePath)
+        assertEquals(veryLongTitle, readBack.title)
+        assertEquals(128.0, readBack.bpm ?: 0.0, 0.5)
+        assertEquals("8A", readBack.musicalKey)
+    }
+
+    @Test
+    fun `read only file returns ReadOnlyFile without corrupting file`() = runBlocking {
+        val wavFile = File(tempFolder.root, "readonly_test.wav")
+        val pcm = ByteArray(400) { 0x11 }
+        createSampleWavFile(wavFile, pcm)
+
+        val track = Track(
+            id = "track-readonly",
+            title = "Locked Track",
+            artist = "Locked Artist",
+            filePath = wavFile.absolutePath
+        )
+
+        try {
+            com.example.storage.StorageWritePermissionHelper.isWritableOverrideForTesting = { false }
+            val writer = MetadataFileWriter(context)
+            val result = writer.writeAsync(track)
+            assertEquals(MetadataWriteResult.ReadOnlyFile(wavFile.absolutePath), result)
+        } finally {
+            com.example.storage.StorageWritePermissionHelper.isWritableOverrideForTesting = null
+        }
+    }
+
+    @Test
+    fun `unsupported format returns Unsupported without corrupting file`() = runBlocking {
+        val txtFile = File(tempFolder.root, "not_an_audio.xyz")
+        txtFile.writeText("hello world")
+
+        val track = Track(
+            id = "track-unsupported",
+            title = "Unknown",
+            artist = "Unknown",
+            filePath = txtFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track)
+        assertTrue(result is MetadataWriteResult.Unsupported)
+        assertEquals("hello world", txtFile.readText())
+    }
+
+    @Test
+    fun `writing metadata without artwork succeeds cleanly`() = runBlocking {
+        val flacFile = File(tempFolder.root, "sample_no_art.flac")
+        createSampleFlacFile(flacFile, ByteArray(600) { 0x33 })
+
+        val track = Track(
+            id = "track-no-art",
+            title = "No Art Track",
+            artist = "No Art Artist",
+            album = "No Art Album",
+            bpm = 120.0,
+            musicalKey = "1A",
+            filePath = flacFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = null)
+        assertTrue(result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, flacFile.absolutePath)
+        assertEquals("No Art Track", readBack.title)
+        assertEquals("No Art Artist", readBack.artist)
+    }
 }

@@ -338,9 +338,16 @@ class MetadataResolver(
                     Log.d("MetadataWriter", "Physical tag writing and readback verification PASSED for ${track.filePath}")
                     finalScanState = MetadataScanState.COMPLETE
                 }
+                is MetadataWriteResult.AlreadyInSync -> {
+                    Log.d("MetadataWriter", "Physical tags already in sync for ${track.filePath}")
+                    finalScanState = MetadataScanState.COMPLETE
+                }
                 is MetadataWriteResult.Partial -> {
                     Log.d("MetadataWriter", "Physical tag writing PASSED (partial) for ${track.filePath}")
                     finalScanState = MetadataScanState.COMPLETE
+                }
+                is MetadataWriteResult.Skipped -> {
+                    Log.d("MetadataWriter", "Physical tag writing skipped: ${writeResult.reason}")
                 }
                 is MetadataWriteResult.VerificationFailed -> {
                     Log.e("MetadataWriter", "Write verification FAILED on field ${writeResult.field}: expected \"${writeResult.expected}\" but found \"${writeResult.actual}\"")

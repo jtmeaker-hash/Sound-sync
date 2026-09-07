@@ -250,7 +250,9 @@ fun TrackInspectorScreen(
                             currentTrack = currentTrack.copy(metadataWriteState = result.writeState.name)
                             val msg = when (result) {
                                 is MetadataWriteResult.Written -> "Successfully embedded metadata in audio file!"
+                                is MetadataWriteResult.AlreadyInSync -> "File metadata is already up to date!"
                                 is MetadataWriteResult.Partial -> "Partially embedded metadata in audio file."
+                                is MetadataWriteResult.Skipped -> "File tag embedding skipped: ${result.reason}"
                                 is MetadataWriteResult.VerificationFailed -> "Verification failed on ${result.field}"
                                 is MetadataWriteResult.PermissionRequired -> "Write permission required!"
                                 is MetadataWriteResult.ReadOnlyFile -> "File is read-only!"

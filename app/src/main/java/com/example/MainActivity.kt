@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -12,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.runtime.LaunchedEffect
@@ -93,6 +95,30 @@ class MainActivity : ComponentActivity() {
                     val isGranted = permissions.values.any { it }
                     Log.d(TAG, "Storage permission result: isGranted=$isGranted")
                     viewModel.onPermissionResult(isGranted)
+                }
+
+                // Scoped Storage MediaStore Write Permission Launcher (Android 10+ / 11+)
+                val writePermissionRequest by viewModel.pendingWritePermissionRequest.collectAsState()
+                val writePermissionLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.StartIntentSenderForResult()
+                ) { result ->
+                    val isGranted = result.resultCode == Activity.RESULT_OK
+                    Log.d(TAG, "MediaStore write permission result: isGranted=$isGranted")
+                    viewModel.onWritePermissionResult(isGranted)
+                }
+
+                LaunchedEffect(writePermissionRequest) {
+                    val req = writePermissionRequest
+                    if (req != null) {
+                        try {
+                            writePermissionLauncher.launch(
+                                IntentSenderRequest.Builder(req.intentSender).build()
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to launch write permission dialog: ${e.message}", e)
+                            viewModel.onWritePermissionResult(false)
+                        }
+                    }
                 }
 
                 // Storage Access Framework (SAF) Folder Picker Launcher

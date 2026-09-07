@@ -1,25 +1,34 @@
 package com.example.metadata
 
 import android.content.Context
+import android.content.IntentSender
+import android.net.Uri
+import android.os.Build
 import android.util.Log
 import com.example.data.AppDatabase
 import com.example.data.TrackDao
 import com.example.model.MetadataWriteState
 import com.example.model.Track
+import com.example.storage.StorageWritePermissionHelper
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -30,8 +39,12 @@ enum class PushMetadataPhase(val label: String) {
     COMPARING("Comparing metadata"),
     WRITING_TAGS("Writing tags to file"),
     VERIFYING("Verifying written metadata"),
+    AWAITING_PERMISSION("Awaiting storage permission"),
     DONE_SYNCED("Done / Skipped (already in sync)"),
     DONE_WRITTEN("Done (written to file)"),
+    DONE_PARTIAL("Done (partially written)"),
+    SKIPPED("Skipped"),
+    UNSUPPORTED("Unsupported format"),
     FAILED("Failed")
 }
 
@@ -47,7 +60,11 @@ data class PushMetadataProgress(
     val phase: PushMetadataPhase = PushMetadataPhase.READING_PHYSICAL,
     val writtenCount: Int = 0,
     val syncedCount: Int = 0,
-    val failedCount: Int = 0
+    val failedCount: Int = 0,
+    val partialCount: Int = 0,
+    val skippedCount: Int = 0,
+    val unsupportedCount: Int = 0,
+    val permissionRequiredCount: Int = 0
 )
 
 /**
@@ -58,7 +75,18 @@ data class PushMetadataFailure(
     val title: String,
     val artist: String,
     val filePath: String,
-    val reason: String
+    val reason: String,
+    val category: String = "Failed"
+)
+
+/**
+ * Pending Scoped Storage write permission request for the UI layer to fulfill.
+ */
+data class PendingWritePermissionRequest(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val intentSender: IntentSender,
+    val uris: List<Uri>,
+    val deferred: CompletableDeferred<Boolean>
 )
 
 /**
@@ -69,7 +97,12 @@ data class PushMetadataReport(
     val successfullyWritten: Int = 0,
     val alreadySynchronized: Int = 0,
     val failed: Int = 0,
-    val failureReasons: List<PushMetadataFailure> = emptyList()
+    val failureReasons: List<PushMetadataFailure> = emptyList(),
+    val partial: Int = 0,
+    val skipped: Int = 0,
+    val unsupported: Int = 0,
+    val permissionRequired: Int = 0,
+    val wasCancelled: Boolean = false
 )
 
 /**
@@ -127,6 +160,9 @@ class MetadataFileWriteQueue private constructor(
     }
     private val fileWriter = injectedFileWriter ?: MetadataFileWriter(context, trackDao)
 
+    // Tracks currently undergoing writing, prevents concurrent writes to the same audio file
+    private val activeWritingFiles = ConcurrentHashMap.newKeySet<String>()
+
     private val activeCount = AtomicInteger(0)
     private val _isWriting = MutableStateFlow(false)
     val isWriting: StateFlow<Boolean> = _isWriting.asStateFlow()
@@ -146,9 +182,52 @@ class MetadataFileWriteQueue private constructor(
     private val _lastPushReport = MutableStateFlow<PushMetadataReport?>(null)
     val lastPushReport: StateFlow<PushMetadataReport?> = _lastPushReport.asStateFlow()
 
+    private val _pendingPermissionRequest = MutableStateFlow<PendingWritePermissionRequest?>(null)
+    val pendingPermissionRequest: StateFlow<PendingWritePermissionRequest?> = _pendingPermissionRequest.asStateFlow()
+
+    @Volatile
+    private var isCancelRequested = false
     private var pushJob: Job? = null
 
+    /**
+     * Responds to an external ActivityResult user approval/denial for storage write permission.
+     */
+    fun onWritePermissionResult(granted: Boolean) {
+        Log.i(TAG, "Storage write permission result received: granted=$granted")
+        val pending = _pendingPermissionRequest.value
+        _pendingPermissionRequest.value = null
+        pending?.deferred?.complete(granted)
+    }
+
+    /**
+     * Pauses the queue worker until the user grants or denies write access via system dialogue.
+     */
+    private suspend fun requestWritePermission(intentSender: IntentSender, uris: List<Uri>): Boolean {
+        val deferred = CompletableDeferred<Boolean>()
+        _pendingPermissionRequest.value = PendingWritePermissionRequest(
+            intentSender = intentSender,
+            uris = uris,
+            deferred = deferred
+        )
+        return try {
+            withTimeoutOrNull(60_000) {
+                deferred.await()
+            } ?: false
+        } catch (e: CancellationException) {
+            _pendingPermissionRequest.value = null
+            false
+        } finally {
+            if (_pendingPermissionRequest.value?.deferred == deferred) {
+                _pendingPermissionRequest.value = null
+            }
+        }
+    }
+
     fun cancelPushMetadata() {
+        Log.i(TAG, "User requested cancellation of bulk metadata push.")
+        isCancelRequested = true
+        _pendingPermissionRequest.value?.deferred?.complete(false)
+        _pendingPermissionRequest.value = null
         pushJob?.cancel()
         _isPushingMetadata.value = false
     }
@@ -170,21 +249,35 @@ class MetadataFileWriteQueue private constructor(
                 } catch (_: Exception) {}
             }
 
+            val pathKey = track.filePath.ifBlank { track.id }
+            while (!activeWritingFiles.add(pathKey)) {
+                delay(50)
+            }
+
             activeCount.incrementAndGet()
             _activeWritesCount.value = activeCount.get()
             _isWriting.value = true
 
-            val result = semaphore.withPermit {
-                fileWriter.writeAsync(track, artworkBytes, artworkMimeType)
-            }
+            try {
+                var currentTrack = track
+                val dbTrack = trackDao?.getTrackById(track.id)
+                if (dbTrack != null && dbTrack.analysisState != "ANALYSING") {
+                    currentTrack = dbTrack.toTrack()
+                }
 
-            val current = activeCount.decrementAndGet()
-            _activeWritesCount.value = current
-            if (current <= 0) {
-                _isWriting.value = false
-            }
+                val result = semaphore.withPermit {
+                    fileWriter.writeAsync(currentTrack, artworkBytes, artworkMimeType)
+                }
 
-            onComplete?.invoke(result)
+                onComplete?.invoke(result)
+            } finally {
+                activeWritingFiles.remove(pathKey)
+                val current = activeCount.decrementAndGet()
+                _activeWritesCount.value = current
+                if (current <= 0) {
+                    _isWriting.value = false
+                }
+            }
         }
     }
 
@@ -195,8 +288,18 @@ class MetadataFileWriteQueue private constructor(
         track: Track,
         artworkBytes: ByteArray? = null,
         artworkMimeType: String = "image/jpeg"
-    ): MetadataWriteResult = semaphore.withPermit {
-        fileWriter.writeAsync(track, artworkBytes, artworkMimeType)
+    ): MetadataWriteResult {
+        val pathKey = track.filePath.ifBlank { track.id }
+        while (!activeWritingFiles.add(pathKey)) {
+            delay(50)
+        }
+        return try {
+            semaphore.withPermit {
+                fileWriter.writeAsync(track, artworkBytes, artworkMimeType)
+            }
+        } finally {
+            activeWritingFiles.remove(pathKey)
+        }
     }
 
     /**
@@ -231,15 +334,26 @@ class MetadataFileWriteQueue private constructor(
             val isContentUri = path.startsWith("content://")
             val file = if (!isContentUri) File(path) else null
 
-            if (file != null && (!file.exists() || !file.canWrite())) {
-                val state = if (!file.exists()) MetadataWriteState.FILE_WRITE_FAILED else MetadataWriteState.READ_ONLY_FILE
+            val hasDirectWrite = file != null && StorageWritePermissionHelper.isDirectlyWritableFile(file)
+            val targetUri = if (!hasDirectWrite) StorageWritePermissionHelper.resolveTargetUri(context, track) else null
+            val canWriteTarget = hasDirectWrite || (targetUri != null && StorageWritePermissionHelper.hasUriWritePermission(context, targetUri))
+
+            if (file != null && !file.exists() && targetUri == null) {
+                trackDao?.updateMetadataWriteState(track.id, MetadataWriteState.FILE_WRITE_FAILED.name)
+                failedCount++
+                continue
+            }
+
+            if (!canWriteTarget && targetUri == null) {
+                val state = MetadataWriteState.READ_ONLY_FILE
                 trackDao?.updateMetadataWriteState(track.id, state.name)
                 skippedCount++
                 continue
             }
 
             // Read physical tags from file
-            val physical = AudioEmbeddedMetadataReader.read(context, path)
+            val readSource = if (hasDirectWrite || file?.canRead() == true) path else (targetUri?.toString() ?: path)
+            val physical = AudioEmbeddedMetadataReader.read(context, readSource)
 
             // Check if physical file is already in sync with database
             val titleMatches = track.title.isBlank() || physical.title.equals(track.title, ignoreCase = true)
@@ -264,7 +378,9 @@ class MetadataFileWriteQueue private constructor(
                 when (writeRes) {
                     is MetadataWriteResult.Written -> writtenCount++
                     is MetadataWriteResult.Partial -> writtenCount++
-                    is MetadataWriteResult.ReadOnlyFile, is MetadataWriteResult.Unsupported, is MetadataWriteResult.PermissionRequired -> skippedCount++
+                    is MetadataWriteResult.AlreadyInSync -> syncedCount++
+                    is MetadataWriteResult.Skipped, is MetadataWriteResult.ReadOnlyFile,
+                    is MetadataWriteResult.Unsupported, is MetadataWriteResult.PermissionRequired -> skippedCount++
                     is MetadataWriteResult.Failed, is MetadataWriteResult.VerificationFailed -> failedCount++
                 }
             }
@@ -302,19 +418,73 @@ class MetadataFileWriteQueue private constructor(
         forceAll: Boolean = true,
         onProgress: ((PushMetadataProgress) -> Unit)? = null
     ): PushMetadataReport = withContext(Dispatchers.IO) {
+        pushJob = coroutineContext[Job]
+        isCancelRequested = false
         _isPushingMetadata.value = true
+
         val allTracks = trackDao?.getAllTracksList()?.map { it.toTrack() } ?: emptyList()
         val total = allTracks.size
 
         var writtenCount = 0
         var syncedCount = 0
+        var partialCount = 0
+        var skippedCount = 0
+        var unsupportedCount = 0
+        var permissionRequiredCount = 0
         var failedCount = 0
         val failures = mutableListOf<PushMetadataFailure>()
+        var tracksProcessed = 0
 
         try {
+            // Android 11+ (API 30+) batch write permission pre-check
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !isCancelRequested) {
+                val urisNeedingPermission = mutableListOf<Uri>()
+                for (track in allTracks) {
+                    val path = track.filePath
+                    if (path.isBlank() || path.startsWith("demo://") || path.startsWith("http")) continue
+                    val file = if (!path.startsWith("content://")) File(path) else null
+                    if (file != null && StorageWritePermissionHelper.isDirectlyWritableFile(file)) {
+                        continue
+                    }
+                    val targetUri = StorageWritePermissionHelper.resolveTargetUri(context, track)
+                    if (targetUri != null && !StorageWritePermissionHelper.hasUriWritePermission(context, targetUri)) {
+                        urisNeedingPermission.add(targetUri)
+                    }
+                }
+
+                if (urisNeedingPermission.isNotEmpty()) {
+                    val batches = urisNeedingPermission.chunked(100)
+                    for (batch in batches) {
+                        if (isCancelRequested || !coroutineContext.isActive) break
+                        val intentSender = StorageWritePermissionHelper.createBatchWriteRequest(context, batch)
+                        if (intentSender != null) {
+                            val initProgress = PushMetadataProgress(
+                                current = 0,
+                                total = total,
+                                phase = PushMetadataPhase.AWAITING_PERMISSION,
+                                trackTitle = "Storage Permission Required",
+                                fileName = "Requesting permission to modify ${batch.size} audio files..."
+                            )
+                            _pushProgress.value = initProgress
+                            onProgress?.invoke(initProgress)
+
+                            val granted = requestWritePermission(intentSender, batch)
+                            Log.i(TAG, "Batch write permission result: granted=$granted for ${batch.size} tracks")
+                            if (!granted) {
+                                Log.w(TAG, "User denied batch write permission. Files may require per-file approval or fail.")
+                            }
+                        }
+                    }
+                }
+            }
+
             for ((index, track) in allTracks.withIndex()) {
-                coroutineContext.ensureActive()
-                val current = index + 1
+                if (isCancelRequested || !coroutineContext.isActive) {
+                    Log.i(TAG, "Push metadata loop exiting due to cancellation.")
+                    break
+                }
+                tracksProcessed = index + 1
+                val current = tracksProcessed
                 val fileName = File(track.filePath).name.ifBlank { track.filePath }
 
                 val updateProgress = { phase: PushMetadataPhase ->
@@ -327,7 +497,11 @@ class MetadataFileWriteQueue private constructor(
                         phase = phase,
                         writtenCount = writtenCount,
                         syncedCount = syncedCount,
-                        failedCount = failedCount
+                        failedCount = failedCount,
+                        partialCount = partialCount,
+                        skippedCount = skippedCount,
+                        unsupportedCount = unsupportedCount,
+                        permissionRequiredCount = permissionRequiredCount
                     )
                     _pushProgress.value = p
                     onProgress?.invoke(p)
@@ -342,119 +516,184 @@ class MetadataFileWriteQueue private constructor(
                     continue
                 }
 
-                val physical = AudioEmbeddedMetadataReader.read(context, path)
-
-                // Step 4 & 5: Compare the two & determine which fields need writing
-                updateProgress(PushMetadataPhase.COMPARING)
-
-                val titleNeedsWrite = track.title.isNotBlank() &&
-                        track.title != "Unknown Title" &&
-                        !track.title.equals(physical.title, ignoreCase = true)
-
-                val artistNeedsWrite = track.artist.isNotBlank() &&
-                        track.artist != "Unknown Artist" &&
-                        !track.artist.equals(physical.artist, ignoreCase = true)
-
-                val albumNeedsWrite = track.album.isNotBlank() &&
-                        track.album != "Single" &&
-                        track.album != "Unknown Album" &&
-                        !track.album.equals(physical.album, ignoreCase = true)
-
-                val genreNeedsWrite = track.genre.isNotBlank() &&
-                        track.genre != "DJ Library" &&
-                        track.genre != "Club" &&
-                        track.genre != "Unknown Genre" &&
-                        !track.genre.equals(physical.genre, ignoreCase = true)
-
-                val yearNeedsWrite = track.releaseYear != null &&
-                        track.releaseYear > 0 &&
-                        track.releaseYear != physical.releaseYear
-
-                val bpmNeedsWrite = track.bpm > 0.0 &&
-                        (physical.bpm == null || kotlin.math.abs(physical.bpm - track.bpm) > 1.0)
-
-                val keyNeedsWrite = track.musicalKey.isNotBlank() &&
-                        track.musicalKey != "—" &&
-                        track.musicalKey != "-" &&
-                        !track.musicalKey.equals(physical.musicalKey, ignoreCase = true)
-
-                val trackNumberNeedsWrite = track.trackNumber > 0 &&
-                        track.trackNumber != physical.trackNumber
-
-                val hasDbArtwork = !track.artworkCachePath.isNullOrBlank() || !track.artworkUrl.isNullOrBlank()
-                val artworkNeedsWrite = hasDbArtwork && (!physical.hasEmbeddedArtwork || physical.embeddedArtworkSize <= 0)
-
-                val hasAnyDifference = titleNeedsWrite || artistNeedsWrite || albumNeedsWrite ||
-                        genreNeedsWrite || yearNeedsWrite || bpmNeedsWrite || keyNeedsWrite ||
-                        trackNumberNeedsWrite || artworkNeedsWrite
-
-                val hasPhysicalTags = physical.title != null || physical.artist != null || physical.bpm != null
-
-                if (!hasAnyDifference && hasPhysicalTags && !forceAll) {
-                    syncedCount++
-                    trackDao?.updateMetadataWriteState(track.id, MetadataWriteState.FILE_WRITE_SUCCESS.name)
-                    updateProgress(PushMetadataPhase.DONE_SYNCED)
-                    continue
+                // Acquire per-file lock to prevent concurrent writes to the same audio file
+                val pathKey = track.filePath.ifBlank { track.id }
+                while (!activeWritingFiles.add(pathKey)) {
+                    delay(50)
+                    if (isCancelRequested || !coroutineContext.isActive) break
                 }
+                if (isCancelRequested || !coroutineContext.isActive) break
 
-                if (!hasAnyDifference && hasPhysicalTags) {
-                    syncedCount++
-                    trackDao?.updateMetadataWriteState(track.id, MetadataWriteState.FILE_WRITE_SUCCESS.name)
-                    updateProgress(PushMetadataPhase.DONE_SYNCED)
-                    continue
+                try {
+                    // Prevent race condition with TrackAnalysisManager
+                    var currentTrack = track
+                    var waitAttempts = 0
+                    while (waitAttempts < 10) {
+                        val dbTrack = trackDao?.getTrackById(currentTrack.id)
+                        if (dbTrack != null && dbTrack.analysisState == "ANALYSING") {
+                            delay(200)
+                            waitAttempts++
+                            currentTrack = dbTrack.toTrack()
+                        } else {
+                            if (dbTrack != null) {
+                                currentTrack = dbTrack.toTrack()
+                            }
+                            break
+                        }
+                    }
+
+                    val targetUri = StorageWritePermissionHelper.resolveTargetUri(context, currentTrack)
+                    val readSource = if (File(path).exists()) path else (targetUri?.toString() ?: path)
+                    val physical = AudioEmbeddedMetadataReader.read(context, readSource)
+
+                    // Step 4 & 5: Compare the two & determine which fields need writing
+                    updateProgress(PushMetadataPhase.COMPARING)
+
+                    val titleNeedsWrite = currentTrack.title.isNotBlank() &&
+                            currentTrack.title != "Unknown Title" &&
+                            !currentTrack.title.equals(physical.title, ignoreCase = true)
+
+                    val artistNeedsWrite = currentTrack.artist.isNotBlank() &&
+                            currentTrack.artist != "Unknown Artist" &&
+                            !currentTrack.artist.equals(physical.artist, ignoreCase = true)
+
+                    val albumNeedsWrite = currentTrack.album.isNotBlank() &&
+                            currentTrack.album != "Single" &&
+                            currentTrack.album != "Unknown Album" &&
+                            !currentTrack.album.equals(physical.album, ignoreCase = true)
+
+                    val genreNeedsWrite = currentTrack.genre.isNotBlank() &&
+                            currentTrack.genre != "DJ Library" &&
+                            currentTrack.genre != "Club" &&
+                            currentTrack.genre != "Unknown Genre" &&
+                            !currentTrack.genre.equals(physical.genre, ignoreCase = true)
+
+                    val yearNeedsWrite = currentTrack.releaseYear != null &&
+                            currentTrack.releaseYear > 0 &&
+                            currentTrack.releaseYear != physical.releaseYear
+
+                    val bpmNeedsWrite = currentTrack.bpm > 0.0 &&
+                            (physical.bpm == null || kotlin.math.abs(physical.bpm - currentTrack.bpm) > 1.0)
+
+                    val keyNeedsWrite = currentTrack.musicalKey.isNotBlank() &&
+                            currentTrack.musicalKey != "—" &&
+                            currentTrack.musicalKey != "-" &&
+                            !currentTrack.musicalKey.equals(physical.musicalKey, ignoreCase = true)
+
+                    val trackNumberNeedsWrite = currentTrack.trackNumber > 0 &&
+                            currentTrack.trackNumber != physical.trackNumber
+
+                    val hasDbArtwork = !currentTrack.artworkCachePath.isNullOrBlank() || !currentTrack.artworkUrl.isNullOrBlank()
+                    val artworkNeedsWrite = hasDbArtwork && (!physical.hasEmbeddedArtwork || physical.embeddedArtworkSize <= 0)
+
+                    val hasAnyDifference = titleNeedsWrite || artistNeedsWrite || albumNeedsWrite ||
+                            genreNeedsWrite || yearNeedsWrite || bpmNeedsWrite || keyNeedsWrite ||
+                            trackNumberNeedsWrite || artworkNeedsWrite
+
+                    val hasPhysicalTags = physical.title != null || physical.artist != null || physical.bpm != null
+
+                    if (!hasAnyDifference && hasPhysicalTags && !forceAll) {
+                        syncedCount++
+                        trackDao?.updateMetadataWriteState(currentTrack.id, MetadataWriteState.FILE_WRITE_SUCCESS.name)
+                        updateProgress(PushMetadataPhase.DONE_SYNCED)
+                        continue
+                    }
+
+                    if (!hasAnyDifference && hasPhysicalTags) {
+                        syncedCount++
+                        trackDao?.updateMetadataWriteState(currentTrack.id, MetadataWriteState.FILE_WRITE_SUCCESS.name)
+                        updateProgress(PushMetadataPhase.DONE_SYNCED)
+                        continue
+                    }
+
+                    // Step 6: Write SoundSync metadata into physical audio file
+                    updateProgress(PushMetadataPhase.WRITING_TAGS)
+
+                    val activeArtworkBytes = currentTrack.artworkCachePath?.let { cachePath ->
+                        try {
+                            val f = File(cachePath)
+                            if (f.exists() && f.canRead()) f.readBytes() else null
+                        } catch (_: Exception) { null }
+                    }
+
+                    var writeResult = semaphore.withPermit {
+                        fileWriter.writeAsync(currentTrack, activeArtworkBytes)
+                    }
+
+                    // Pause & prompt for permission if needed
+                    if (writeResult is MetadataWriteResult.PermissionRequired && !isCancelRequested && coroutineContext.isActive) {
+                        val fallbackUri = writeResult.uri ?: targetUri ?: StorageWritePermissionHelper.resolveTargetUri(context, currentTrack)
+                        if (fallbackUri != null) {
+                            val singleSender = writeResult.intentSender ?: StorageWritePermissionHelper.createSingleWriteRequest(
+                                context,
+                                fallbackUri,
+                                writeResult.exception
+                            )
+                            if (singleSender != null) {
+                                updateProgress(PushMetadataPhase.AWAITING_PERMISSION)
+                                val granted = requestWritePermission(singleSender, listOf(fallbackUri))
+                                if (granted) {
+                                    updateProgress(PushMetadataPhase.WRITING_TAGS)
+                                    writeResult = semaphore.withPermit {
+                                        fileWriter.writeAsync(currentTrack, activeArtworkBytes)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Step 7-10: Reader verification is performed inside fileWriter.writeAsync
+                    updateProgress(PushMetadataPhase.VERIFYING)
+
+                    // Step 11: Update track status
+                    when (writeResult) {
+                        is MetadataWriteResult.Written -> {
+                            writtenCount++
+                            updateProgress(PushMetadataPhase.DONE_WRITTEN)
+                        }
+                        is MetadataWriteResult.AlreadyInSync -> {
+                            syncedCount++
+                            updateProgress(PushMetadataPhase.DONE_SYNCED)
+                        }
+                        is MetadataWriteResult.Partial -> {
+                            partialCount++
+                            writtenCount++
+                            updateProgress(PushMetadataPhase.DONE_PARTIAL)
+                        }
+                        is MetadataWriteResult.Skipped -> {
+                            skippedCount++
+                            updateProgress(PushMetadataPhase.SKIPPED)
+                        }
+                        is MetadataWriteResult.ReadOnlyFile -> {
+                            failedCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "File is read-only on device storage", category = "Read-Only"))
+                            updateProgress(PushMetadataPhase.FAILED)
+                        }
+                        is MetadataWriteResult.PermissionRequired -> {
+                            permissionRequiredCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "Permission required to access file or content URI: ${writeResult.reason}", category = "Permission"))
+                            updateProgress(PushMetadataPhase.FAILED)
+                        }
+                        is MetadataWriteResult.Unsupported -> {
+                            unsupportedCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "Format not supported for tag writing (${writeResult.reason})", category = "Unsupported"))
+                            updateProgress(PushMetadataPhase.FAILED)
+                        }
+                        is MetadataWriteResult.VerificationFailed -> {
+                            failedCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "Verification failed for ${writeResult.field}: expected '${writeResult.expected}', got '${writeResult.actual}'", category = "Verification"))
+                            updateProgress(PushMetadataPhase.FAILED)
+                        }
+                        is MetadataWriteResult.Failed -> {
+                            failedCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, writeResult.reason, category = "Failed"))
+                            updateProgress(PushMetadataPhase.FAILED)
+                        }
+                    }
+                    // Step 12: Continue to next track
+                } finally {
+                    activeWritingFiles.remove(pathKey)
                 }
-
-                // Step 6: Write SoundSync metadata into physical audio file
-                updateProgress(PushMetadataPhase.WRITING_TAGS)
-
-                val activeArtworkBytes = track.artworkCachePath?.let { cachePath ->
-                    try {
-                        val f = File(cachePath)
-                        if (f.exists() && f.canRead()) f.readBytes() else null
-                    } catch (_: Exception) { null }
-                }
-
-                val writeResult = semaphore.withPermit {
-                    fileWriter.writeAsync(track, activeArtworkBytes)
-                }
-
-                // Step 7: Writer is closed internally
-                // Step 8, 9, 10: Reopen physical file, read tags back, verify
-                updateProgress(PushMetadataPhase.VERIFYING)
-
-                // Step 11: Update track status
-                when (writeResult) {
-                    is MetadataWriteResult.Written, is MetadataWriteResult.Partial -> {
-                        writtenCount++
-                        updateProgress(PushMetadataPhase.DONE_WRITTEN)
-                    }
-                    is MetadataWriteResult.ReadOnlyFile -> {
-                        failedCount++
-                        failures.add(PushMetadataFailure(track.id, track.title, track.artist, path, "File is read-only on device storage"))
-                        updateProgress(PushMetadataPhase.FAILED)
-                    }
-                    is MetadataWriteResult.PermissionRequired -> {
-                        failedCount++
-                        failures.add(PushMetadataFailure(track.id, track.title, track.artist, path, "Permission required to access file or content URI"))
-                        updateProgress(PushMetadataPhase.FAILED)
-                    }
-                    is MetadataWriteResult.Unsupported -> {
-                        failedCount++
-                        failures.add(PushMetadataFailure(track.id, track.title, track.artist, path, "Format not supported for tag writing"))
-                        updateProgress(PushMetadataPhase.FAILED)
-                    }
-                    is MetadataWriteResult.VerificationFailed -> {
-                        failedCount++
-                        failures.add(PushMetadataFailure(track.id, track.title, track.artist, path, "Verification failed for ${writeResult.field}: expected '${writeResult.expected}', got '${writeResult.actual}'"))
-                        updateProgress(PushMetadataPhase.FAILED)
-                    }
-                    is MetadataWriteResult.Failed -> {
-                        failedCount++
-                        failures.add(PushMetadataFailure(track.id, track.title, track.artist, path, writeResult.reason))
-                        updateProgress(PushMetadataPhase.FAILED)
-                    }
-                }
-                // Step 12: Continue to next track
             }
         } catch (e: CancellationException) {
             Log.i(TAG, "Push metadata to files was cancelled by user.")
@@ -462,15 +701,21 @@ class MetadataFileWriteQueue private constructor(
             _isPushingMetadata.value = false
         }
 
+        val wasCancelled = isCancelRequested || !coroutineContext.isActive
         val report = PushMetadataReport(
-            totalExamined = total,
+            totalExamined = tracksProcessed,
             successfullyWritten = writtenCount,
             alreadySynchronized = syncedCount,
-            failed = failedCount,
-            failureReasons = failures
+            failed = failedCount + permissionRequiredCount + unsupportedCount,
+            failureReasons = failures,
+            partial = partialCount,
+            skipped = skippedCount,
+            unsupported = unsupportedCount,
+            permissionRequired = permissionRequiredCount,
+            wasCancelled = wasCancelled
         )
         _lastPushReport.value = report
-        Log.i(TAG, "Push metadata to files completed: $report")
+        Log.i(TAG, "Push metadata to files completed (wasCancelled=$wasCancelled): $report")
         report
     }
 }

@@ -2,13 +2,16 @@ package com.example.storage
 
 import android.content.ContentUris
 import android.content.Context
+import android.content.IntentSender
 import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
+import com.example.model.Track
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -17,6 +20,8 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -42,6 +47,13 @@ data class CompleteTagPayload(
     val artworkBytes: ByteArray? = null,
     val artworkMimeType: String = "image/jpeg"
 )
+
+sealed interface TagWriteResult {
+    object Success : TagWriteResult
+    data class PermissionRequired(val uri: Uri, val cause: Throwable, val intentSender: IntentSender? = null) : TagWriteResult
+    data class Failed(val message: String, val cause: Throwable? = null) : TagWriteResult
+    data class Unsupported(val message: String) : TagWriteResult
+}
 
 /**
  * Authoritative format-preserving audio file tag and artwork writer.
@@ -94,20 +106,30 @@ object AudioTagWriter {
         context: Context?,
         filePathOrUri: String,
         payload: CompleteTagPayload
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean = writeCompleteTagsWithResult(context, filePathOrUri, payload) is TagWriteResult.Success
+
+    /**
+     * Atomically writes complete textual metadata and front cover artwork
+     * returning rich diagnostic result for permissions and failures.
+     */
+    suspend fun writeCompleteTagsWithResult(
+        context: Context?,
+        filePathOrUri: String,
+        payload: CompleteTagPayload
+    ): TagWriteResult = withContext(Dispatchers.IO) {
         if (filePathOrUri.isBlank() || filePathOrUri.startsWith("demo://") || filePathOrUri.startsWith("http")) {
             Log.w(TAG, "Cannot write tags: invalid or virtual path: $filePathOrUri")
-            return@withContext false
+            return@withContext TagWriteResult.Unsupported("Invalid or virtual path: $filePathOrUri")
         }
 
         if (filePathOrUri.startsWith("content://")) {
-            return@withContext writeContentUriTags(context, filePathOrUri, payload)
+            return@withContext writeContentUriTagsWithResult(context, filePathOrUri, payload)
         }
 
         val file = File(filePathOrUri)
         if (!file.exists() || !file.isFile) {
             Log.w(TAG, "Cannot write tags: file does not exist: ${file.absolutePath}")
-            return@withContext false
+            return@withContext TagWriteResult.Failed("File does not exist: ${file.absolutePath}")
         }
 
         if (!isFileDirectlyWritable(file)) {
@@ -116,11 +138,12 @@ object AudioTagWriter {
                 val mediaUri = getMediaStoreUriForPath(context, file.absolutePath)
                 if (mediaUri != null) {
                     Log.i(TAG, "Using MediaStore URI fallback: $mediaUri for ${file.absolutePath}")
-                    return@withContext writeContentUriTags(context, mediaUri.toString(), payload)
+                    return@withContext writeContentUriTagsWithResult(context, mediaUri.toString(), payload)
                 }
             }
             Log.w(TAG, "Cannot write tags: file is inaccessible or read-only: ${file.absolutePath}")
-            return@withContext false
+            val ex = SecurityException("File is read-only on device storage: ${file.absolutePath}")
+            return@withContext TagWriteResult.PermissionRequired(Uri.fromFile(file), ex)
         }
 
         val ext = file.extension.lowercase(Locale.ROOT)
@@ -129,18 +152,30 @@ object AudioTagWriter {
             try {
                 MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), null, null)
             } catch (_: Exception) {}
+            return@withContext TagWriteResult.Success
         }
-        return@withContext success
+        return@withContext if (success) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .$ext file")
     }
 
-    private fun writeContentUriTags(
+    private fun writeContentUriTagsWithResult(
         context: Context?,
         uriString: String,
         payload: CompleteTagPayload
-    ): Boolean {
-        if (context == null) return false
+    ): TagWriteResult {
+        if (context == null) return TagWriteResult.Failed("Context is null")
         val uri = Uri.parse(uriString)
         val contentResolver = context.contentResolver
+
+        // Test non-destructive write permission probe first on Android 10+
+        try {
+            contentResolver.openFileDescriptor(uri, "rw")?.close()
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Write permission probe rejected for $uriString: ${e.message}")
+            val intentSender = StorageWritePermissionHelper.createSingleWriteRequest(context, uri, e)
+            return TagWriteResult.PermissionRequired(uri, e, intentSender)
+        } catch (_: Exception) {
+            // Some content providers might not support openFileDescriptor with "rw" mode
+        }
 
         var fileName = "temp_audio"
         var ext = "mp3"
@@ -161,9 +196,11 @@ object AudioTagWriter {
             ext = when {
                 mime.contains("wav") -> "wav"
                 mime.contains("flac") -> "flac"
-                mime.contains("mp4") || mime.contains("m4a") || mime.contains("aac") -> "m4a"
+                mime.contains("mp4") || mime.contains("m4a") -> "m4a"
+                mime.contains("aac") -> "aac"
                 mime.contains("ogg") -> "ogg"
                 mime.contains("opus") -> "opus"
+                mime.contains("aiff") || mime.contains("aif") -> "aiff"
                 else -> "mp3"
             }
         }
@@ -171,36 +208,69 @@ object AudioTagWriter {
         var tempFile: File? = null
         return try {
             tempFile = File(context.cacheDir, "soundsync_saf_${System.currentTimeMillis()}.$ext")
-            contentResolver.openInputStream(uri)?.use { inStream ->
-                FileOutputStream(tempFile).use { outStream ->
-                    inStream.copyTo(outStream, 64 * 1024)
-                }
-            } ?: return false
+            try {
+                contentResolver.openInputStream(uri)?.use { inStream ->
+                    FileOutputStream(tempFile).use { outStream ->
+                        inStream.copyTo(outStream, 64 * 1024)
+                    }
+                } ?: return TagWriteResult.Failed("Could not open input stream for $uriString")
+            } catch (e: SecurityException) {
+                val intentSender = StorageWritePermissionHelper.createSingleWriteRequest(context, uri, e)
+                return TagWriteResult.PermissionRequired(uri, e, intentSender)
+            } catch (e: Exception) {
+                return TagWriteResult.Failed("Failed copying audio stream from $uriString: ${e.message}", e)
+            }
 
             val success = writeTagsToFile(tempFile, ext, payload)
             if (!success) {
-                Log.e(TAG, "Tag writing failed on SAF temp file")
-                return false
+                Log.e(TAG, "Tag writing failed on SAF temp file for .$ext")
+                return TagWriteResult.Failed("Tag writing engine failed for .$ext container")
             }
 
-            contentResolver.openOutputStream(uri, "wt")?.use { outStream ->
-                FileInputStream(tempFile).use { inStream ->
-                    inStream.copyTo(outStream, 64 * 1024)
-                }
-            } ?: run {
-                Log.e(TAG, "Could not open output stream for SAF URI: $uriString")
-                return false
+            try {
+                contentResolver.openOutputStream(uri, "wt")?.use { outStream ->
+                    FileInputStream(tempFile).use { inStream ->
+                        inStream.copyTo(outStream, 64 * 1024)
+                    }
+                } ?: return TagWriteResult.Failed("Could not open output stream for SAF URI: $uriString")
+            } catch (e: SecurityException) {
+                val intentSender = StorageWritePermissionHelper.createSingleWriteRequest(context, uri, e)
+                return TagWriteResult.PermissionRequired(uri, e, intentSender)
+            } catch (e: Exception) {
+                return TagWriteResult.Failed("Failed streaming modified audio back to $uriString: ${e.message}", e)
             }
 
             Log.d(TAG, "Successfully wrote tags back to SAF URI: $uriString")
-            true
+
+            // MediaStore refresh
+            try {
+                if (uri.scheme == "file") {
+                    uri.path?.let { MediaScannerConnection.scanFile(context, arrayOf(it), null, null) }
+                } else {
+                    val directPath = StorageWritePermissionHelper.resolveTargetUri(context, Track(id = "", title = "", artist = "", filePath = uriString))
+                    if (directPath != null && directPath.scheme == "file") {
+                        directPath.path?.let { MediaScannerConnection.scanFile(context, arrayOf(it), null, null) }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            TagWriteResult.Success
+        } catch (e: SecurityException) {
+            val intentSender = StorageWritePermissionHelper.createSingleWriteRequest(context, uri, e)
+            TagWriteResult.PermissionRequired(uri, e, intentSender)
         } catch (e: Exception) {
             Log.e(TAG, "SAF URI write error for $uriString: ${e.message}", e)
-            false
+            TagWriteResult.Failed("Exception during content URI write: ${e.message}", e)
         } finally {
             tempFile?.let { if (it.exists()) it.delete() }
         }
     }
+
+    private fun writeContentUriTags(
+        context: Context?,
+        uriString: String,
+        payload: CompleteTagPayload
+    ): Boolean = writeContentUriTagsWithResult(context, uriString, payload) is TagWriteResult.Success
 
     /**
      * Checks if a file can be written to directly, probing via FileOutputStream if needed.
@@ -973,6 +1043,8 @@ object AudioTagWriter {
             data class PreservedBlock(val blockType: Int, val data: ByteArray)
             val preservedBlocks = mutableListOf<PreservedBlock>()
             var isLast = false
+            var existingVorbisCommentBytes: ByteArray? = null
+            var existingPictureBlock: PreservedBlock? = null
 
             while (!isLast) {
                 val blockHeader = ByteArray(4)
@@ -993,13 +1065,19 @@ object AudioTagWriter {
                     total += r
                 }
 
-                if (blockType != 4 && blockType != 6 && blockType != 1) {
+                if (blockType == 4) {
+                    existingVorbisCommentBytes = blockData
+                } else if (blockType == 6) {
+                    existingPictureBlock = PreservedBlock(blockType, blockData)
+                } else if (blockType != 1) {
                     preservedBlocks.add(PreservedBlock(blockType, blockData))
                 }
             }
 
-            val vorbisCommentBytes = buildVorbisCommentBody(payload)
+            val existingComments = extractExistingVorbisComments(existingVorbisCommentBytes)
+            val vorbisCommentBytes = buildVorbisCommentBody(payload, existingComments)
             val pictureBlockBytes = buildFlacPictureBlock(payload.artworkBytes, payload.artworkMimeType)
+                ?: existingPictureBlock?.data
 
             tempFile = createTempStagingFile(file)
             val fos = FileOutputStream(tempFile)
@@ -1254,15 +1332,26 @@ object AudioTagWriter {
                 return false
             }
 
+            val oldCommentPagesPayload = ByteArrayOutputStream()
             val firstCommentPage = readNextOggPage()
             if (firstCommentPage != null) {
+                oldCommentPagesPayload.write(firstCommentPage.payload)
                 var lastSeg = firstCommentPage.segments.lastOrNull()?.let { it.toInt() and 0xFF } ?: 0
                 while (lastSeg == 255) {
                     val contPage = readNextOggPage() ?: break
+                    oldCommentPagesPayload.write(contPage.payload)
                     lastSeg = contPage.segments.lastOrNull()?.let { it.toInt() and 0xFF } ?: 0
                     if ((contPage.headerType and 0x01) == 0) break
                 }
             }
+
+            val existingPacketBytes = oldCommentPagesPayload.toByteArray()
+            val commentOffset = if (isOpus && existingPacketBytes.size >= 8) 8 else if (!isOpus && existingPacketBytes.size >= 7) 7 else 0
+            val existingComments = if (commentOffset > 0 && existingPacketBytes.size > commentOffset) {
+                val sub = ByteArray(existingPacketBytes.size - commentOffset)
+                System.arraycopy(existingPacketBytes, commentOffset, sub, 0, sub.size)
+                extractExistingVorbisComments(sub)
+            } else emptyList()
 
             val commentPacketStream = ByteArrayOutputStream()
             if (isOpus) {
@@ -1271,7 +1360,42 @@ object AudioTagWriter {
                 commentPacketStream.write(byteArrayOf(0x03, 'v'.code.toByte(), 'o'.code.toByte(), 'r'.code.toByte(), 'b'.code.toByte(), 'i'.code.toByte(), 's'.code.toByte()))
             }
 
+            val updatingKeys = mutableSetOf<String>()
+            if (!payload.title.isNullOrBlank()) updatingKeys.add("TITLE")
+            if (!payload.artist.isNullOrBlank()) updatingKeys.add("ARTIST")
+            if (!payload.album.isNullOrBlank()) updatingKeys.add("ALBUM")
+            if (!payload.albumArtist.isNullOrBlank()) updatingKeys.add("ALBUMARTIST")
+            if (!payload.genre.isNullOrBlank()) updatingKeys.add("GENRE")
+            if (!payload.composer.isNullOrBlank()) updatingKeys.add("COMPOSER")
+            if (!payload.comment.isNullOrBlank()) updatingKeys.add("COMMENT")
+            if (payload.trackNumber != null && payload.trackNumber > 0) {
+                updatingKeys.add("TRACKNUMBER")
+                if (payload.totalTracks != null && payload.totalTracks > 0) updatingKeys.add("TRACKTOTAL")
+            }
+            if (payload.discNumber != null && payload.discNumber > 0) {
+                updatingKeys.add("DISCNUMBER")
+                if (payload.totalDiscs != null && payload.totalDiscs > 0) updatingKeys.add("DISCTOTAL")
+            }
+            if (payload.releaseYear != null || !payload.releaseDate.isNullOrBlank()) {
+                updatingKeys.add("DATE")
+                updatingKeys.add("YEAR")
+            }
+            if (payload.bpm != null && payload.bpm in 30.0..300.0) updatingKeys.add("BPM")
+            if (!payload.musicalKey.isNullOrBlank() && payload.musicalKey != "—") {
+                updatingKeys.add("KEY")
+                updatingKeys.add("INITIALKEY")
+            }
+            if (payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()) {
+                updatingKeys.add("METADATA_BLOCK_PICTURE")
+            }
+
             val commentsList = mutableListOf<String>()
+            for (c in existingComments) {
+                val key = c.substringBefore('=', "").trim().uppercase(Locale.ROOT)
+                if (key.isNotBlank() && !updatingKeys.contains(key)) {
+                    commentsList.add(c)
+                }
+            }
             payload.title?.takeIf { it.isNotBlank() }?.let { commentsList.add("TITLE=$it") }
             payload.artist?.takeIf { it.isNotBlank() }?.let { commentsList.add("ARTIST=$it") }
             payload.album?.takeIf { it.isNotBlank() }?.let { commentsList.add("ALBUM=$it") }
@@ -1515,14 +1639,72 @@ object AudioTagWriter {
         return fullTag
     }
 
-    private fun buildVorbisCommentBody(payload: CompleteTagPayload): ByteArray {
+    private fun extractExistingVorbisComments(commentBytes: ByteArray?): List<String> {
+        if (commentBytes == null || commentBytes.size < 8) return emptyList()
+        val list = mutableListOf<String>()
+        try {
+            val buf = ByteBuffer.wrap(commentBytes).order(ByteOrder.LITTLE_ENDIAN)
+            val vendorLen = buf.int
+            if (vendorLen in 0..buf.remaining()) {
+                buf.position(buf.position() + vendorLen)
+                if (buf.remaining() >= 4) {
+                    val count = buf.int
+                    for (i in 0 until count) {
+                        if (buf.remaining() < 4) break
+                        val strLen = buf.int
+                        if (strLen in 0..buf.remaining()) {
+                            val strBytes = ByteArray(strLen)
+                            buf.get(strBytes)
+                            list.add(String(strBytes, StandardCharsets.UTF_8))
+                        } else break
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return list
+    }
+
+    private fun buildVorbisCommentBody(payload: CompleteTagPayload, existingComments: List<String> = emptyList()): ByteArray {
         val commentStream = ByteArrayOutputStream()
         val vendorString = "SoundSync"
         val vendorBytes = vendorString.toByteArray(StandardCharsets.UTF_8)
         writeLittleEndianInt(commentStream, vendorBytes.size)
         commentStream.write(vendorBytes)
 
+        val updatingKeys = mutableSetOf<String>()
+        if (!payload.title.isNullOrBlank()) updatingKeys.add("TITLE")
+        if (!payload.artist.isNullOrBlank()) updatingKeys.add("ARTIST")
+        if (!payload.albumArtist.isNullOrBlank()) updatingKeys.add("ALBUMARTIST")
+        if (!payload.album.isNullOrBlank()) updatingKeys.add("ALBUM")
+        if (!payload.genre.isNullOrBlank()) updatingKeys.add("GENRE")
+        if (!payload.composer.isNullOrBlank()) updatingKeys.add("COMPOSER")
+        if (!payload.comment.isNullOrBlank()) updatingKeys.add("COMMENT")
+        if (payload.trackNumber != null && payload.trackNumber > 0) {
+            updatingKeys.add("TRACKNUMBER")
+            if (payload.totalTracks != null && payload.totalTracks > 0) updatingKeys.add("TRACKTOTAL")
+        }
+        if (payload.discNumber != null && payload.discNumber > 0) {
+            updatingKeys.add("DISCNUMBER")
+            if (payload.totalDiscs != null && payload.totalDiscs > 0) updatingKeys.add("DISCTOTAL")
+        }
+        if (payload.releaseYear != null || !payload.releaseDate.isNullOrBlank()) {
+            updatingKeys.add("DATE")
+            updatingKeys.add("YEAR")
+        }
+        if (payload.bpm != null && payload.bpm in 30.0..300.0) updatingKeys.add("BPM")
+        if (!payload.musicalKey.isNullOrBlank() && payload.musicalKey != "—") {
+            updatingKeys.add("KEY")
+            updatingKeys.add("INITIALKEY")
+        }
+
         val comments = mutableListOf<String>()
+        for (c in existingComments) {
+            val key = c.substringBefore('=', "").trim().uppercase(Locale.ROOT)
+            if (key.isNotBlank() && !updatingKeys.contains(key)) {
+                comments.add(c)
+            }
+        }
+
         payload.title?.takeIf { it.isNotBlank() }?.let { comments.add("TITLE=$it") }
         payload.artist?.takeIf { it.isNotBlank() }?.let { comments.add("ARTIST=$it") }
         payload.albumArtist?.takeIf { it.isNotBlank() }?.let { comments.add("ALBUMARTIST=$it") }

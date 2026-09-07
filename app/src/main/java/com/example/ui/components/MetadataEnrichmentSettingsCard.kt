@@ -7,11 +7,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Publish
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -24,6 +28,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,11 +40,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metadata.MetadataSettings
+import com.example.metadata.PushMetadataPhase
 import com.example.metadata.PushMetadataProgress
 import com.example.metadata.PushMetadataReport
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DjSurfaceBorder
 import com.example.ui.theme.DjSurfaceDark
+import com.example.ui.theme.NeonAmber
 import com.example.ui.theme.NeonGreen
 import com.example.ui.theme.NeonRed
 import com.example.ui.theme.TextPrimary
@@ -183,18 +190,36 @@ fun MetadataEnrichmentSettingsCard(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
                                 "Status: ${pushProgress?.phase?.label ?: "Processing"}",
-                                color = DeckACyan,
+                                color = if (pushProgress?.phase == PushMetadataPhase.AWAITING_PERMISSION) NeonAmber else DeckACyan,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Medium
                             )
                         }
 
+                        if (pushProgress?.phase == PushMetadataPhase.AWAITING_PERMISSION) {
+                            Text(
+                                "Awaiting storage write permission approval...",
+                                color = NeonAmber,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.padding(top = 4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState())
                         ) {
                             Text("Written: ${pushProgress?.writtenCount ?: 0}", color = NeonGreen, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             Text("In Sync: ${pushProgress?.syncedCount ?: 0}", color = DeckACyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            if ((pushProgress?.partialCount ?: 0) > 0) {
+                                Text("Partial: ${pushProgress?.partialCount}", color = NeonAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                            if ((pushProgress?.permissionRequiredCount ?: 0) > 0) {
+                                Text("Perm Required: ${pushProgress?.permissionRequiredCount}", color = NeonAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                            if ((pushProgress?.unsupportedCount ?: 0) > 0) {
+                                Text("Unsupported: ${pushProgress?.unsupportedCount}", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
                             if ((pushProgress?.failedCount ?: 0) > 0) {
                                 Text("Failed: ${pushProgress?.failedCount}", color = NeonRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
@@ -206,7 +231,7 @@ fun MetadataEnrichmentSettingsCard(
             if (pushReport != null && !isPushingMetadata) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = DjSurfaceBorder.copy(alpha = 0.2f)),
-                    border = BorderStroke(1.dp, NeonGreen),
+                    border = BorderStroke(1.dp, if (pushReport.wasCancelled || pushReport.failed > 0) NeonAmber else NeonGreen),
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag("push_metadata_report_card")
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -216,8 +241,19 @@ fun MetadataEnrichmentSettingsCard(
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                         ) {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = NeonGreen)
-                                Text("Push Operation Summary", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Icon(
+                                    if (pushReport.wasCancelled) Icons.Default.Close
+                                    else if (pushReport.failed > 0) Icons.Default.Warning
+                                    else Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = if (pushReport.wasCancelled || pushReport.failed > 0) NeonAmber else NeonGreen
+                                )
+                                Text(
+                                    if (pushReport.wasCancelled) "Push Operation Cancelled" else "Push Operation Summary",
+                                    color = TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
                             }
                             Button(
                                 onClick = onPushMetadataToFiles,
@@ -229,22 +265,46 @@ fun MetadataEnrichmentSettingsCard(
                         }
 
                         Text("Total tracks examined: ${pushReport.totalExamined}", color = TextSecondary, fontSize = 11.sp)
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.horizontalScroll(rememberScrollState())
+                        ) {
                             Text("Successfully written: ${pushReport.successfullyWritten}", color = NeonGreen, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             Text("Already in sync: ${pushReport.alreadySynchronized}", color = DeckACyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            if (pushReport.partial > 0) {
+                                Text("Partial: ${pushReport.partial}", color = NeonAmber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            if (pushReport.permissionRequired > 0) {
+                                Text("Perm Required: ${pushReport.permissionRequired}", color = NeonAmber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            if (pushReport.unsupported > 0) {
+                                Text("Unsupported: ${pushReport.unsupported}", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
                             if (pushReport.failed > 0) {
                                 Text("Failed: ${pushReport.failed}", color = NeonRed, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             }
                         }
 
                         if (pushReport.failureReasons.isNotEmpty()) {
-                            Text("Failures:", color = NeonRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            var showAllIssues by remember { mutableStateOf(false) }
+                            val displayList = if (showAllIssues) pushReport.failureReasons else pushReport.failureReasons.take(5)
+
+                            Text("Issues (${pushReport.failureReasons.size}):", color = NeonRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                pushReport.failureReasons.take(5).forEach { failure ->
-                                    Text("• ${failure.title} (${failure.artist}): ${failure.reason}", color = TextSecondary, fontSize = 9.sp)
+                                displayList.forEach { failure ->
+                                    Text("• [${failure.category}] ${failure.title} (${failure.artist}): ${failure.reason}", color = TextSecondary, fontSize = 9.sp)
                                 }
                                 if (pushReport.failureReasons.size > 5) {
-                                    Text("+ ${pushReport.failureReasons.size - 5} more", color = TextSecondary, fontSize = 9.sp)
+                                    TextButton(
+                                        onClick = { showAllIssues = !showAllIssues },
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 0.dp)
+                                    ) {
+                                        Text(
+                                            if (showAllIssues) "Show less" else "Show all ${pushReport.failureReasons.size} issues",
+                                            fontSize = 10.sp,
+                                            color = DeckACyan
+                                        )
+                                    }
                                 }
                             }
                         }
