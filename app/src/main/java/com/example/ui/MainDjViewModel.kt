@@ -19,6 +19,7 @@ import com.example.data.SourceFolderEntity
 import com.example.data.TrackEntity
 import com.example.metadata.MetadataFileWriteQueue
 import com.example.metadata.PendingWritePermissionRequest
+import com.example.metadata.PendingFolderPermissionRequest
 import com.example.metadata.PushMetadataProgress
 import com.example.metadata.PushMetadataReport
 import com.example.model.AudioQualityRating
@@ -2751,6 +2752,14 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun onWritePermissionResult(isGranted: Boolean) {
         MetadataFileWriteQueue.getInstance(getApplication()).onWritePermissionResult(isGranted)
+    }
+
+    val pendingFolderPermissionRequest: StateFlow<PendingFolderPermissionRequest?> by lazy {
+        MetadataFileWriteQueue.getInstance(getApplication()).pendingFolderPermissionRequest
+    }
+
+    fun onFolderPermissionResult(treeUri: Uri?) {
+        MetadataFileWriteQueue.getInstance(getApplication()).onFolderPermissionResult(treeUri)
     }
 
     fun pushMetadataToFiles(forceAll: Boolean = true) {

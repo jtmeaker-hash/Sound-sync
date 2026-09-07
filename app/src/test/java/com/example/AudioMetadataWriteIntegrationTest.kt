@@ -764,6 +764,12 @@ class AudioMetadataWriteIntegrationTest {
                     tracks[id]?.let { tracks[id] = it.copy(metadataWriteState = state) }
                     null
                 }
+                "updateFilePath" -> {
+                    val id = args[0] as String
+                    val newPath = args[1] as String
+                    tracks[id]?.let { tracks[id] = it.copy(filePath = newPath) }
+                    null
+                }
                 "getTracksNeedingFileWrite" -> {
                     tracks.values.filter { it.metadataWriteState != MetadataWriteState.FILE_WRITE_SUCCESS.name }.toList()
                 }
@@ -1558,6 +1564,127 @@ class AudioMetadataWriteIntegrationTest {
             assertEquals(MetadataWriteState.READ_ONLY_FILE, result.writeState)
         } finally {
             com.example.storage.StorageWritePermissionHelper.isWritableOverrideForTesting = null
+        }
+    }
+
+    /**
+     * Helper to create a FLAC file with a prepended ID3v2 tag before the fLaC stream.
+     */
+    private fun createSampleFlacWithPrependedId3(file: File, audioBytes: ByteArray): File {
+        val id3Body = "TIT2\u0000\u0000\u0000\u0008\u0000\u0000\u0000Old Song".toByteArray(StandardCharsets.ISO_8859_1)
+        val id3Header = ByteArray(10)
+        id3Header[0] = 'I'.code.toByte()
+        id3Header[1] = 'D'.code.toByte()
+        id3Header[2] = '3'.code.toByte()
+        id3Header[3] = 3 // ID3v2.3
+        id3Header[4] = 0
+        id3Header[5] = 0
+        val syncSafeSize = id3Body.size
+        id3Header[6] = ((syncSafeSize shr 21) and 0x7F).toByte()
+        id3Header[7] = ((syncSafeSize shr 14) and 0x7F).toByte()
+        id3Header[8] = ((syncSafeSize shr 7) and 0x7F).toByte()
+        id3Header[9] = (syncSafeSize and 0x7F).toByte()
+
+        val magic = "fLaC".toByteArray(StandardCharsets.US_ASCII)
+        val streaminfoHdr = byteArrayOf(0x80.toByte(), 0x00, 0x00, 0x22)
+        val streaminfo = ByteArray(34)
+        streaminfo[0] = 0x10; streaminfo[1] = 0x00
+        streaminfo[2] = 0x10; streaminfo[3] = 0x00
+        streaminfo[10] = 0x0A.toByte(); streaminfo[11] = 0xC4.toByte(); streaminfo[12] = 0x42.toByte(); streaminfo[13] = 0xF0.toByte()
+        val totalSamples = 44100
+        streaminfo[14] = 0; streaminfo[15] = 0
+        streaminfo[16] = ((totalSamples shr 8) and 0xFF).toByte()
+        streaminfo[17] = (totalSamples and 0xFF).toByte()
+
+        FileOutputStream(file).use { fos ->
+            fos.write(id3Header)
+            fos.write(id3Body)
+            fos.write(magic)
+            fos.write(streaminfoHdr)
+            fos.write(streaminfo)
+            fos.write(audioBytes)
+        }
+        return file
+    }
+
+    @Test
+    fun `flac file with prepended ID3 tag is successfully detected and rewritten as valid FLAC with Vorbis comments and artwork`() = runBlocking {
+        val flacFile = File(tempFolder.root, "prepended_id3_flac.flac")
+        val dummyAudio = ByteArray(1024) { (it % 256).toByte() }
+        createSampleFlacWithPrependedId3(flacFile, dummyAudio)
+
+        val payload = CompleteTagPayload(
+            title = "Let Him Cook",
+            artist = "DTAILZ",
+            album = "Cooking Season",
+            albumArtist = "DTAILZ",
+            genre = "Drum and Bass",
+            bpm = 174.0,
+            musicalKey = "8A",
+            artworkBytes = sampleArtworkBytes,
+            artworkMimeType = "image/jpeg"
+        )
+
+        val success = AudioTagWriter.writeCompleteTags(context, flacFile.absolutePath, payload)
+        assertTrue("writeCompleteTags should succeed on FLAC with prepended ID3", success)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, flacFile.absolutePath)
+        assertEquals("Let Him Cook", readBack.title)
+        assertEquals("DTAILZ", readBack.artist)
+        assertEquals("Cooking Season", readBack.album)
+        assertEquals("Drum and Bass", readBack.genre)
+        assertEquals(174.0, readBack.bpm ?: 0.0, 0.1)
+        assertEquals("8A", readBack.musicalKey)
+        assertTrue("Artwork must be embedded", readBack.hasEmbeddedArtwork)
+    }
+
+    @Test
+    fun `scoped storage track with non-existent raw path resolves canonical URI and writes successfully`() = runBlocking {
+        val realFlacFile = File(tempFolder.root, "actual_storage_file.flac")
+        createSampleFlacFile(realFlacFile, ByteArray(800) { 0x44 })
+
+        val (trackDao, _) = createFakeTrackDao()
+
+        val virtualPath = "/storage/emulated/0/FLAC/Let Him Cook - DTAILZ.flac"
+        assertFalse("Virtual path must not exist directly on filesystem", File(virtualPath).exists())
+
+        val track = Track(
+            id = "media_987654",
+            title = "Let Him Cook",
+            artist = "DTAILZ",
+            album = "The Kitchen",
+            genre = "Bass Music",
+            bpm = 175.0,
+            musicalKey = "4A",
+            filePath = virtualPath,
+            metadataScanState = com.example.model.MetadataScanState.COMPLETE.name,
+            metadataWriteState = MetadataWriteState.METADATA_FOUND.name
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(track))
+
+        // Simulate canonical resolution providing direct access to the real file via URI
+        try {
+            com.example.storage.StorageWritePermissionHelper.resolveCanonicalOverrideForTesting = { _, t ->
+                if (t.id == "media_987654") {
+                    com.example.storage.CanonicalStorageInfo(
+                        uri = android.net.Uri.fromFile(realFlacFile),
+                        isDirectFile = true,
+                        directFile = realFlacFile,
+                        isWritable = true
+                    )
+                } else null
+            }
+
+            val writer = MetadataFileWriter(context, trackDao)
+            val result = writer.writeAsync(track)
+
+            assertTrue("Result should be Written, but got $result", result is MetadataWriteResult.Written)
+            assertEquals(MetadataWriteState.FILE_WRITE_SUCCESS, result.writeState)
+
+            val updatedEntity = trackDao.getTrackById("media_987654")
+            assertEquals(MetadataWriteState.FILE_WRITE_SUCCESS.name, updatedEntity!!.metadataWriteState)
+        } finally {
+            com.example.storage.StorageWritePermissionHelper.resolveCanonicalOverrideForTesting = null
         }
     }
 }

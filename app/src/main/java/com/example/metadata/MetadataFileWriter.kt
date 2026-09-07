@@ -102,64 +102,24 @@ class MetadataFileWriter(
 
         if (isContentUri) {
             val uri = Uri.parse(path)
-            try {
-                mimeType = context.contentResolver.getType(uri).orEmpty().lowercase(Locale.ROOT)
-                context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        if (idx != -1) {
-                            val name = cursor.getString(idx)
-                            if (!name.isNullOrBlank()) {
-                                ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-                            }
-                        }
-                    }
-                }
-            } catch (e: SecurityException) {
-                Log.w(TAG, "Permission required for SAF URI: $path", e)
-                val intentSender = StorageWritePermissionHelper.createSingleWriteRequest(context, uri, e)
-                PhysicalTagWriteLogger.logFailure(
-                    tag = TAG,
-                    track = track,
-                    uri = path,
-                    filePath = null,
-                    mimeType = mimeType,
-                    extension = ext.ifBlank { "unknown" },
-                    isWritable = false,
-                    exception = e
+            if (!StorageWritePermissionHelper.hasUriWritePermission(context, uri)) {
+                val intentSender = StorageWritePermissionHelper.createSingleWriteRequest(context, uri)
+                val res = MetadataWriteResult.PermissionRequired(
+                    path = path,
+                    intentSender = intentSender,
+                    uri = uri,
+                    reason = "Permission required to access content URI: $path"
                 )
-                val res = MetadataWriteResult.PermissionRequired(path, intentSender, uri, e.message ?: "Permission required")
                 updateDbState(track.id, res.writeState)
                 return@withContext res
-            } catch (_: Exception) {}
-
-            if (ext.isBlank()) {
-                ext = when {
-                    mimeType.contains("wav") -> "wav"
-                    mimeType.contains("flac") -> "flac"
-                    mimeType.contains("mp4") || mimeType.contains("m4a") -> "m4a"
-                    mimeType.contains("aac") -> "aac"
-                    mimeType.contains("ogg") -> "ogg"
-                    mimeType.contains("opus") -> "opus"
-                    mimeType.contains("aiff") || mimeType.contains("aif") -> "aiff"
-                    else -> "mp3"
-                }
             }
+            val (uExt, uMime) = resolveUriMimeAndExt(uri)
+            ext = uExt
+            mimeType = uMime
         } else {
-            val file = File(path)
-            ext = file.extension.lowercase(Locale.ROOT)
-            mimeType = when (ext) {
-                "wav" -> "audio/wav"
-                "flac" -> "audio/flac"
-                "m4a", "mp4" -> "audio/mp4"
-                "aac" -> "audio/aac"
-                "ogg" -> "audio/ogg"
-                "opus" -> "audio/opus"
-                "aif", "aiff" -> "audio/x-aiff"
-                else -> "audio/mpeg"
-            }
-
-            if (!file.exists()) {
+            // Check canonical storage representation (handles Scoped Storage / emulated paths)
+            val canonical = StorageWritePermissionHelper.resolveCanonicalStorage(context, track, trackDao)
+            if (canonical == null) {
                 val ex = java.io.FileNotFoundException("File does not exist: $path")
                 PhysicalTagWriteLogger.logFailure(
                     tag = TAG,
@@ -176,25 +136,59 @@ class MetadataFileWriter(
                 return@withContext res
             }
 
-            if (!isFileWritable(file)) {
-                Log.w(TAG, "Direct file write not permitted for $path, probing MediaStore URI fallback...")
-                val mediaStoreUri = StorageWritePermissionHelper.resolveTargetUri(context, track)
-                if (mediaStoreUri != null) {
-                    targetWritePath = mediaStoreUri.toString()
-                    Log.i(TAG, "Resolved MediaStore content URI fallback: $targetWritePath")
-                } else {
-                    val ex = SecurityException("File is not writable (read-only on storage): $path")
-                    PhysicalTagWriteLogger.logFailure(
-                        tag = TAG,
-                        track = track,
-                        uri = path,
-                        filePath = path,
-                        mimeType = mimeType,
-                        extension = ext,
-                        isWritable = false,
-                        exception = ex
+            if (canonical.isDirectFile && canonical.directFile != null) {
+                val file = canonical.directFile
+                targetWritePath = file.absolutePath
+                ext = file.extension.lowercase(Locale.ROOT)
+                mimeType = when (ext) {
+                    "wav" -> "audio/wav"
+                    "flac" -> "audio/flac"
+                    "m4a", "mp4" -> "audio/mp4"
+                    "aac" -> "audio/aac"
+                    "ogg" -> "audio/ogg"
+                    "opus" -> "audio/opus"
+                    "aif", "aiff" -> "audio/x-aiff"
+                    else -> "audio/mpeg"
+                }
+
+                if (!canonical.isWritable) {
+                    Log.w(TAG, "Direct file write not permitted for $path, probing MediaStore/SAF URI fallback...")
+                    val fallbackUri = StorageWritePermissionHelper.resolveTargetUri(context, track)
+                    if (fallbackUri != null && fallbackUri.scheme != "file") {
+                        targetWritePath = fallbackUri.toString()
+                        Log.i(TAG, "Resolved MediaStore content URI fallback: $targetWritePath")
+                    } else {
+                        val ex = SecurityException("File is not writable (read-only on storage): $path")
+                        PhysicalTagWriteLogger.logFailure(
+                            tag = TAG,
+                            track = track,
+                            uri = path,
+                            filePath = path,
+                            mimeType = mimeType,
+                            extension = ext,
+                            isWritable = false,
+                            exception = ex
+                        )
+                        val res = MetadataWriteResult.ReadOnlyFile(path)
+                        updateDbState(track.id, res.writeState)
+                        return@withContext res
+                    }
+                }
+            } else {
+                // Canonical storage is a content:// URI (from MediaStore or SAF)
+                targetWritePath = canonical.uri.toString()
+                val (uExt, uMime) = resolveUriMimeAndExt(canonical.uri)
+                ext = uExt.ifBlank { File(path).extension.lowercase(Locale.ROOT) }
+                mimeType = uMime.ifBlank { "audio/mpeg" }
+
+                if (!canonical.isWritable) {
+                    val intentSender = StorageWritePermissionHelper.createSingleWriteRequest(context, canonical.uri)
+                    val res = MetadataWriteResult.PermissionRequired(
+                        path = targetWritePath,
+                        intentSender = intentSender,
+                        uri = canonical.uri,
+                        reason = "Write permission required for $targetWritePath"
                     )
-                    val res = MetadataWriteResult.ReadOnlyFile(path)
                     updateDbState(track.id, res.writeState)
                     return@withContext res
                 }
@@ -511,5 +505,37 @@ class MetadataFileWriter(
         artworkMimeType: String = "image/jpeg"
     ): MetadataWriteResult {
         return runBlocking { writeAsync(track, artworkBytes, artworkMimeType) }
+    }
+
+    private fun resolveUriMimeAndExt(uri: Uri): Pair<String, String> {
+        var mime = try { context.contentResolver.getType(uri).orEmpty().lowercase(Locale.ROOT) } catch (_: Exception) { "" }
+        var extension = ""
+        try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx != -1) {
+                        val name = cursor.getString(idx)
+                        if (!name.isNullOrBlank()) {
+                            extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        if (extension.isBlank()) {
+            extension = when {
+                mime.contains("wav") -> "wav"
+                mime.contains("flac") -> "flac"
+                mime.contains("mp4") || mime.contains("m4a") -> "m4a"
+                mime.contains("aac") -> "aac"
+                mime.contains("ogg") -> "ogg"
+                mime.contains("opus") -> "opus"
+                mime.contains("aiff") || mime.contains("aif") -> "aiff"
+                else -> "mp3"
+            }
+        }
+        return Pair(extension, mime)
     }
 }

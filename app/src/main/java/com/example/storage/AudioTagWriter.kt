@@ -229,11 +229,48 @@ object AudioTagWriter {
             }
 
             try {
-                contentResolver.openOutputStream(uri, "wt")?.use { outStream ->
-                    FileInputStream(tempFile).use { inStream ->
-                        inStream.copyTo(outStream, 64 * 1024)
+                // Prefer ParcelFileDescriptor with "rwt" or "w" and explicit fsync
+                val pfd = try {
+                    contentResolver.openFileDescriptor(uri, "rwt")
+                } catch (_: Exception) {
+                    try {
+                        contentResolver.openFileDescriptor(uri, "w")
+                    } catch (_: Exception) {
+                        null
                     }
-                } ?: return TagWriteResult.Failed("Could not open output stream for SAF URI: $uriString")
+                }
+
+                if (pfd != null) {
+                    pfd.use { p ->
+                        FileOutputStream(p.fileDescriptor).use { outStream ->
+                            FileInputStream(tempFile).use { inStream ->
+                                inStream.copyTo(outStream, 64 * 1024)
+                            }
+                            outStream.flush()
+                            try { p.fileDescriptor.sync() } catch (_: Exception) {}
+                        }
+                    }
+                } else {
+                    val outStream = try {
+                        contentResolver.openOutputStream(uri, "rwt")
+                    } catch (_: Exception) {
+                        try {
+                            contentResolver.openOutputStream(uri, "w")
+                        } catch (_: Exception) {
+                            contentResolver.openOutputStream(uri, "wt")
+                        }
+                    } ?: return TagWriteResult.Failed("Could not open output stream for SAF URI: $uriString")
+
+                    outStream.use { os ->
+                        FileInputStream(tempFile).use { inStream ->
+                            inStream.copyTo(os, 64 * 1024)
+                        }
+                        os.flush()
+                        if (os is FileOutputStream) {
+                            try { os.fd.sync() } catch (_: Exception) {}
+                        }
+                    }
+                }
             } catch (e: SecurityException) {
                 val intentSender = StorageWritePermissionHelper.createSingleWriteRequest(context, uri, e)
                 return TagWriteResult.PermissionRequired(uri, e, intentSender)
@@ -318,16 +355,26 @@ object AudioTagWriter {
      * Safely creates a temporary staging file for atomic tag writing.
      * Prefers the same directory to allow atomic rename, falling back to cache if unwritable.
      */
-    fun createTempStagingFile(file: File): File {
+    fun createTempStagingFile(file: File, context: Context? = null): File {
         return try {
             val parent = file.parentFile
             if (parent != null && parent.exists() && parent.canWrite()) {
                 File(parent, ".${file.name}.${System.currentTimeMillis()}.tmp")
+            } else if (context?.cacheDir != null && context.cacheDir.exists()) {
+                File(context.cacheDir, "ss_tag_${System.currentTimeMillis()}_${file.name}.tmp")
             } else {
                 File.createTempFile("ss_tag_", ".tmp")
             }
         } catch (_: Throwable) {
-            File.createTempFile("ss_tag_", ".tmp")
+            try {
+                if (context?.cacheDir != null && context.cacheDir.exists()) {
+                    File(context.cacheDir, "ss_tag_${System.currentTimeMillis()}_${file.name}.tmp")
+                } else {
+                    File.createTempFile("ss_tag_", ".tmp")
+                }
+            } catch (_: Throwable) {
+                File.createTempFile("ss_tag_", ".tmp")
+            }
         }
     }
 
@@ -1086,15 +1133,102 @@ object AudioTagWriter {
             if (fileLength < 4) return false
 
             val inputStream = FileInputStream(file)
-            val magic = ByteArray(4)
-            val readMagic = inputStream.read(magic)
-            if (readMagic < 4 || magic[0] != 'f'.code.toByte() || magic[1] != 'L'.code.toByte() || magic[2] != 'a'.code.toByte() || magic[3] != 'C'.code.toByte()) {
+            var flacOffset = 0L
+
+            val initialHeader = ByteArray(10)
+            val readInitial = inputStream.read(initialHeader)
+            if (readInitial < 4) {
                 inputStream.close()
-                Log.w(TAG, "File ${file.name} is not a valid FLAC stream")
                 return false
             }
 
+            if (initialHeader[0] == 'I'.code.toByte() &&
+                initialHeader[1] == 'D'.code.toByte() &&
+                initialHeader[2] == '3'.code.toByte()
+            ) {
+                // Prepended ID3v2 tag detected
+                val flags = if (readInitial >= 6) initialHeader[5].toInt() else 0
+                val hasFooter = (flags and 0x10) != 0
+                val tagBodySize = if (readInitial >= 10) decodeSyncSafe(initialHeader, 6) else 0
+                val totalId3Size = 10L + tagBodySize + (if (hasFooter) 10L else 0L)
+
+                // Try finding fLaC immediately after ID3v2 tag
+                var foundFlac = false
+                val checkBuf = ByteArray(4)
+                val maxFastSearch = minOf(fileLength - 4L, totalId3Size + 4096L)
+                for (offset in totalId3Size..maxFastSearch) {
+                    inputStream.channel.position(offset)
+                    if (!readFully(inputStream, checkBuf)) break
+                    if (checkBuf[0] == 'f'.code.toByte() &&
+                        checkBuf[1] == 'L'.code.toByte() &&
+                        checkBuf[2] == 'a'.code.toByte() &&
+                        checkBuf[3] == 'C'.code.toByte()
+                    ) {
+                        flacOffset = offset
+                        foundFlac = true
+                        break
+                    }
+                }
+
+                if (!foundFlac) {
+                    // Broader search within first 1MB
+                    val broadMax = minOf(fileLength - 4L, 1024L * 1024L)
+                    for (offset in 0L..broadMax) {
+                        inputStream.channel.position(offset)
+                        if (!readFully(inputStream, checkBuf)) break
+                        if (checkBuf[0] == 'f'.code.toByte() &&
+                            checkBuf[1] == 'L'.code.toByte() &&
+                            checkBuf[2] == 'a'.code.toByte() &&
+                            checkBuf[3] == 'C'.code.toByte()
+                        ) {
+                            flacOffset = offset
+                            foundFlac = true
+                            break
+                        }
+                    }
+                }
+
+                if (!foundFlac) {
+                    inputStream.close()
+                    Log.w(TAG, "File ${file.name} has prepended ID3 but no valid fLaC marker")
+                    return false
+                }
+            } else if (initialHeader[0] == 'f'.code.toByte() &&
+                initialHeader[1] == 'L'.code.toByte() &&
+                initialHeader[2] == 'a'.code.toByte() &&
+                initialHeader[3] == 'C'.code.toByte()
+            ) {
+                flacOffset = 0L
+            } else {
+                // Search first 64KB for fLaC marker
+                var foundFlac = false
+                val checkBuf = ByteArray(4)
+                val maxSearch = minOf(fileLength - 4L, 65536L)
+                for (offset in 0L..maxSearch) {
+                    inputStream.channel.position(offset)
+                    if (!readFully(inputStream, checkBuf)) break
+                    if (checkBuf[0] == 'f'.code.toByte() &&
+                        checkBuf[1] == 'L'.code.toByte() &&
+                        checkBuf[2] == 'a'.code.toByte() &&
+                        checkBuf[3] == 'C'.code.toByte()
+                    ) {
+                        flacOffset = offset
+                        foundFlac = true
+                        break
+                    }
+                }
+                if (!foundFlac) {
+                    inputStream.close()
+                    Log.w(TAG, "File ${file.name} is not a valid FLAC stream")
+                    return false
+                }
+            }
+
+            // Seek past "fLaC" marker
+            inputStream.channel.position(flacOffset + 4)
+
             data class PreservedBlock(val blockType: Int, val data: ByteArray)
+            var streamInfoBlock: PreservedBlock? = null
             val preservedBlocks = mutableListOf<PreservedBlock>()
             var isLast = false
             var existingVorbisCommentBytes: ByteArray? = null
@@ -1102,8 +1236,7 @@ object AudioTagWriter {
 
             while (!isLast) {
                 val blockHeader = ByteArray(4)
-                val readHdr = inputStream.read(blockHeader)
-                if (readHdr < 4) break
+                if (!readFully(inputStream, blockHeader)) break
 
                 isLast = (blockHeader[0].toInt() and 0x80) != 0
                 val blockType = blockHeader[0].toInt() and 0x7F
@@ -1112,20 +1245,21 @@ object AudioTagWriter {
                         (blockHeader[3].toInt() and 0xFF)
 
                 val blockData = ByteArray(blockLength)
-                var total = 0
-                while (total < blockLength) {
-                    val r = inputStream.read(blockData, total, blockLength - total)
-                    if (r <= 0) break
-                    total += r
-                }
+                if (!readFully(inputStream, blockData)) break
 
-                if (blockType == 4) {
-                    existingVorbisCommentBytes = blockData
-                } else if (blockType == 6) {
-                    existingPictureBlock = PreservedBlock(blockType, blockData)
-                } else if (blockType != 1) {
-                    preservedBlocks.add(PreservedBlock(blockType, blockData))
+                when (blockType) {
+                    0 -> streamInfoBlock = PreservedBlock(0, blockData)
+                    4 -> existingVorbisCommentBytes = blockData
+                    6 -> existingPictureBlock = PreservedBlock(6, blockData)
+                    1 -> { /* discard old padding */ }
+                    else -> preservedBlocks.add(PreservedBlock(blockType, blockData))
                 }
+            }
+
+            if (streamInfoBlock == null) {
+                inputStream.close()
+                Log.w(TAG, "File ${file.name} is missing mandatory FLAC STREAMINFO block")
+                return false
             }
 
             val existingComments = extractExistingVorbisComments(existingVorbisCommentBytes)
@@ -1135,25 +1269,35 @@ object AudioTagWriter {
 
             tempFile = createTempStagingFile(file)
             val fos = FileOutputStream(tempFile)
-            fos.write(magic)
+            val flacMagic = "fLaC".toByteArray(StandardCharsets.US_ASCII)
+            fos.write(flacMagic)
 
+            // Block 0: STREAMINFO (mandatory first block per FLAC spec)
+            writeFlacBlockHeader(fos, isLast = false, blockType = 0, length = streamInfoBlock.data.size)
+            fos.write(streamInfoBlock.data)
+
+            // Preserved metadata blocks (APPLICATION, SEEKTABLE, CUESHEET, etc.)
             for (p in preservedBlocks) {
                 writeFlacBlockHeader(fos, isLast = false, blockType = p.blockType, length = p.data.size)
                 fos.write(p.data)
             }
 
+            // Vorbis Comment block
             writeFlacBlockHeader(fos, isLast = false, blockType = 4, length = vorbisCommentBytes.size)
             fos.write(vorbisCommentBytes)
 
+            // Picture block (if present)
             if (pictureBlockBytes != null) {
                 writeFlacBlockHeader(fos, isLast = false, blockType = 6, length = pictureBlockBytes.size)
                 fos.write(pictureBlockBytes)
             }
 
+            // Padding block (1024 bytes, marked as isLast = true)
             val paddingBytes = ByteArray(1024)
             writeFlacBlockHeader(fos, isLast = true, blockType = 1, length = paddingBytes.size)
             fos.write(paddingBytes)
 
+            // Verbatim lossless copy of remaining audio frames
             val copyBuffer = ByteArray(64 * 1024)
             var bytes = inputStream.read(copyBuffer)
             while (bytes > 0) {
@@ -1162,10 +1306,11 @@ object AudioTagWriter {
             }
 
             fos.flush()
+            try { fos.fd.sync() } catch (_: Exception) {}
             fos.close()
             inputStream.close()
 
-            if (tempFile.length() > (fileLength / 2)) {
+            if (tempFile.length() > 42) {
                 if (replaceOriginalFile(file, tempFile)) {
                     Log.d(TAG, "Successfully wrote complete FLAC tags and artwork to ${file.name}")
                     return true

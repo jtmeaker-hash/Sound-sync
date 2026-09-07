@@ -17,6 +17,7 @@ import com.example.model.SyncState
 import com.example.model.Track
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.Locale
 
 object SafStorageManager {
@@ -279,5 +280,113 @@ object SafStorageManager {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * Retrieves all persisted SAF tree URIs with write permissions that are currently accessible.
+     */
+    fun getPersistedWriteFolderUris(context: Context): List<Uri> {
+        return try {
+            context.contentResolver.persistedUriPermissions
+                .filter { it.isWritePermission }
+                .map { it.uri }
+                .filter { isUriAccessible(context, it) }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Resolves a SAF DocumentFile for a track within any persisted SAF tree.
+     */
+    fun findDocumentForTrack(context: Context, track: Track): DocumentFile? {
+        val path = track.filePath
+        if (path.startsWith("content://")) {
+            try {
+                val doc = DocumentFile.fromSingleUri(context, Uri.parse(path))
+                if (doc != null && doc.exists()) return doc
+            } catch (_: Exception) {}
+        }
+        return findDocumentForPathOrName(context, path, track.storageRelativePath)
+    }
+
+    /**
+     * Finds a DocumentFile matching a filesystem path, file name, or storage relative path
+     * within any granted SAF directory tree.
+     */
+    fun findDocumentForPathOrName(
+        context: Context,
+        pathOrName: String,
+        storageRelativePath: String = ""
+    ): DocumentFile? {
+        val persistedTrees = getPersistedWriteFolderUris(context)
+        if (persistedTrees.isEmpty()) return null
+
+        val fileName = File(pathOrName).name.ifBlank { pathOrName }
+
+        for (treeUri in persistedTrees) {
+            val rootDoc = try { DocumentFile.fromTreeUri(context, treeUri) } catch (_: Exception) { null }
+            if (rootDoc == null || !rootDoc.exists() || !rootDoc.canRead()) continue
+
+            // 1. Try matching via storage relative path if provided
+            if (storageRelativePath.isNotBlank()) {
+                val doc = findDocumentByRelativePath(rootDoc, storageRelativePath)
+                if (doc != null && doc.exists()) return doc
+            }
+
+            // 2. Try relative path extracted from full filesystem path
+            val rootName = rootDoc.name.orEmpty()
+            if (rootName.isNotBlank() && pathOrName.contains(rootName)) {
+                val subPath = pathOrName.substringAfter(rootName).trimStart('/')
+                if (subPath.isNotBlank()) {
+                    val doc = findDocumentByRelativePath(rootDoc, subPath)
+                    if (doc != null && doc.exists()) return doc
+                }
+            }
+
+            // 3. Search direct and shallow subdirectories by file name
+            val docByName = findDocumentByName(rootDoc, fileName, maxDepth = 3)
+            if (docByName != null && docByName.exists()) return docByName
+        }
+
+        return null
+    }
+
+    /**
+     * Navigates down a DocumentFile tree hierarchy using a slash-separated relative path.
+     */
+    fun findDocumentByRelativePath(parent: DocumentFile, relativePath: String): DocumentFile? {
+        val segments = relativePath.split('/').filter { it.isNotBlank() }
+        var current: DocumentFile = parent
+        for (i in segments.indices) {
+            val segment = segments[i]
+            val next = current.findFile(segment) ?: return null
+            current = next
+        }
+        return current
+    }
+
+    /**
+     * Traverses child files and directories up to maxDepth looking for an exact file name.
+     */
+    fun findDocumentByName(parent: DocumentFile, fileName: String, maxDepth: Int = 3): DocumentFile? {
+        if (maxDepth < 0) return null
+        try {
+            val children = parent.listFiles()
+            // Direct child match first
+            for (child in children) {
+                if (child.isFile && child.name.equals(fileName, ignoreCase = true)) {
+                    return child
+                }
+            }
+            // Recursive match in subdirectories
+            for (child in children) {
+                if (child.isDirectory) {
+                    val found = findDocumentByName(child, fileName, maxDepth - 1)
+                    if (found != null) return found
+                }
+            }
+        } catch (_: Exception) {}
+        return null
     }
 }

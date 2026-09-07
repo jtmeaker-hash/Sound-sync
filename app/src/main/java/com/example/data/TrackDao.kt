@@ -123,4 +123,7 @@ interface TrackDao {
 
     @Query("SELECT * FROM tracks WHERE metadataWriteState IN ('FILE_WRITE_FAILED', 'READ_ONLY_FILE', 'PERMISSION_REQUIRED', 'DATABASE_ONLY') AND filePath != '' AND filePath NOT LIKE 'demo://%'")
     suspend fun getTracksWithWriteIssues(): List<TrackEntity>
+
+    @Query("UPDATE tracks SET filePath = :newPath WHERE id = :id")
+    suspend fun updateFilePath(id: String, newPath: String)
 }

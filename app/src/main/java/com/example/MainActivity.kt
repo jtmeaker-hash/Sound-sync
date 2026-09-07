@@ -16,6 +16,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -129,6 +133,48 @@ class MainActivity : ComponentActivity() {
                         Log.d(TAG, "SAF folder selected: $uri")
                         viewModel.importSafFolder(uri)
                     }
+                }
+
+                // Dedicated SAF Folder Permission Grant Launcher (for bulk tag embedding)
+                val folderPermissionRequest by viewModel.pendingFolderPermissionRequest.collectAsState()
+                val folderGrantLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.OpenDocumentTree()
+                ) { uri: Uri? ->
+                    Log.d(TAG, "SAF folder permission granted for embedding: $uri")
+                    viewModel.onFolderPermissionResult(uri)
+                }
+
+                if (folderPermissionRequest != null) {
+                    val req = folderPermissionRequest!!
+                    AlertDialog(
+                        onDismissRequest = { viewModel.onFolderPermissionResult(null) },
+                        title = { Text("Storage Permission Required") },
+                        text = {
+                            Text(
+                                "SoundSync needs permission to modify the music files in '${req.folderDisplayName}' (${req.affectedTrackCount} tracks).\n\n" +
+                                "Select this folder once to grant persistent write access so metadata can be embedded directly into your audio files without repeated prompts."
+                            )
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    try {
+                                        folderGrantLauncher.launch(null)
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Failed to launch folder picker: ${e.message}", e)
+                                        viewModel.onFolderPermissionResult(null)
+                                    }
+                                }
+                            ) {
+                                Text("Select Folder")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { viewModel.onFolderPermissionResult(null) }) {
+                                Text("Skip / Library Only")
+                            }
+                        }
+                    )
                 }
 
                 // Multiple Audio Files Picker Launcher

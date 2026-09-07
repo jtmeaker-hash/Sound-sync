@@ -9,7 +9,9 @@ import com.example.data.AppDatabase
 import com.example.data.TrackDao
 import com.example.model.MetadataWriteState
 import com.example.model.Track
+import com.example.storage.SafStorageManager
 import com.example.storage.StorageWritePermissionHelper
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -88,6 +90,17 @@ data class PendingWritePermissionRequest(
     val intentSender: IntentSender,
     val uris: List<Uri>,
     val deferred: CompletableDeferred<Boolean>
+)
+
+/**
+ * Pending SAF Directory Tree permission request for the UI layer to fulfill.
+ */
+data class PendingFolderPermissionRequest(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val folderPath: String,
+    val folderDisplayName: String,
+    val affectedTrackCount: Int,
+    val deferred: CompletableDeferred<Uri?>
 )
 
 /**
@@ -187,6 +200,9 @@ class MetadataFileWriteQueue private constructor(
     private val _pendingPermissionRequest = MutableStateFlow<PendingWritePermissionRequest?>(null)
     val pendingPermissionRequest: StateFlow<PendingWritePermissionRequest?> = _pendingPermissionRequest.asStateFlow()
 
+    private val _pendingFolderPermissionRequest = MutableStateFlow<PendingFolderPermissionRequest?>(null)
+    val pendingFolderPermissionRequest: StateFlow<PendingFolderPermissionRequest?> = _pendingFolderPermissionRequest.asStateFlow()
+
     @Volatile
     private var isCancelRequested = false
     private var pushJob: Job? = null
@@ -199,6 +215,48 @@ class MetadataFileWriteQueue private constructor(
         val pending = _pendingPermissionRequest.value
         _pendingPermissionRequest.value = null
         pending?.deferred?.complete(granted)
+    }
+
+    /**
+     * Responds to an external ActivityResult user selection for SAF folder permission.
+     */
+    fun onFolderPermissionResult(treeUri: Uri?) {
+        Log.i(TAG, "SAF folder permission result received: $treeUri")
+        val pending = _pendingFolderPermissionRequest.value
+        _pendingFolderPermissionRequest.value = null
+        if (treeUri != null) {
+            SafStorageManager.takePersistablePermissions(context, treeUri)
+        }
+        pending?.deferred?.complete(treeUri)
+    }
+
+    /**
+     * Pauses the queue worker until the user grants or denies folder access via system SAF picker.
+     */
+    private suspend fun requestFolderPermission(
+        folderPath: String,
+        folderDisplayName: String,
+        trackCount: Int
+    ): Uri? {
+        val deferred = CompletableDeferred<Uri?>()
+        _pendingFolderPermissionRequest.value = PendingFolderPermissionRequest(
+            folderPath = folderPath,
+            folderDisplayName = folderDisplayName,
+            affectedTrackCount = trackCount,
+            deferred = deferred
+        )
+        return try {
+            withTimeoutOrNull(90_000) {
+                deferred.await()
+            }
+        } catch (e: CancellationException) {
+            _pendingFolderPermissionRequest.value = null
+            null
+        } finally {
+            if (_pendingFolderPermissionRequest.value?.deferred == deferred) {
+                _pendingFolderPermissionRequest.value = null
+            }
+        }
     }
 
     /**
@@ -230,6 +288,8 @@ class MetadataFileWriteQueue private constructor(
         isCancelRequested = true
         _pendingPermissionRequest.value?.deferred?.complete(false)
         _pendingPermissionRequest.value = null
+        _pendingFolderPermissionRequest.value?.deferred?.complete(null)
+        _pendingFolderPermissionRequest.value = null
         pushJob?.cancel()
         _isPushingMetadata.value = false
     }
@@ -402,6 +462,108 @@ class MetadataFileWriteQueue private constructor(
     }
 
     /**
+     * Determines and pre-requests storage permissions in bulk before queue processing.
+     * Never prompts the user inside the per-track processing loop.
+     *
+     * 1. Detects tracks in folders requiring one-time SAF directory tree access.
+     * 2. Detects MediaStore URIs requiring batch write approval (Android 11+ / API 30+).
+     */
+    private suspend fun ensurePermissionsUpfront(
+        tracks: List<Track>,
+        total: Int,
+        onProgress: ((PushMetadataProgress) -> Unit)?
+    ) {
+        if (isCancelRequested || !coroutineContext.isActive) return
+
+        val mediaStoreUrisNeedingPerm = mutableListOf<Uri>()
+        val tracksNeedingFolderPerm = mutableListOf<Track>()
+
+        for (track in tracks) {
+            val path = track.filePath
+            if (path.isBlank() || path.startsWith("demo://") || path.startsWith("http")) continue
+
+            val canonical = StorageWritePermissionHelper.resolveCanonicalStorage(context, track, trackDao)
+            if (canonical == null) continue
+
+            if (canonical.isWritable) continue
+
+            if (canonical.uri.scheme == "content") {
+                if (canonical.uri.authority?.contains("media") == true) {
+                    mediaStoreUrisNeedingPerm.add(canonical.uri)
+                } else {
+                    tracksNeedingFolderPerm.add(track)
+                }
+            } else {
+                val mediaUri = StorageWritePermissionHelper.resolveTargetUri(context, track)
+                if (mediaUri != null && mediaUri.authority?.contains("media") == true) {
+                    mediaStoreUrisNeedingPerm.add(mediaUri)
+                } else {
+                    tracksNeedingFolderPerm.add(track)
+                }
+            }
+        }
+
+        // 1. SAF Folder Permission upfront if any tracks are in non-permitted folders
+        if (tracksNeedingFolderPerm.isNotEmpty() && !isCancelRequested && coroutineContext.isActive) {
+            val primaryFolder = tracksNeedingFolderPerm.mapNotNull {
+                val f = File(it.filePath)
+                f.parentFile
+            }.groupBy { it.absolutePath }
+                .maxByOrNull { it.value.size }?.value?.firstOrNull()
+
+            if (primaryFolder != null) {
+                val initProgress = PushMetadataProgress(
+                    current = 0,
+                    total = total,
+                    phase = PushMetadataPhase.AWAITING_PERMISSION,
+                    trackTitle = "Storage Permission Required",
+                    fileName = "Requesting folder permission for '${primaryFolder.name}' (${tracksNeedingFolderPerm.size} files)..."
+                )
+                _pushProgress.value = initProgress
+                onProgress?.invoke(initProgress)
+
+                val grantedTreeUri = requestFolderPermission(
+                    folderPath = primaryFolder.absolutePath,
+                    folderDisplayName = primaryFolder.name.ifBlank { "Music Folder" },
+                    trackCount = tracksNeedingFolderPerm.size
+                )
+                if (grantedTreeUri != null) {
+                    Log.i(TAG, "User granted SAF folder permission for $grantedTreeUri")
+                } else {
+                    Log.w(TAG, "User dismissed SAF folder permission. Affected tracks will be saved to library only.")
+                }
+            }
+        }
+
+        // 2. MediaStore Batch Write Permission (Android 11+ / API 30+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mediaStoreUrisNeedingPerm.isNotEmpty() && !isCancelRequested && coroutineContext.isActive) {
+            val distinctUris = mediaStoreUrisNeedingPerm.distinct()
+            val batches = distinctUris.chunked(150)
+            for (batch in batches) {
+                if (isCancelRequested || !coroutineContext.isActive) break
+                val intentSender = StorageWritePermissionHelper.createBatchWriteRequest(context, batch)
+                if (intentSender != null) {
+                    val initProgress = PushMetadataProgress(
+                        current = 0,
+                        total = total,
+                        phase = PushMetadataPhase.AWAITING_PERMISSION,
+                        trackTitle = "Storage Permission Required",
+                        fileName = "Requesting batch permission to modify ${batch.size} audio files..."
+                    )
+                    _pushProgress.value = initProgress
+                    onProgress?.invoke(initProgress)
+
+                    val granted = requestWritePermission(intentSender, batch)
+                    Log.i(TAG, "Batch write permission result: granted=$granted for ${batch.size} tracks")
+                    if (!granted) {
+                        Log.w(TAG, "User denied batch write permission. Files will be saved to library only.")
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Executes the authoritative 12-step bulk "Push Metadata to Files" operation
      * across the entire library:
      * 1. Reads all tracks in the SoundSync library.
@@ -440,47 +602,7 @@ class MetadataFileWriteQueue private constructor(
         var tracksProcessed = 0
 
         try {
-            // Android 11+ (API 30+) batch write permission pre-check
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !isCancelRequested) {
-                val urisNeedingPermission = mutableListOf<Uri>()
-                for (track in allTracks) {
-                    val path = track.filePath
-                    if (path.isBlank() || path.startsWith("demo://") || path.startsWith("http")) continue
-                    val file = if (!path.startsWith("content://")) File(path) else null
-                    if (file != null && StorageWritePermissionHelper.isDirectlyWritableFile(file)) {
-                        continue
-                    }
-                    val targetUri = StorageWritePermissionHelper.resolveTargetUri(context, track)
-                    if (targetUri != null && !StorageWritePermissionHelper.hasUriWritePermission(context, targetUri)) {
-                        urisNeedingPermission.add(targetUri)
-                    }
-                }
-
-                if (urisNeedingPermission.isNotEmpty()) {
-                    val batches = urisNeedingPermission.chunked(100)
-                    for (batch in batches) {
-                        if (isCancelRequested || !coroutineContext.isActive) break
-                        val intentSender = StorageWritePermissionHelper.createBatchWriteRequest(context, batch)
-                        if (intentSender != null) {
-                            val initProgress = PushMetadataProgress(
-                                current = 0,
-                                total = total,
-                                phase = PushMetadataPhase.AWAITING_PERMISSION,
-                                trackTitle = "Storage Permission Required",
-                                fileName = "Requesting permission to modify ${batch.size} audio files..."
-                            )
-                            _pushProgress.value = initProgress
-                            onProgress?.invoke(initProgress)
-
-                            val granted = requestWritePermission(intentSender, batch)
-                            Log.i(TAG, "Batch write permission result: granted=$granted for ${batch.size} tracks")
-                            if (!granted) {
-                                Log.w(TAG, "User denied batch write permission. Files may require per-file approval or fail.")
-                            }
-                        }
-                    }
-                }
-            }
+            ensurePermissionsUpfront(allTracks, total, onProgress)
 
             for ((index, track) in allTracks.withIndex()) {
                 if (isCancelRequested || !coroutineContext.isActive) {
@@ -621,30 +743,8 @@ class MetadataFileWriteQueue private constructor(
                         } catch (_: Exception) { null }
                     }
 
-                    var writeResult = semaphore.withPermit {
+                    val writeResult = semaphore.withPermit {
                         fileWriter.writeAsync(currentTrack, activeArtworkBytes)
-                    }
-
-                    // Pause & prompt for permission if needed
-                    if (writeResult is MetadataWriteResult.PermissionRequired && !isCancelRequested && coroutineContext.isActive) {
-                        val fallbackUri = writeResult.uri ?: targetUri ?: StorageWritePermissionHelper.resolveTargetUri(context, currentTrack)
-                        if (fallbackUri != null) {
-                            val singleSender = writeResult.intentSender ?: StorageWritePermissionHelper.createSingleWriteRequest(
-                                context,
-                                fallbackUri,
-                                writeResult.exception
-                            )
-                            if (singleSender != null) {
-                                updateProgress(PushMetadataPhase.AWAITING_PERMISSION)
-                                val granted = requestWritePermission(singleSender, listOf(fallbackUri))
-                                if (granted) {
-                                    updateProgress(PushMetadataPhase.WRITING_TAGS)
-                                    writeResult = semaphore.withPermit {
-                                        fileWriter.writeAsync(currentTrack, activeArtworkBytes)
-                                    }
-                                }
-                            }
-                        }
                     }
 
                     // Step 7-10: Reader verification is performed inside fileWriter.writeAsync
@@ -683,7 +783,7 @@ class MetadataFileWriteQueue private constructor(
                         is MetadataWriteResult.PermissionRequired -> {
                             permissionRequiredCount++
                             failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "Permission required to access file or content URI: ${writeResult.reason}", category = "Permission"))
-                            updateProgress(PushMetadataPhase.FAILED)
+                            updateProgress(PushMetadataPhase.SKIPPED)
                         }
                         is MetadataWriteResult.Unsupported -> {
                             unsupportedCount++
@@ -760,6 +860,8 @@ class MetadataFileWriteQueue private constructor(
         val failures = mutableListOf<PushMetadataFailure>()
 
         Log.i(TAG, "Retrying file writes for $total tracks using existing database metadata...")
+
+        ensurePermissionsUpfront(failedTracks, total, onProgress)
 
         for ((index, track) in failedTracks.withIndex()) {
             if (isCancelRequested || !coroutineContext.isActive) break
