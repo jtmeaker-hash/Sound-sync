@@ -174,12 +174,33 @@ object MediaScannerHelper {
 
                         // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 tags) if present
                         val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, targetPath)
-                        val effectiveTitle = embedded.title?.takeIf(String::isNotBlank) ?: title
-                        val effectiveArtist = embedded.artist?.takeIf(String::isNotBlank)
-                            ?: if (rawArtist.isNullOrBlank() || rawArtist == "<unknown>") "Unknown Artist" else rawArtist
-                        val effectiveAlbum = embedded.album?.takeIf(String::isNotBlank)
-                            ?: if (rawAlbum.isNullOrBlank() || rawAlbum == "<unknown>") "Single" else rawAlbum
-                        val effectiveGenre = embedded.genre?.takeIf(String::isNotBlank) ?: "DJ Library"
+                        var effectiveTitle = embedded?.title?.takeIf(String::isNotBlank) ?: title
+                        var effectiveArtist = embedded?.artist?.takeIf(String::isNotBlank)
+                            ?: if (rawArtist.isNullOrBlank() || rawArtist == "<unknown>") null else rawArtist
+                        var effectiveAlbum = embedded?.album?.takeIf(String::isNotBlank)
+                            ?: if (rawAlbum.isNullOrBlank() || rawAlbum == "<unknown>") null else rawAlbum
+
+                        // If artist is missing or invalid, or album is generic folder name, parse track identity
+                        val parsed = com.example.metadata.parser.TrackIdentityParser.parse(
+                            existingTitle = effectiveTitle,
+                            existingArtist = effectiveArtist,
+                            album = effectiveAlbum,
+                            filename = targetPath,
+                            durationSeconds = durationSec
+                        )
+
+                        if (!com.example.metadata.parser.TrackIdentityParser.isArtistValid(effectiveArtist)) {
+                            effectiveArtist = parsed.artist ?: "Unknown Artist"
+                            effectiveTitle = parsed.title
+                        } else {
+                            effectiveTitle = com.example.metadata.parser.TrackIdentityParser.cleanGarbage(effectiveTitle)
+                        }
+
+                        if (com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(effectiveAlbum)) {
+                            effectiveAlbum = parsed.album ?: "Single"
+                        }
+
+                        val effectiveGenre = embedded?.genre?.takeIf(String::isNotBlank) ?: "DJ Library"
                         val effectiveBpm = embedded.bpm ?: 0.0
                         val effectiveKey = embedded.camelotKey?.takeIf(String::isNotBlank)
                             ?: embedded.musicalKey?.takeIf(String::isNotBlank) ?: ""
@@ -191,8 +212,8 @@ object MediaScannerHelper {
                         val track = Track(
                             id = "media_$id",
                             title = effectiveTitle,
-                            artist = effectiveArtist,
-                            album = effectiveAlbum,
+                            artist = effectiveArtist.orEmpty().ifBlank { "Unknown Artist" },
+                            album = effectiveAlbum.orEmpty().ifBlank { "Single" },
                             albumArtist = embedded.albumArtist.orEmpty(),
                             genre = effectiveGenre,
                             subGenre = "Club",

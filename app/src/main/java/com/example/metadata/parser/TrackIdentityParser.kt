@@ -7,12 +7,15 @@ data class ParsedTrackIdentity(
     val title: String,
     val rawTitle: String = title,
     val rawArtist: String? = artist,
+    val cleanSearchTitle: String = title,
     val album: String? = null,
     val version: String? = null,
     val isArtistMissing: Boolean = artist.isNullOrBlank(),
+    val isRecordingPlaceholder: Boolean = false,
     val collaborations: List<String> = emptyList(),
     val searchTerms: List<String> = emptyList(),
-    val sourceOfTruth: String = "TAGS"
+    val sourceOfTruth: String = "TAGS",
+    val confidence: Float = 1.0f
 )
 
 /**
@@ -36,19 +39,26 @@ object TrackIdentityParser {
         "Acoustic", "Live", "Remaster", "Sped Up", "Slowed", "Clean", "Explicit"
     )
 
-    // Garbage patterns to strip from filenames / titles (video downloaders, bitrate markers)
-    private val GARBAGE_REGEXES = listOf(
-        Regex("(?i)\\[(y2mate\\.com|yt1s\\.com|ssyoutube\\.com|flvto|snaptube|tubemate|mp3skull)[^\\]]*\\]"),
-        Regex("(?i)\\((official (music )?video|official audio|lyric video|audio|video|visualizer)\\)"),
-        Regex("(?i)\\[(official (music )?video|official audio|lyric video|audio|video|visualizer)\\]"),
-        Regex("(?i)\\[(320kbps|320k|256k|192k|128k|flac 24bit|flac|hq|hd|cd rip)\\]"),
-        Regex("(?i)\\((320kbps|320k|256k|192k|128k|flac 24bit|flac|hq|hd|cd rip)\\)"),
-        Regex("(?i)^(\\w+\\.(com|net|org|io|ru|cc|me)\\s*[-_–—:]+\\s*)"),
-        Regex("(?i)\\[(www\\.[^\\]]+)\\]")
-    )
-
-    // Leading track number patterns (e.g. "01 - ", "01. ", "[01] ")
+    // Leading track number patterns (e.g. "01 - ", "01. ", "[01] ", "01 ")
     private val LEADING_TRACK_NUMBER_REGEX = Regex("^(\\[?\\d{1,3}\\]?[.\\-\\s]+|\\(\\d{1,3}\\)[.\\-\\s]+)")
+
+    // Timestamp suffixes: e.g. _202605281217014, -202601072125024, 202603161348019, _20260528_121701
+    private val TIMESTAMP_SUFFIX_REGEX = Regex("[_\\-\\s]+\\d{8,17}$")
+    private val DATE_TIME_SUFFIX_REGEX = Regex("[_\\-\\s]+\\d{6,8}_\\d{4,6}$")
+
+    // Standalone noise suffixes (e.g. " Tiktok", " clip", " Download")
+    private val NOISE_SUFFIX_REGEX = Regex("(?i)[_\\-\\s]+(tiktok|tik\\s+tok|clip|audio|download|downloaded|official audio|official video|official music video|lyric video|lyrics|hq|hd|4k|copy|edited|trim|trimmed)\\s*$")
+
+    // Enclosed noise tokens (e.g. [official video], (lyric video), [320kbps], (clip))
+    private val ENCLOSED_NOISE_REGEX = Regex("(?i)[\\[(](official (music )?video|official audio|lyric video|audio|video|visualizer|tiktok|tik\\s+tok|clip|download|downloaded|hq|hd|4k|320kbps|320k|256k|192k|128k|flac 24bit|flac|cd rip|copy|edited|trim|trimmed)[\\])]")
+
+    // Video downloader / website noise
+    private val DOWNLOADER_REGEX = Regex("(?i)[\\[(](y2mate\\.com|yt1s\\.com|ssyoutube\\.com|flvto|snaptube|tubemate|mp3skull)[^\\])]*[\\])]")
+    private val WEBSITE_PREFIX_REGEX = Regex("(?i)^(\\w+\\.(com|net|org|io|ru|cc|me)\\s*[-_–—:]+\\s*)")
+    private val WWW_ENCLOSED_REGEX = Regex("(?i)\\[(www\\.[^\\]]+)\\]")
+
+    // Recording placeholder detector (e.g. REC001, REC_20260101, Voice 001, Recording (12), Audio 01, Track 01)
+    private val RECORDING_REGEX = Regex("(?i)^(REC|Voice|Recording)([_\\-\\s(]*\\d+.*|\\s*)$|^(Audio|Track)[_\\-\\s(]+\\d+.*$")
 
     fun parse(
         existingTitle: String?,
@@ -73,10 +83,20 @@ object TrackIdentityParser {
         var sourceOfTruth = "TAGS"
         var parsedArtist: String? = null
         var parsedTitle: String? = null
+        var parsingConfidence = 1.0f
 
         val validExistingArtist = existingArtist?.trim()?.takeIf { isArtistValid(it) }
         val rawExistingTitle = existingTitle?.trim()?.takeIf { it.isNotBlank() }
-        val normalizedTitle = rawExistingTitle?.replace('–', '-')?.replace('—', '-')
+        var normalizedTitle = rawExistingTitle?.replace('–', '-')?.replace('—', '-')
+        if (normalizedTitle != null) {
+            normalizedTitle = LEADING_TRACK_NUMBER_REGEX.replace(normalizedTitle, "").trim()
+        }
+
+        val isRecording = (validExistingArtist == null) && (
+                isRecordingPlaceholder(rawName) ||
+                isRecordingPlaceholder(existingTitle) ||
+                isRecordingPlaceholder(cleanFilename)
+        )
 
         // 1. If existing artist is missing or placeholder, extract from title or filename (Section 2)
         if (validExistingArtist == null) {
@@ -89,6 +109,7 @@ object TrackIdentityParser {
                     parsedArtist = left
                     parsedTitle = right
                     sourceOfTruth = "TITLE_PARSE"
+                    parsingConfidence = 0.95f
                 }
             } else if (normalizedTitle != null && normalizedTitle.contains(" by ", ignoreCase = true)) {
                 val parts = normalizedTitle.split(Regex("(?i)\\s+by\\s+"), limit = 2)
@@ -96,6 +117,7 @@ object TrackIdentityParser {
                     parsedTitle = parts[0].trim()
                     parsedArtist = parts[1].trim()
                     sourceOfTruth = "TITLE_PARSE"
+                    parsingConfidence = 0.95f
                 }
             }
 
@@ -113,6 +135,7 @@ object TrackIdentityParser {
                             right
                         }
                         sourceOfTruth = "FILENAME_PARSE"
+                        parsingConfidence = 0.90f
                     }
                 } else if (cleanFilename.contains(" by ", ignoreCase = true)) {
                     val parts = cleanFilename.split(Regex("(?i)\\s+by\\s+"), limit = 2)
@@ -124,6 +147,22 @@ object TrackIdentityParser {
                             parts[0].trim()
                         }
                         sourceOfTruth = "FILENAME_PARSE"
+                        parsingConfidence = 0.90f
+                    }
+                } else if (cleanFilename.contains('_') && !cleanFilename.contains(" - ")) {
+                    // Check for "Artist_Title" format (e.g. Coone_Savages)
+                    val parts = cleanFilename.split('_')
+                    if (parts.size == 2) {
+                        val left = parts[0].trim()
+                        val right = parts[1].trim()
+                        if (isArtistValid(left) && left.length >= 2 && isTitleValid(right) &&
+                            !left.matches(Regex("\\d+")) && !right.matches(Regex("\\d+"))
+                        ) {
+                            parsedArtist = left
+                            parsedTitle = right
+                            sourceOfTruth = "FILENAME_PARSE"
+                            parsingConfidence = 0.85f
+                        }
                     }
                 }
             }
@@ -134,12 +173,14 @@ object TrackIdentityParser {
                 if (isArtistValid(parentDir) && !isGenericDirectoryName(parentDir)) {
                     parsedArtist = parentDir
                     sourceOfTruth = "FOLDER_PARSE"
+                    parsingConfidence = 0.70f
                 }
             }
         } else {
             // Existing artist is already valid!
             parsedArtist = validExistingArtist
             sourceOfTruth = "TAGS"
+            parsingConfidence = 1.0f
 
             // Check if existing title redundantly starts with "Artist - "
             if (normalizedTitle != null) {
@@ -155,14 +196,25 @@ object TrackIdentityParser {
         }
 
         val finalArtist = parsedArtist ?: validExistingArtist
+        val candidateTitle = parsedTitle ?: (rawExistingTitle?.takeIf { isTitleValid(it) } ?: cleanFilename.ifBlank { "Unknown Title" })
+        val finalTitle = cleanGarbage(candidateTitle).ifBlank { candidateTitle }
         val finalRawTitle = rawExistingTitle ?: cleanFilename.ifBlank { "Unknown Title" }
-        val finalTitle = parsedTitle ?: (rawExistingTitle?.takeIf { isTitleValid(it) } ?: cleanFilename.ifBlank { "Unknown Title" })
-        val cleanTitle = cleanGarbage(finalTitle)
 
         val isArtistMissing = finalArtist.isNullOrBlank() || !isArtistValid(finalArtist)
 
         // Extract version signature strictly preserving mixes (Remix, Extended Mix, Radio Edit, VIP, etc.)
-        val version = extractVersion(cleanTitle) ?: extractVersion(finalRawTitle) ?: extractVersion(cleanFilename)
+        val version = extractVersion(finalTitle) ?: extractVersion(finalRawTitle) ?: extractVersion(cleanFilename)
+
+        // Generate cleanSearchTitle: stripped of trailing version tags for optimal search indexing
+        val cleanSearchTitle = if (version != null) {
+            val stripped = finalTitle.replace(Regex("(?i)[\\[(].*?$version.*?[\\])]"), "")
+                .replace(Regex("(?i)[_\\-\\s]+$version\\s*$"), "")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            if (stripped.isNotBlank() && isTitleValid(stripped)) stripped else finalTitle
+        } else {
+            finalTitle
+        }
 
         val collaborations = if (!finalArtist.isNullOrBlank()) {
             extractCollaborations(finalArtist)
@@ -170,41 +222,51 @@ object TrackIdentityParser {
             emptyList()
         }
 
-        // Generate search terms
+        // Generate candidate search terms (Section 5)
         val searchTerms = mutableListOf<String>()
         if (!isArtistMissing && finalArtist != null) {
-            searchTerms.add("$finalArtist $cleanTitle")
-            if (version != null && !cleanTitle.contains(version, ignoreCase = true)) {
-                searchTerms.add("$finalArtist $cleanTitle ($version)")
+            searchTerms.add("$finalArtist $cleanSearchTitle")
+            if (finalTitle != cleanSearchTitle) {
+                searchTerms.add("$finalArtist $finalTitle")
+            }
+            if (version != null && !cleanSearchTitle.contains(version, ignoreCase = true)) {
+                searchTerms.add("$finalArtist $cleanSearchTitle ($version)")
             }
             if (collaborations.size > 1) {
-                searchTerms.add("${collaborations[0]} $cleanTitle")
+                searchTerms.add("${collaborations[0]} $cleanSearchTitle")
             }
+            searchTerms.add(cleanSearchTitle)
         } else {
-            searchTerms.add(cleanTitle)
-            if (version != null) {
-                val titleWithoutVersion = cleanTitle.replace(Regex("(?i)[\\[(].*?$version.*?[\\])]"), "").trim()
-                if (titleWithoutVersion.isNotBlank() && titleWithoutVersion != cleanTitle) {
-                    searchTerms.add(titleWithoutVersion)
-                }
+            searchTerms.add(cleanSearchTitle)
+            if (finalTitle != cleanSearchTitle) {
+                searchTerms.add(finalTitle)
+            }
+            if (cleanFilename != cleanSearchTitle && cleanFilename.isNotBlank()) {
+                searchTerms.add(cleanFilename)
             }
         }
 
+        // Album filtering: reject generic album folder names like "Download", "Recordings"
+        val cleanAlbum = album?.trim()?.takeIf { !isGenericAlbumName(it) }
+
         return ParsedTrackIdentity(
             artist = finalArtist?.takeIf { isArtistValid(it) },
-            title = cleanTitle,
+            title = finalTitle,
             rawTitle = finalRawTitle,
             rawArtist = existingArtist,
-            album = album?.trim()?.takeIf { it.isNotBlank() && !it.equals("Unknown Album", ignoreCase = true) },
+            cleanSearchTitle = cleanSearchTitle,
+            album = cleanAlbum,
             version = version,
             isArtistMissing = isArtistMissing,
+            isRecordingPlaceholder = isRecording,
             collaborations = collaborations,
-            searchTerms = searchTerms.distinct(),
-            sourceOfTruth = sourceOfTruth
+            searchTerms = searchTerms.distinct().filter { it.isNotBlank() },
+            sourceOfTruth = sourceOfTruth,
+            confidence = parsingConfidence
         )
     }
 
-    private fun isGenericDirectoryName(dir: String): Boolean {
+    fun isGenericDirectoryName(dir: String): Boolean {
         val lower = dir.lowercase(Locale.ROOT)
         if (lower.contains("test") || lower.contains("cache") || lower.contains("temp") ||
             lower.contains("tmp") || lower.contains("build") || lower.contains("robolectric") ||
@@ -219,9 +281,31 @@ object TrackIdentityParser {
         )
     }
 
-    fun isArtistValid(artist: String): Boolean {
+    /**
+     * Identifies folder names, generic markers, or filesystem paths mistakenly treated as album names.
+     */
+    fun isGenericAlbumName(album: String?): Boolean {
+        if (album.isNullOrBlank()) return true
+        val lower = album.trim().lowercase(Locale.ROOT)
+        if (lower.contains('/') || lower.contains('\\')) return true
+        return lower in setOf(
+            "download", "downloads", "recording", "recordings", "music", "audio",
+            "sound", "sounds", "tracks", "songs", "single", "singles", "trim",
+            "trimmed", "mstudio", "internal storage", "storage", "sdcard", "0",
+            "emulated", "files", "media", "album", "albums", "various",
+            "various artists", "unknown", "unknown album", "<unknown>", "soundsync"
+        )
+    }
+
+    fun isRecordingPlaceholder(name: String?): Boolean {
+        if (name.isNullOrBlank()) return false
+        val trimmed = name.trim()
+        return RECORDING_REGEX.matches(trimmed)
+    }
+
+    fun isArtistValid(artist: String?): Boolean {
+        if (artist.isNullOrBlank()) return false
         val trimmed = artist.trim()
-        if (trimmed.isBlank()) return false
         val lower = trimmed.lowercase(Locale.ROOT)
         return lower != "unknown" &&
             lower != "unknown artist" &&
@@ -229,18 +313,23 @@ object TrackIdentityParser {
             lower != "various artists" &&
             lower != "n/a" &&
             lower != "none" &&
-            lower != "null"
+            lower != "null" &&
+            !trimmed.matches(Regex("^\\d{1,4}$")) &&
+            !RECORDING_REGEX.matches(trimmed)
     }
 
-    fun isTitleValid(title: String): Boolean {
+    fun isTitleValid(title: String?): Boolean {
+        if (title.isNullOrBlank()) return false
         val trimmed = title.trim()
-        if (trimmed.isBlank()) return false
         val lower = trimmed.lowercase(Locale.ROOT)
         return lower != "unknown" &&
             lower != "unknown title" &&
             lower != "<unknown>" &&
             lower != "track" &&
-            lower != "audio"
+            lower != "audio" &&
+            lower != "recording" &&
+            lower != "untitled" &&
+            !lower.matches(Regex("^(track|audio|recording)\\s*\\d+$"))
     }
 
     fun extractVersion(text: String): String? {
@@ -260,9 +349,26 @@ object TrackIdentityParser {
 
     fun cleanGarbage(text: String): String {
         var cleaned = text
-        for (regex in GARBAGE_REGEXES) {
-            cleaned = regex.replace(cleaned, " ")
-        }
+        // 1. Strip downloaders, website prefixes, www markers
+        cleaned = DOWNLOADER_REGEX.replace(cleaned, " ")
+        cleaned = WEBSITE_PREFIX_REGEX.replace(cleaned, " ")
+        cleaned = WWW_ENCLOSED_REGEX.replace(cleaned, " ")
+
+        // 2. Strip enclosed noise tokens
+        cleaned = ENCLOSED_NOISE_REGEX.replace(cleaned, " ")
+
+        // 3. Strip date/time suffixes
+        val noDate = DATE_TIME_SUFFIX_REGEX.replace(cleaned.trim(), "")
+        if (noDate.isNotBlank()) cleaned = noDate
+
+        // 4. Strip timestamp suffixes (e.g. _202605281217014)
+        val noTimestamp = TIMESTAMP_SUFFIX_REGEX.replace(cleaned.trim(), "")
+        if (noTimestamp.isNotBlank()) cleaned = noTimestamp
+
+        // 5. Strip trailing noise tokens (e.g. " Tiktok", " clip")
+        val noNoise = NOISE_SUFFIX_REGEX.replace(cleaned.trim(), "")
+        if (noNoise.isNotBlank()) cleaned = noNoise
+
         return cleaned.replace(Regex("\\s+"), " ").trim()
     }
 

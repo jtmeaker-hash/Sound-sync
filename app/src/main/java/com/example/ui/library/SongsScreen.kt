@@ -82,18 +82,6 @@ import androidx.compose.ui.unit.sp
 import com.example.model.AudioQualityRating
 import com.example.model.Track
 import com.example.ui.components.MetadataProvenanceBadge
-import com.example.ui.theme.DeckACyan
-import com.example.ui.theme.DeckBPink
-import com.example.ui.theme.DjObsidian
-import com.example.ui.theme.DjSurfaceBorder
-import com.example.ui.theme.DjSurfaceCard
-import com.example.ui.theme.DjSurfaceDark
-import com.example.ui.theme.DjSurfaceElevated
-import com.example.ui.theme.NeonGreen
-import com.example.ui.theme.NeonPurple
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.SoundSyncTheme
 import com.example.ui.theme.LocalLibraryDensity
 import com.example.ui.theme.ProLibraryDensity
@@ -151,6 +139,7 @@ fun SongsScreen(
     onOpenLyrics: ((Track) -> Unit)? = null,
     onOpenTrackIntelligence: ((Track) -> Unit)? = null
 ) {
+    val theme = SoundSyncTheme.current
     var searchQuery by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SongSortMode.TITLE_ASC) }
     var showSortMenu by remember { mutableStateOf(false) }
@@ -179,9 +168,9 @@ fun SongsScreen(
         // Multi-Select Header Toolbar
         if (selectedTrackIds.isNotEmpty()) {
             Surface(
-                color = DjSurfaceElevated,
-                border = androidx.compose.foundation.BorderStroke(1.dp, DeckACyan),
-                shape = RoundedCornerShape(8.dp),
+                color = theme.surfaceRaised,
+                border = androidx.compose.foundation.BorderStroke(1.dp, theme.accent),
+                shape = RoundedCornerShape(theme.cornerMedium),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp)
@@ -195,11 +184,11 @@ fun SongsScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         IconButton(onClick = { selectedTrackIds = emptySet() }, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear Selection", tint = TextPrimary, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Close, contentDescription = "Clear Selection", tint = theme.textPrimary, modifier = Modifier.size(18.dp))
                         }
                         Text(
                             text = "${selectedTrackIds.size} selected",
-                            color = DeckACyan,
+                            color = theme.accent,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp
                         )
@@ -219,7 +208,7 @@ fun SongsScreen(
                             Text(
                                 text = if (selectedTrackIds.size == filteredTracks.size) "Deselect All" else "Select All",
                                 fontSize = 11.sp,
-                                color = TextPrimary
+                                color = theme.textPrimary
                             )
                         }
 
@@ -228,13 +217,16 @@ fun SongsScreen(
                                 val selectedList = filteredTracks.filter { it.id in selectedTrackIds }
                                 onBulkEditTracks?.invoke(selectedList)
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = theme.accent,
+                                contentColor = theme.onAccent
+                            ),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(6.dp)
+                            shape = RoundedCornerShape(theme.cornerSmall)
                         ) {
-                            Icon(Icons.Default.Edit, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Default.Edit, contentDescription = null, tint = theme.onAccent, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Bulk Edit", color = DjObsidian, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Bulk Edit", color = theme.onAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -264,14 +256,15 @@ fun SongsScreen(
                     onClick = { showSortMenu = true },
                     modifier = Modifier
                         .size(48.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(DjSurfaceDark)
+                        .clip(RoundedCornerShape(theme.cornerSmall))
+                        .background(theme.surfaceRaised)
+                        .border(1.dp, theme.divider, RoundedCornerShape(theme.cornerSmall))
                         .testTag("songs_sort_button")
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Sort,
                         contentDescription = "Sort Songs",
-                        tint = DeckACyan,
+                        tint = theme.accent,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -279,14 +272,14 @@ fun SongsScreen(
                 DropdownMenu(
                     expanded = showSortMenu,
                     onDismissRequest = { showSortMenu = false },
-                    modifier = Modifier.background(DjSurfaceElevated)
+                    modifier = Modifier.background(theme.surfaceRaised)
                 ) {
                     SongSortMode.entries.forEach { mode ->
                         DropdownMenuItem(
                             text = {
                                 Text(
                                     text = mode.label,
-                                    color = if (sortMode == mode) DeckACyan else TextPrimary,
+                                    color = if (sortMode == mode) theme.accent else theme.textPrimary,
                                     fontWeight = if (sortMode == mode) FontWeight.Bold else FontWeight.Normal
                                 )
                             },
@@ -317,7 +310,7 @@ fun SongsScreen(
                         text = "${filteredTracks.size} tracks",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = TextSecondary
+                        color = theme.textSecondary
                     )
 
                     FilterChip(
@@ -338,20 +331,20 @@ fun SongsScreen(
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            containerColor = DjSurfaceCard,
-                            labelColor = TextSecondary,
-                            selectedContainerColor = DeckACyan.copy(alpha = 0.2f),
-                            selectedLabelColor = DeckACyan,
-                            selectedLeadingIconColor = DeckACyan
+                            containerColor = theme.surfaceRaised,
+                            labelColor = theme.textSecondary,
+                            selectedContainerColor = theme.accent.copy(alpha = 0.2f),
+                            selectedLabelColor = theme.accent,
+                            selectedLeadingIconColor = theme.accent
                         ),
                         border = FilterChipDefaults.filterChipBorder(
                             enabled = true,
                             selected = hideUnavailableTracks,
-                            borderColor = DjSurfaceBorder,
-                            selectedBorderColor = DeckACyan,
+                            borderColor = theme.divider,
+                            selectedBorderColor = theme.accent,
                             borderWidth = 1.dp
                         ),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(theme.cornerSmall),
                         modifier = Modifier.height(30.dp).testTag("filter_unavailable_tracks_chip")
                     )
                 }
@@ -360,11 +353,11 @@ fun SongsScreen(
                     Button(
                         onClick = { onPlayAll(filteredTracks, false) },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = DeckACyan.copy(alpha = 0.15f),
-                            contentColor = DeckACyan
+                            containerColor = theme.accent,
+                            contentColor = theme.onAccent
                         ),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(theme.cornerSmall),
                         modifier = Modifier
                             .height(34.dp)
                             .testTag("play_all_songs_button")
@@ -381,11 +374,12 @@ fun SongsScreen(
                     Button(
                         onClick = { onPlayAll(filteredTracks, true) },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = DeckBPink.copy(alpha = 0.15f),
-                            contentColor = DeckBPink
+                            containerColor = theme.surfaceRaised,
+                            contentColor = theme.textPrimary
                         ),
+                        border = BorderStroke(1.dp, theme.divider),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(theme.cornerSmall),
                         modifier = Modifier
                             .height(34.dp)
                             .testTag("shuffle_all_songs_button")
@@ -417,23 +411,23 @@ fun SongsScreen(
                     Icon(
                         imageVector = Icons.Default.MusicNote,
                         contentDescription = null,
-                        tint = TextMuted,
+                        tint = theme.textMuted,
                         modifier = Modifier.size(64.dp)
                     )
                     Text(
                         text = if (searchQuery.isNotBlank()) "No songs match '$searchQuery'" else "No local tracks indexed yet",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
-                        color = TextSecondary
+                        color = theme.textSecondary
                     )
                     if (searchQuery.isBlank()) {
                         Button(
                             onClick = onStartScan,
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = DeckACyan,
-                                contentColor = DjObsidian
+                                containerColor = theme.accent,
+                                contentColor = theme.onAccent
                             ),
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(theme.cornerSmall),
                             modifier = Modifier.testTag("empty_scan_button")
                         ) {
                             Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -542,6 +536,7 @@ fun SongTrackRow(
         return
     }
 
+    val theme = SoundSyncTheme.current
     var showMenu by remember { mutableStateOf(false) }
 
     val formattedDuration = remember(track.durationSeconds) {
@@ -553,15 +548,15 @@ fun SongTrackRow(
     val isAvailable = track.isAvailable
 
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = if (isSelected) DeckACyan.copy(alpha = 0.15f)
-                else if (isCurrent) DeckACyan.copy(alpha = 0.08f)
-                else DjSurfaceDark.copy(alpha = if (isAvailable) 1f else 0.45f),
+        shape = RoundedCornerShape(theme.cornerSmall),
+        color = if (isSelected) theme.selectedSurface
+                else if (isCurrent) theme.playingSurface
+                else theme.surface.copy(alpha = if (isAvailable) 1f else 0.45f),
         border = androidx.compose.foundation.BorderStroke(
             if (isSelected) 1.5.dp else 1.dp,
-            if (isSelected) DeckACyan
-            else if (isCurrent) DeckACyan.copy(alpha = 0.5f)
-            else DjSurfaceBorder.copy(alpha = if (isAvailable) 0.5f else 0.25f)
+            if (isSelected) theme.accent
+            else if (isCurrent) theme.accent.copy(alpha = 0.5f)
+            else theme.divider.copy(alpha = if (isAvailable) 0.8f else 0.3f)
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -589,9 +584,9 @@ fun SongTrackRow(
                     checked = isSelected,
                     onCheckedChange = { onToggleSelection() },
                     colors = CheckboxDefaults.colors(
-                        checkedColor = DeckACyan,
-                        checkmarkColor = DjObsidian,
-                        uncheckedColor = TextMuted
+                        checkedColor = theme.accent,
+                        checkmarkColor = theme.onAccent,
+                        uncheckedColor = theme.textMuted
                     ),
                     modifier = Modifier.padding(end = 6.dp)
                 )
@@ -599,27 +594,28 @@ fun SongTrackRow(
             // Artwork / Format Icon
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(theme.cornerSmall))
                     .background(
-                        if (isCurrent) DeckACyan.copy(alpha = 0.2f)
-                        else DjSurfaceCard
-                    ),
+                        if (isCurrent) theme.accent.copy(alpha = 0.15f)
+                        else theme.surfaceRaised
+                    )
+                    .border(0.5.dp, theme.divider, RoundedCornerShape(theme.cornerSmall)),
                 contentAlignment = Alignment.Center
             ) {
                 if (!isAvailable) {
                     Icon(
                         imageVector = Icons.Default.CloudOff,
                         contentDescription = "Disconnected",
-                        tint = TextMuted,
-                        modifier = Modifier.size(22.dp)
+                        tint = theme.textMuted,
+                        modifier = Modifier.size(20.dp)
                     )
                 } else if (isCurrent) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Equalizer else Icons.Default.PlayArrow,
                         contentDescription = "Playing",
-                        tint = DeckACyan,
-                        modifier = Modifier.size(24.dp)
+                        tint = theme.accent,
+                        modifier = Modifier.size(22.dp)
                     )
                 } else {
                     Column(
@@ -628,15 +624,16 @@ fun SongTrackRow(
                     ) {
                         Text(
                             text = track.format,
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (track.format == "FLAC" || track.format == "WAV") NeonGreen else DeckACyan
+                            color = if (track.qualityRating.isLossless) Color(0xFF00E676) else theme.accent,
+                            fontFamily = FontFamily.Monospace
                         )
                         if (track.bitrateKbps > 0) {
                             Text(
                                 text = "${track.bitrateKbps}k",
                                 fontSize = 9.sp,
-                                color = TextMuted,
+                                color = theme.textMuted,
                                 fontFamily = FontFamily.Monospace
                             )
                         }
@@ -652,7 +649,7 @@ fun SongTrackRow(
                     text = track.title,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (!isAvailable) TextMuted else if (isCurrent) DeckACyan else TextPrimary,
+                    color = if (!isAvailable) theme.textDisabled else if (isCurrent) theme.accent else theme.textPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -666,18 +663,18 @@ fun SongTrackRow(
                     Text(
                         text = track.artist,
                         fontSize = 12.sp,
-                        color = if (!isAvailable) TextMuted.copy(alpha = 0.7f) else TextSecondary,
+                        color = if (!isAvailable) theme.textDisabled else theme.textSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
 
                     if (track.album.isNotBlank() && track.album != "Single") {
-                        Text(text = "•", fontSize = 10.sp, color = TextMuted)
+                        Text(text = "•", fontSize = 10.sp, color = theme.textMuted)
                         Text(
                             text = track.album,
                             fontSize = 11.sp,
-                            color = TextMuted,
+                            color = theme.textMuted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
@@ -694,8 +691,9 @@ fun SongTrackRow(
                 ) {
                     if (!isAvailable) {
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = DjSurfaceElevated.copy(alpha = 0.7f)
+                            shape = RoundedCornerShape(theme.cornerSmall),
+                            color = theme.surfaceRaised.copy(alpha = 0.7f),
+                            border = BorderStroke(0.5.dp, theme.divider)
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -704,7 +702,7 @@ fun SongTrackRow(
                                 Icon(
                                     imageVector = Icons.Default.CloudOff,
                                     contentDescription = null,
-                                    tint = TextMuted,
+                                    tint = theme.textMuted,
                                     modifier = Modifier.size(10.dp)
                                 )
                                 Spacer(modifier = Modifier.width(3.dp))
@@ -713,7 +711,7 @@ fun SongTrackRow(
                                     fontSize = 9.sp,
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
-                                    color = TextMuted,
+                                    color = theme.textMuted,
                                     maxLines = 1,
                                     softWrap = false
                                 )
@@ -723,15 +721,16 @@ fun SongTrackRow(
 
                     if (track.bpm > 0) {
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = DjSurfaceElevated
+                            shape = RoundedCornerShape(theme.cornerSmall),
+                            color = theme.surfaceRaised,
+                            border = BorderStroke(0.5.dp, theme.divider)
                         ) {
                             Text(
                                 text = "${track.bpm.toInt()} BPM",
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
-                                color = DeckACyan,
+                                color = theme.accent,
                                 maxLines = 1,
                                 softWrap = false,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
@@ -741,15 +740,16 @@ fun SongTrackRow(
 
                     if (track.musicalKey.isNotBlank()) {
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = DjSurfaceElevated
+                            shape = RoundedCornerShape(theme.cornerSmall),
+                            color = theme.surfaceRaised,
+                            border = BorderStroke(0.5.dp, theme.divider)
                         ) {
                             Text(
-                                text = track.musicalKey,
+                                text = track.camelotKey.ifBlank { track.musicalKey },
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
-                                color = DeckBPink,
+                                color = theme.textPrimary,
                                 maxLines = 1,
                                 softWrap = false,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
@@ -759,14 +759,15 @@ fun SongTrackRow(
 
                     if (track.qualityRating == AudioQualityRating.TRUE_LOSSLESS) {
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = NeonGreen.copy(alpha = 0.15f)
+                            shape = RoundedCornerShape(theme.cornerSmall),
+                            color = theme.surfaceRaised,
+                            border = BorderStroke(0.5.dp, Color(0xFF00E676).copy(alpha = 0.4f))
                         ) {
                             Text(
                                 text = "LOSSLESS",
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = NeonGreen,
+                                color = Color(0xFF00E676),
                                 maxLines = 1,
                                 softWrap = false,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
@@ -788,7 +789,7 @@ fun SongTrackRow(
                     text = formattedDuration,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = TextSecondary,
+                    color = theme.textSecondary,
                     maxLines = 1
                 )
 
@@ -800,7 +801,7 @@ fun SongTrackRow(
                         Icon(
                             imageVector = Icons.Default.MoreVert,
                             contentDescription = "Options",
-                            tint = TextSecondary,
+                            tint = theme.textSecondary,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -808,35 +809,35 @@ fun SongTrackRow(
                     DropdownMenu(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false },
-                        modifier = Modifier.background(DjSurfaceElevated)
+                        modifier = Modifier.background(theme.surfaceRaised)
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Add to Playlist", color = TextPrimary) },
-                            leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = DeckACyan) },
+                            text = { Text("Add to Playlist", color = theme.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = theme.accent) },
                             onClick = {
                                 showMenu = false
                                 onAddToPlaylist()
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Play Next", color = TextPrimary) },
-                            leadingIcon = { Icon(Icons.Default.QueueMusic, contentDescription = null, tint = DeckBPink) },
+                            text = { Text("Play Next", color = theme.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.QueueMusic, contentDescription = null, tint = theme.accent) },
                             onClick = {
                                 showMenu = false
                                 onQueueTrack(true)
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Add to Queue", color = TextPrimary) },
-                            leadingIcon = { Icon(Icons.Default.Queue, contentDescription = null, tint = TextSecondary) },
+                            text = { Text("Add to Queue", color = theme.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.Queue, contentDescription = null, tint = theme.textSecondary) },
                             onClick = {
                                 showMenu = false
                                 onQueueTrack(false)
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Analyse Spectrogram", color = TextPrimary) },
-                            leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = NeonPurple) },
+                            text = { Text("Analyse Spectrogram", color = theme.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = theme.textSecondary) },
                             onClick = {
                                 showMenu = false
                                 onInspectSpectrogram()
@@ -844,8 +845,8 @@ fun SongTrackRow(
                         )
                         if (onMixWithThis != null) {
                             DropdownMenuItem(
-                                text = { Text("Mix With This", color = TextPrimary) },
-                                leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = DeckACyan) },
+                                text = { Text("Mix With This", color = theme.textPrimary) },
+                                leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = theme.accent) },
                                 onClick = {
                                     showMenu = false
                                     onMixWithThis()
@@ -854,8 +855,8 @@ fun SongTrackRow(
                         }
                         if (onInspectQuality != null) {
                             DropdownMenuItem(
-                                text = { Text("Inspect Quality", color = TextPrimary) },
-                                leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = NeonGreen) },
+                                text = { Text("Inspect Quality", color = theme.textPrimary) },
+                                leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, tint = Color(0xFF00E676)) },
                                 onClick = {
                                     showMenu = false
                                     onInspectQuality()
@@ -864,8 +865,8 @@ fun SongTrackRow(
                         }
                         if (onOpenLyrics != null) {
                             DropdownMenuItem(
-                                text = { Text("Lyrics & Timestamps", color = TextPrimary) },
-                                leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null, tint = DeckACyan) },
+                                text = { Text("Lyrics & Timestamps", color = theme.textPrimary) },
+                                leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null, tint = theme.accent) },
                                 onClick = {
                                     showMenu = false
                                     onOpenLyrics()
@@ -874,8 +875,8 @@ fun SongTrackRow(
                         }
                         if (onOpenTrackIntelligence != null) {
                             DropdownMenuItem(
-                                text = { Text("Track Intelligence", color = TextPrimary) },
-                                leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null, tint = NeonPurple) },
+                                text = { Text("Track Intelligence", color = theme.textPrimary) },
+                                leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null, tint = theme.accent) },
                                 onClick = {
                                     showMenu = false
                                     onOpenTrackIntelligence()
@@ -883,8 +884,8 @@ fun SongTrackRow(
                             )
                         }
                         DropdownMenuItem(
-                            text = { Text("Track Inspector", color = DeckACyan, fontWeight = FontWeight.SemiBold) },
-                            leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = DeckACyan) },
+                            text = { Text("Track Inspector", color = theme.accent, fontWeight = FontWeight.SemiBold) },
+                            leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = theme.accent) },
                             onClick = {
                                 showMenu = false
                                 onInspectProperties()

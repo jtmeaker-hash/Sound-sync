@@ -208,4 +208,32 @@ open class AppleMetadataProvider(
             null
         }
     }
+
+    /**
+     * Downloads high-resolution artwork from an Apple CDN URL.
+     */
+    open suspend fun downloadArtwork(artworkUrl: String): com.example.metadata.theaudiodb.DownloadedArtwork? = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(artworkUrl)
+            .header("User-Agent", "SoundSync/1.0.0 (Linux; Android)")
+            .get()
+            .build()
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val bytes = response.body?.bytes() ?: return@withContext null
+                val contentType = response.header("Content-Type") ?: "image/jpeg"
+                com.example.metadata.theaudiodb.DownloadedArtwork(
+                    bytes = bytes,
+                    mimeType = contentType,
+                    width = 1200,
+                    height = 1200,
+                    sourceUrl = artworkUrl
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed downloading artwork from $artworkUrl: ${e.message}")
+            null
+        }
+    }
 }

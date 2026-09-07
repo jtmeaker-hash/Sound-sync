@@ -161,7 +161,7 @@ class MetadataResolverTest {
     }
 
     @Test
-    fun `MetadataResolver resolves artwork via Cover Art Archive and never substitutes Apple artwork`() = runBlocking {
+    fun `MetadataResolver resolves artwork via high-res Apple release artwork without MusicBrainz`() = runBlocking {
         val localTrack = Track(
             id = "t_avicii",
             title = "Levels",
@@ -182,32 +182,18 @@ class MetadataResolverTest {
                         trackTimeMillis = 338867L,
                         releaseDate = "2011-07-28T12:00:00Z",
                         primaryGenreName = "Dance",
-                        artworkUrl100 = "https://example.com/artwork100.jpg"
+                        artworkUrl100 = "https://example.com/artwork100bb.jpg"
                     )
                 )
             }
-        }
 
-        val mockMbResolver = object : com.example.metadata.musicbrainz.MusicBrainzResolver() {
-            override suspend fun resolveMbid(artistName: String, trackName: String, collectionName: String?, durationMs: Long): com.example.metadata.musicbrainz.MusicBrainzMatch? {
-                return com.example.metadata.musicbrainz.MusicBrainzMatch(
-                    releaseMbid = "9fffba04-fba1-4a09-9336-afe57e3c056f",
-                    releaseGroupMbid = "3ed4cd58-5ef4-4a30-a828-357c102cf4c6",
-                    releaseTitle = "Levels",
-                    artistName = "Avicii",
-                    score = 100.0
-                )
-            }
-        }
-
-        val mockCaa = object : com.example.metadata.coverart.CoverArtArchiveProvider() {
-            override suspend fun fetchFrontCover(releaseMbid: String?, releaseGroupMbid: String?): com.example.metadata.coverart.DownloadedCoverArt? {
-                return com.example.metadata.coverart.DownloadedCoverArt(
+            override suspend fun downloadArtwork(artworkUrl: String): DownloadedArtwork? {
+                return DownloadedArtwork(
                     bytes = byteArrayOf(0x01, 0x02, 0x03, 0x04),
                     mimeType = "image/jpeg",
-                    width = 500,
-                    height = 500,
-                    sourceUrl = "https://coverartarchive.org/release/9fffba04-fba1-4a09-9336-afe57e3c056f/front-500"
+                    width = 1200,
+                    height = 1200,
+                    sourceUrl = artworkUrl
                 )
             }
         }
@@ -215,8 +201,6 @@ class MetadataResolverTest {
         val customResolver = MetadataResolver(
             context = context,
             appleProvider = mockApple,
-            musicBrainzResolver = mockMbResolver,
-            coverArtArchiveProvider = mockCaa,
             artworkCache = ArtworkCache(context)
         )
 
@@ -226,7 +210,7 @@ class MetadataResolverTest {
         assertEquals("Avicii", updated.artist)
         assertEquals("Levels", updated.title)
         assertEquals("Dance", updated.genre)
-        assertEquals("Cover Art Archive", updated.artworkSource)
+        assertEquals("Apple iTunes", updated.artworkSource)
         assertNotNull(updated.artworkCachePath)
         assertTrue(File(updated.artworkCachePath!!).exists())
     }

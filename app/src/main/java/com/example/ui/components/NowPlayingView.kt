@@ -72,17 +72,9 @@ import com.example.audio.WaveformData
 import com.example.model.NowPlayingDisplayMode
 import com.example.model.Track
 import com.example.model.WaveformStyle
-import com.example.ui.theme.DeckACyan
-import com.example.ui.theme.DeckBPink
-import com.example.ui.theme.DjObsidian
-import com.example.ui.theme.DjSurfaceBorder
-import com.example.ui.theme.DjSurfaceCard
-import com.example.ui.theme.DjSurfaceDark
-import com.example.ui.theme.NeonAmber
-import com.example.ui.theme.NeonGreen
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.SoundSyncTheme
+import com.example.ui.theme.DjMonoBpm
+import com.example.ui.theme.DjMonoKey
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -126,13 +118,15 @@ fun NowPlayingView(
     val remMin = remainingSec / 60
     val remS = remainingSec % 60
 
+    val theme = SoundSyncTheme.current
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(DjSurfaceDark)
-            .border(1.dp, DjSurfaceBorder, RoundedCornerShape(16.dp))
-            .padding(16.dp)
+            .clip(RoundedCornerShape(theme.cornerMedium))
+            .background(theme.surface)
+            .border(1.dp, theme.divider, RoundedCornerShape(theme.cornerMedium))
+            .padding(14.dp)
             .testTag("now_playing_view"),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -147,8 +141,8 @@ fun NowPlayingView(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = track.title,
-                    color = TextPrimary,
-                    fontSize = 18.sp,
+                    color = theme.textPrimary,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -161,18 +155,18 @@ fun NowPlayingView(
                 ) {
                     Text(
                         text = track.artist,
-                        color = TextSecondary,
-                        fontSize = 13.sp,
+                        color = theme.textSecondary,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.testTag("now_playing_artist")
                     )
-                    Text(text = "•", color = TextMuted, fontSize = 12.sp)
+                    Text(text = "•", color = theme.textMuted, fontSize = 11.sp)
                     Text(
                         text = track.album,
-                        color = TextMuted,
-                        fontSize = 12.sp,
+                        color = theme.textMuted,
+                        fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -185,13 +179,13 @@ fun NowPlayingView(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = DeckACyan.copy(alpha = 0.15f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DeckACyan.copy(alpha = 0.5f))
+                    shape = RoundedCornerShape(theme.cornerSmall),
+                    color = theme.surfaceRaised,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider)
                 ) {
                     Text(
-                        text = if (track.hasValidBpm) String.format(Locale.US, "%.1f", track.bpm) else "—",
-                        color = DeckACyan,
+                        text = if (track.hasValidBpm) "${String.format(Locale.US, "%.1f", track.bpm)} BPM" else "— BPM",
+                        color = theme.accent,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
@@ -200,13 +194,13 @@ fun NowPlayingView(
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = DeckBPink.copy(alpha = 0.15f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DeckBPink.copy(alpha = 0.5f))
+                    shape = RoundedCornerShape(theme.cornerSmall),
+                    color = theme.surfaceRaised,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider)
                 ) {
                     Text(
-                        text = if (track.hasValidKey) track.musicalKey else "—",
-                        color = DeckBPink,
+                        text = if (track.hasValidKey) (track.camelotKey.ifBlank { track.musicalKey }) else "— KEY",
+                        color = theme.textPrimary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
@@ -269,7 +263,7 @@ fun NowPlayingView(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     text = String.format(Locale.US, "%02d:%02d", curMin, curS),
-                    color = DeckACyan,
+                    color = theme.textPrimary,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
@@ -277,7 +271,7 @@ fun NowPlayingView(
                 )
                 Text(
                     text = String.format(Locale.US, ".%d", curMsFrac),
-                    color = DeckACyan.copy(alpha = 0.7f),
+                    color = theme.textSecondary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
@@ -287,13 +281,13 @@ fun NowPlayingView(
 
             // Audio Quality Tag
             Surface(
-                shape = RoundedCornerShape(4.dp),
-                color = DjSurfaceCard,
-                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                shape = RoundedCornerShape(theme.cornerSmall),
+                color = theme.surfaceRaised,
+                border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider)
             ) {
                 Text(
                     text = "${track.format.uppercase()} ${track.bitrateKbps}K",
-                    color = if (track.qualityRating.isLossless) NeonGreen else TextSecondary,
+                    color = if (track.qualityRating.isLossless) Color(0xFF00E676) else theme.textSecondary,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
@@ -305,7 +299,7 @@ fun NowPlayingView(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     text = String.format(Locale.US, "-%02d:%02d", remMin, remS),
-                    color = DeckBPink,
+                    color = theme.accent,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
@@ -327,8 +321,8 @@ fun NowPlayingView(
             // Previous Track Button
             Surface(
                 shape = CircleShape,
-                color = DjSurfaceCard,
-                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+                color = theme.surfaceRaised,
+                border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider),
                 modifier = Modifier.size(52.dp)
             ) {
                 IconButton(
@@ -340,7 +334,7 @@ fun NowPlayingView(
                     Icon(
                         imageVector = Icons.Default.SkipPrevious,
                         contentDescription = "Previous Track",
-                        tint = TextPrimary,
+                        tint = theme.textPrimary,
                         modifier = Modifier.size(26.dp)
                     )
                 }
@@ -351,10 +345,10 @@ fun NowPlayingView(
             // Big Center Play / Pause Button
             Surface(
                 shape = CircleShape,
-                color = if (isPlaying) DeckBPink else DeckACyan,
-                shadowElevation = 8.dp,
+                color = if (isPlaying) theme.accentHover else theme.accent,
+                shadowElevation = 4.dp,
                 modifier = Modifier
-                    .size(68.dp)
+                    .size(66.dp)
                     .clickable { onTogglePlayPause() }
                     .testTag("play_pause_button")
             ) {
@@ -365,8 +359,8 @@ fun NowPlayingView(
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = Color.Black,
-                        modifier = Modifier.size(38.dp)
+                        tint = theme.onAccent,
+                        modifier = Modifier.size(36.dp)
                     )
                 }
             }
@@ -376,8 +370,8 @@ fun NowPlayingView(
             // Next Track Button
             Surface(
                 shape = CircleShape,
-                color = DjSurfaceCard,
-                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+                color = theme.surfaceRaised,
+                border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider),
                 modifier = Modifier.size(52.dp)
             ) {
                 IconButton(
@@ -389,7 +383,7 @@ fun NowPlayingView(
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "Next Track",
-                        tint = TextPrimary,
+                        tint = theme.textPrimary,
                         modifier = Modifier.size(26.dp)
                     )
                 }
@@ -402,9 +396,9 @@ fun NowPlayingView(
         // 5. WAVEFORM ↔ ARTWORK TOGGLE BUTTON
         // =========================================================================
         Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = DjObsidian,
-            border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+            shape = RoundedCornerShape(theme.cornerMedium),
+            color = theme.surfaceSunken,
+            border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -416,11 +410,11 @@ fun NowPlayingView(
                 // Waveform Toggle Segment
                 val isWaveform = displayMode == NowPlayingDisplayMode.WAVEFORM
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (isWaveform) DeckACyan else Color.Transparent,
+                    shape = RoundedCornerShape(theme.cornerSmall),
+                    color = if (isWaveform) theme.accent else Color.Transparent,
                     modifier = Modifier
                         .weight(1f)
-                        .height(36.dp)
+                        .height(34.dp)
                         .clickable { onSetDisplayMode(NowPlayingDisplayMode.WAVEFORM) }
                         .testTag("toggle_waveform_mode")
                 ) {
@@ -432,14 +426,14 @@ fun NowPlayingView(
                         Icon(
                             imageVector = Icons.Default.GraphicEq,
                             contentDescription = "Waveform View",
-                            tint = if (isWaveform) Color.Black else TextSecondary,
+                            tint = if (isWaveform) theme.onAccent else theme.textSecondary,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "WAVEFORM",
-                            color = if (isWaveform) Color.Black else TextSecondary,
-                            fontSize = 12.sp,
+                            color = if (isWaveform) theme.onAccent else theme.textSecondary,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
@@ -449,11 +443,11 @@ fun NowPlayingView(
                 // Artwork Toggle Segment
                 val isArtwork = displayMode == NowPlayingDisplayMode.ARTWORK
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (isArtwork) DeckBPink else Color.Transparent,
+                    shape = RoundedCornerShape(theme.cornerSmall),
+                    color = if (isArtwork) theme.accent else Color.Transparent,
                     modifier = Modifier
                         .weight(1f)
-                        .height(36.dp)
+                        .height(34.dp)
                         .clickable { onSetDisplayMode(NowPlayingDisplayMode.ARTWORK) }
                         .testTag("toggle_artwork_mode")
                 ) {
@@ -465,14 +459,14 @@ fun NowPlayingView(
                         Icon(
                             imageVector = Icons.Default.Album,
                             contentDescription = "Album Artwork View",
-                            tint = if (isArtwork) Color.Black else TextSecondary,
+                            tint = if (isArtwork) theme.onAccent else theme.textSecondary,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "ARTWORK",
-                            color = if (isArtwork) Color.Black else TextSecondary,
-                            fontSize = 12.sp,
+                            color = if (isArtwork) theme.onAccent else theme.textSecondary,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
@@ -493,6 +487,7 @@ private fun AlbumArtworkDisplay(
     isPlaying: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val theme = SoundSyncTheme.current
     val context = LocalContext.current
     var artworkBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
     var isLoading by remember { mutableStateOf(true) }
@@ -523,9 +518,9 @@ private fun AlbumArtworkDisplay(
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF0C0E14))
-            .border(1.dp, DjSurfaceBorder, RoundedCornerShape(12.dp)),
+            .clip(RoundedCornerShape(theme.cornerMedium))
+            .background(theme.surfaceSunken)
+            .border(1.dp, theme.divider, RoundedCornerShape(theme.cornerMedium)),
         contentAlignment = Alignment.Center
     ) {
         if (artworkBitmap != null) {
@@ -534,20 +529,20 @@ private fun AlbumArtworkDisplay(
                 val center = Offset(size.width / 2f, size.height / 2f)
                 val maxR = min(size.width, size.height) * 0.44f
                 drawCircle(
-                    color = Color(0xFF141722),
+                    color = theme.surface,
                     radius = maxR,
                     center = center
                 )
                 for (r in listOf(0.9f, 0.82f, 0.74f, 0.66f, 0.58f)) {
                     drawCircle(
-                        color = Color(0xFF1C2233),
+                        color = theme.divider.copy(alpha = 0.5f),
                         radius = maxR * r,
                         center = center,
                         style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
                     )
                 }
                 drawCircle(
-                    color = if (isPlaying) DeckACyan.copy(alpha = 0.4f) else Color(0x2200F0FF),
+                    color = if (isPlaying) theme.accent.copy(alpha = 0.4f) else theme.divider,
                     radius = maxR,
                     center = center,
                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
@@ -556,10 +551,10 @@ private fun AlbumArtworkDisplay(
 
             // Center: actual album artwork
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(theme.cornerSmall),
                 color = Color.Transparent,
-                border = androidx.compose.foundation.BorderStroke(2.dp, DeckACyan),
-                shadowElevation = 12.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider),
+                shadowElevation = 4.dp,
                 modifier = Modifier.size(180.dp)
             ) {
                 androidx.compose.foundation.Image(
@@ -568,7 +563,7 @@ private fun AlbumArtworkDisplay(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(theme.cornerSmall))
                 )
             }
         } else {
@@ -577,20 +572,20 @@ private fun AlbumArtworkDisplay(
                 val center = Offset(size.width / 2f, size.height / 2f)
                 val maxR = min(size.width, size.height) * 0.44f
                 drawCircle(
-                    color = Color(0xFF141722),
+                    color = theme.surface,
                     radius = maxR,
                     center = center
                 )
                 for (r in listOf(0.9f, 0.82f, 0.74f, 0.66f, 0.58f)) {
                     drawCircle(
-                        color = Color(0xFF1C2233),
+                        color = theme.divider.copy(alpha = 0.5f),
                         radius = maxR * r,
                         center = center,
                         style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
                     )
                 }
                 drawCircle(
-                    color = if (isPlaying) DeckACyan.copy(alpha = 0.4f) else Color(0x2200F0FF),
+                    color = if (isPlaying) theme.accent.copy(alpha = 0.4f) else theme.divider,
                     radius = maxR,
                     center = center,
                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
@@ -599,20 +594,16 @@ private fun AlbumArtworkDisplay(
 
             // Placeholder badge
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = DjSurfaceCard,
-                border = androidx.compose.foundation.BorderStroke(2.dp, DeckACyan),
-                shadowElevation = 12.dp,
+                shape = RoundedCornerShape(theme.cornerSmall),
+                color = theme.surfaceRaised,
+                border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider),
+                shadowElevation = 4.dp,
                 modifier = Modifier.size(130.dp)
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(
-                            Brush.radialGradient(
-                                listOf(Color(0xFF1B2A4A), Color(0xFF0B111F))
-                            )
-                        ),
+                        .background(theme.surfaceRaised),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
@@ -623,20 +614,20 @@ private fun AlbumArtworkDisplay(
                             Icon(
                                 imageVector = Icons.Default.Album,
                                 contentDescription = null,
-                                tint = DeckACyan.copy(alpha = 0.5f),
+                                tint = theme.textMuted,
                                 modifier = Modifier.size(36.dp)
                             )
                         } else {
                             Icon(
                                 imageVector = Icons.Default.MusicNote,
                                 contentDescription = null,
-                                tint = DeckACyan,
+                                tint = theme.accent,
                                 modifier = Modifier.size(36.dp)
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = track.genre.uppercase(),
-                                color = DeckACyan,
+                                color = theme.accent,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace,
@@ -644,7 +635,7 @@ private fun AlbumArtworkDisplay(
                             )
                             Text(
                                 text = "${track.bitrateKbps}K ${track.format}",
-                                color = TextSecondary,
+                                color = theme.textSecondary,
                                 fontSize = 8.sp,
                                 fontFamily = FontFamily.Monospace,
                                 textAlign = TextAlign.Center

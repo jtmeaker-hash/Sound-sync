@@ -51,7 +51,8 @@ class ArtworkCache(private val context: Context) {
     fun saveArtwork(
         artist: String,
         album: String?,
-        artwork: DownloadedArtwork
+        artwork: DownloadedArtwork,
+        sourceProvider: String = "TheAudioDB"
     ): File {
         val key = generateCacheKey(artist, album)
         val imageFile = File(cacheDir, "$key.jpg")
@@ -67,7 +68,7 @@ class ArtworkCache(private val context: Context) {
 
         // Save metadata record
         val meta = JSONObject().apply {
-            put("sourceProvider", "TheAudioDB")
+            put("sourceProvider", sourceProvider)
             put("sourceUrl", artwork.sourceUrl)
             put("downloadTimestamp", System.currentTimeMillis())
             put("dimensions", "${artwork.width}x${artwork.height}")
@@ -140,5 +141,9 @@ class ArtworkCache(private val context: Context) {
             artist = artist,
             album = album
         )
+    }
+
+    fun clear() {
+        cacheDir.listFiles()?.forEach { it.delete() }
     }
 }

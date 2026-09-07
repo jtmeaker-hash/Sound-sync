@@ -28,6 +28,9 @@ interface TrackDao {
     @Query("SELECT * FROM tracks WHERE id = :id")
     suspend fun getTrackById(id: String): TrackEntity?
 
+    @Query("SELECT * FROM tracks WHERE id = :id")
+    fun getTrackFlowById(id: String): Flow<TrackEntity?>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTrack(track: TrackEntity)
 

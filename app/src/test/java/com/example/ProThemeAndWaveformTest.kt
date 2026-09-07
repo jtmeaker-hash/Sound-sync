@@ -24,10 +24,10 @@ class ProThemeAndWaveformTest {
         assertFalse("Default spec must have isPro = false", defaultSpec.isPro)
         assertTrue("Pro spec must have isPro = true", proSpec.isPro)
 
-        // Corner radius: Pro has restrained corners vs Default rounded cards
+        // Corner radius: Pro and Default both maintain tight hardware corners (2-4dp, max 6dp)
         assertTrue("Pro cornerSmall must be <= 3dp", proSpec.cornerSmall <= 3.dp)
         assertTrue("Pro cornerMedium must be <= 5dp", proSpec.cornerMedium <= 5.dp)
-        assertTrue("Default cornerMedium should be >= 8dp", defaultSpec.cornerMedium >= 8.dp)
+        assertTrue("Default cornerMedium must be <= 6dp for hardware workstation aesthetic", defaultSpec.cornerMedium <= 6.dp)
 
         // Row heights
         assertEquals(38.dp, proSpec.libraryCompactRowHeight)

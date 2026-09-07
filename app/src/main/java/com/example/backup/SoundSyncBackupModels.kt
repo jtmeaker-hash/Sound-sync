@@ -142,7 +142,8 @@ data class TrackBackupItem(
     val lastAnalysedAt: Long? = null,
     val analysisFailureReason: String? = null,
     val analysisRetryCount: Int = 0,
-    val fileModifiedTimestamp: Long = 0L
+    val fileModifiedTimestamp: Long = 0L,
+    val metadataWriteState: String = "NOT_ANALYSED"
 ) {
     fun toEntity(): TrackEntity = TrackEntity(
         id = id,
@@ -210,7 +211,8 @@ data class TrackBackupItem(
         originalArtist = originalArtist,
         resolvedArtist = resolvedArtist,
         metadataSource = metadataSource,
-        metadataConfidence = metadataConfidence
+        metadataConfidence = metadataConfidence,
+        metadataWriteState = metadataWriteState
     )
 
     companion object {
@@ -280,7 +282,8 @@ data class TrackBackupItem(
             lastAnalysedAt = entity.lastAnalysedAt,
             analysisFailureReason = entity.analysisFailureReason,
             analysisRetryCount = entity.analysisRetryCount,
-            fileModifiedTimestamp = entity.fileModifiedTimestamp
+            fileModifiedTimestamp = entity.fileModifiedTimestamp,
+            metadataWriteState = entity.metadataWriteState
         )
 
         fun fromJson(json: JSONObject): TrackBackupItem = TrackBackupItem(
@@ -348,7 +351,8 @@ data class TrackBackupItem(
             lastAnalysedAt = json.optLong("lastAnalysedAt").takeIf { it > 0 },
             analysisFailureReason = json.optString("analysisFailureReason").takeIf(String::isNotBlank),
             analysisRetryCount = json.optInt("analysisRetryCount", 0),
-            fileModifiedTimestamp = json.optLong("fileModifiedTimestamp", 0L)
+            fileModifiedTimestamp = json.optLong("fileModifiedTimestamp", 0L),
+            metadataWriteState = json.optString("metadataWriteState", "NOT_ANALYSED")
         )
     }
 
@@ -419,6 +423,7 @@ data class TrackBackupItem(
         put("analysisFailureReason", analysisFailureReason)
         put("analysisRetryCount", analysisRetryCount)
         put("fileModifiedTimestamp", fileModifiedTimestamp)
+        put("metadataWriteState", metadataWriteState)
     }
 }
 

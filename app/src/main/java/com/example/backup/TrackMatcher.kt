@@ -204,11 +204,60 @@ object TrackMatcher {
         val mergedMetadataSource = backupTrack.metadataSource ?: existingEntity.metadataSource
         val mergedMetadataConfidence = max(backupTrack.metadataConfidence, existingEntity.metadataConfidence)
 
-        val mergedArtist = if (!mergedResolvedArtist.isNullOrBlank() && (existingEntity.artist.isBlank() || existingEntity.artist.contains("Unknown", ignoreCase = true))) {
+        // Resolve title preference: prefer restored title if existing is generic, placeholder, or has timestamps
+        val hasGarbageInExistingTitle = com.example.metadata.parser.TrackIdentityParser.cleanGarbage(existingEntity.title) != existingEntity.title
+        val isBackupBetterTitle = backupTrack.title.isNotBlank() && backupTrack.title != existingEntity.title &&
+            (backupTrack.metadataConfidence >= com.example.metadata.MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD ||
+             backupTrack.metadataScanState == "COMPLETE" || backupTrack.metadataScanState == "APPROVED" || backupTrack.metadataScanState == "APPLIED" ||
+             com.example.metadata.parser.TrackIdentityParser.cleanGarbage(existingEntity.title) == backupTrack.title)
+
+        val mergedTitle = if (backupTrack.userConfirmedMetadata ||
+            (!existingEntity.userConfirmedMetadata && (
+                hasGarbageInExistingTitle ||
+                com.example.metadata.parser.TrackIdentityParser.isRecordingPlaceholder(existingEntity.title) ||
+                !com.example.metadata.parser.TrackIdentityParser.isTitleValid(existingEntity.title) ||
+                isBackupBetterTitle
+            ))
+        ) {
+            backupTrack.title
+        } else {
+            existingEntity.title
+        }
+
+        // Resolve artist preference: prefer restored artist if existing is unknown, missing, or lower confidence
+        val mergedArtist = if (backupTrack.userConfirmedMetadata) {
+            backupTrack.artist
+        } else if (!mergedResolvedArtist.isNullOrBlank() && (existingEntity.artist.isBlank() || !com.example.metadata.parser.TrackIdentityParser.isArtistValid(existingEntity.artist))) {
+            mergedResolvedArtist
+        } else if (backupTrack.artist.isNotBlank() && !com.example.metadata.parser.TrackIdentityParser.isArtistValid(existingEntity.artist)) {
+            backupTrack.artist
+        } else if (!mergedResolvedArtist.isNullOrBlank() && backupTrack.metadataConfidence >= com.example.metadata.MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD) {
             mergedResolvedArtist
         } else {
             existingEntity.artist
         }
+
+        // Resolve album preference: reject generic folder names like "Download", "Recordings"
+        val mergedAlbum = if (backupTrack.userConfirmedMetadata) {
+            backupTrack.album
+        } else if (com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(existingEntity.album) && !com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(backupTrack.album)) {
+            backupTrack.album
+        } else if (existingEntity.album.isBlank() || existingEntity.album == "Single") {
+            if (!backupTrack.album.isNullOrBlank() && !com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(backupTrack.album)) backupTrack.album else existingEntity.album
+        } else {
+            existingEntity.album
+        }
+
+        // Resolve catalog attributes
+        val mergedAlbumArtist = if (existingEntity.albumArtist.isBlank() && backupTrack.albumArtist.isNotBlank()) backupTrack.albumArtist else existingEntity.albumArtist
+        val mergedGenre = if ((existingEntity.genre.isBlank() || existingEntity.genre == "DJ Library") && backupTrack.genre.isNotBlank()) backupTrack.genre else existingEntity.genre
+        val mergedYear = existingEntity.releaseYear ?: backupTrack.releaseYear
+        val mergedDate = existingEntity.releaseDate ?: backupTrack.releaseDate
+        val mergedTrackNum = if (existingEntity.trackNumber == 0 && backupTrack.trackNumber > 0) backupTrack.trackNumber else existingEntity.trackNumber
+        val mergedDiscNum = if (existingEntity.discNumber <= 1 && backupTrack.discNumber > 1) backupTrack.discNumber else existingEntity.discNumber
+        val mergedLabel = existingEntity.recordLabel ?: backupTrack.recordLabel
+        val mergedIsrc = existingEntity.isrc ?: backupTrack.isrc
+        val mergedWriteState = if (existingEntity.metadataWriteState == "NOT_ANALYSED" && backupTrack.metadataWriteState.isNotBlank()) backupTrack.metadataWriteState else existingEntity.metadataWriteState
 
         val shouldTransferAnalysis = !isFileModified && (
             existingEntity.analysisState != "COMPLETE" ||
@@ -218,11 +267,22 @@ object TrackMatcher {
         )
 
         return existingEntity.copy(
+            title = mergedTitle,
             artist = mergedArtist,
             originalArtist = mergedOriginalArtist,
             resolvedArtist = mergedResolvedArtist,
             metadataSource = mergedMetadataSource,
             metadataConfidence = mergedMetadataConfidence,
+            album = mergedAlbum,
+            albumArtist = mergedAlbumArtist,
+            genre = mergedGenre,
+            releaseYear = mergedYear,
+            releaseDate = mergedDate,
+            trackNumber = mergedTrackNum,
+            discNumber = mergedDiscNum,
+            recordLabel = mergedLabel,
+            isrc = mergedIsrc,
+            metadataWriteState = mergedWriteState,
 
             // Musical Analysis
             bpm = if (shouldTransferAnalysis && backupTrack.bpm > 0.0) backupTrack.bpm else existingEntity.bpm,

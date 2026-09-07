@@ -108,38 +108,38 @@ val DefaultThemeSpec = SoundSyncThemeSpec(
     isPro = false,
     is3BandColoring = false,
 
-    background = Color(0xFF090B10),
-    surface = Color(0xFF121620),
-    surfaceRaised = Color(0xFF222B3D),
-    surfaceSunken = Color(0xFF07090D),
-    divider = Color(0xFF2D384E),
+    background = Color(0xFF0E1013), // Matte hardware charcoal
+    surface = Color(0xFF14171C),    // Workspace surface
+    surfaceRaised = Color(0xFF1A1D23), // Panel housing / channel
+    surfaceSunken = Color(0xFF0A0B0E), // Recessed waveform & list well
+    divider = Color(0xFF252932),    // 1dp hairline border
 
-    textPrimary = Color(0xFFF1F5F9),
-    textSecondary = Color(0xFF94A3B8),
-    textMuted = Color(0xFF64748B),
-    textDisabled = Color(0xFF475569),
+    textPrimary = Color(0xFFF0F2F5),
+    textSecondary = Color(0xFF98A0AE),
+    textMuted = Color(0xFF656D7C),
+    textDisabled = Color(0xFF404652),
 
-    accent = Color(0xFF00F0FF), // DeckACyan
-    accentHover = Color(0xFF33F3FF),
-    accentMuted = Color(0x3300F0FF),
-    onAccent = Color(0xFF090B10), // DjObsidian
+    accent = Color(0xFFFF8A00), // Pioneer/CDJ Cue Amber-Orange
+    accentHover = Color(0xFFFFA233),
+    accentMuted = Color(0x33FF8A00),
+    onAccent = Color(0xFF0E1013),
 
-    selectedSurface = Color(0x2600F0FF),
-    playingSurface = Color(0x1400F0FF),
+    selectedSurface = Color(0xFF232834),
+    playingSurface = Color(0xFF1C2029),
 
-    warning = Color(0xFFFFB800), // NeonAmber
-    error = Color(0xFFFF3333),   // NeonRed
-    success = Color(0xFF05FFA1), // NeonGreen
+    warning = Color(0xFFD97706),
+    error = Color(0xFFDC2626),
+    success = Color(0xFF10B981),
 
-    cornerSmall = 6.dp,
-    cornerMedium = 10.dp,
-    cornerLarge = 16.dp,
+    cornerSmall = 2.dp,
+    cornerMedium = 4.dp,
+    cornerLarge = 6.dp,
 
-    libraryCompactRowHeight = 64.dp,
-    libraryComfortableRowHeight = 72.dp,
+    libraryCompactRowHeight = 44.dp,
+    libraryComfortableRowHeight = 56.dp,
 
-    controlSmallHeight = 36.dp,
-    controlNormalHeight = 48.dp
+    controlSmallHeight = 30.dp,
+    controlNormalHeight = 40.dp
 )
 
 /**

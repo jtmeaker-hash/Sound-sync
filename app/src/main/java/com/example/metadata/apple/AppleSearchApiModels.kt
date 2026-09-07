@@ -34,9 +34,9 @@ data class AppleSearchResponse(
 data class AppleTrackResult(
     val trackId: Long,
     val trackName: String,
-    val artistId: Long?,
+    val artistId: Long? = null,
     val artistName: String,
-    val collectionId: Long?,
+    val collectionId: Long? = null,
     val collectionName: String?,
     val collectionArtistName: String? = null,
     val trackTimeMillis: Long = 0L, // Internet/reference duration in ms (matching only, NOT local duration)

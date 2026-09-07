@@ -28,6 +28,9 @@ enum class ThemeMode {
 // Theme-only primary accents and deck signals
 val BloodRedPrimary = Color(0xFFB11226)
 val DeckACyan = Color(0xFF00F0FF)
+val PioneerAmber = Color(0xFFFF8A00)
+val PioneerAmberHover = Color(0xFFFFA233)
+val PioneerAmberMuted = Color(0x33FF8A00)
 
 private data class AppearancePalette(
     val background: Color,
@@ -38,21 +41,21 @@ private data class AppearancePalette(
     val primaryText: Color,
     val secondaryText: Color,
     val mutedText: Color,
-    val accent: Color = DeckACyan,
-    val onAccent: Color = Color(0xFF090B10)
+    val accent: Color = PioneerAmber,
+    val onAccent: Color = Color(0xFF0E1013)
 )
 
 private val CurrentAppearancePalette = AppearancePalette(
-    background = Color(0xFF090B10),
-    surface = Color(0xFF121620),
-    card = Color(0xFF19202E),
-    elevated = Color(0xFF222B3D),
-    border = Color(0xFF2D384E),
-    primaryText = Color(0xFFF1F5F9),
-    secondaryText = Color(0xFF94A3B8),
-    mutedText = Color(0xFF64748B),
-    accent = DeckACyan,
-    onAccent = Color(0xFF090B10)
+    background = Color(0xFF0E1013),
+    surface = Color(0xFF14171C),
+    card = Color(0xFF1A1D23),
+    elevated = Color(0xFF1F232B),
+    border = Color(0xFF252932),
+    primaryText = Color(0xFFF0F2F5),
+    secondaryText = Color(0xFF98A0AE),
+    mutedText = Color(0xFF656D7C),
+    accent = PioneerAmber,
+    onAccent = Color(0xFF0E1013)
 )
 
 private val ProAppearancePalette = AppearancePalette(

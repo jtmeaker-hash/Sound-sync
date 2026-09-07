@@ -89,10 +89,10 @@ fun AppearanceSettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     AppearanceOptionTile(
-                        title = "Default",
-                        description = "Classic SoundSync obsidian dark shell with deck cyan accents",
+                        title = "Hardware Dark",
+                        description = "Dedicated DJ workstation charcoal surface with CDJ Amber-Orange accents",
                         selected = isDefault,
-                        accent = DeckACyan,
+                        accent = Color(0xFFFF8A00),
                         onClick = { onSetThemeMode(ThemeMode.DEFAULT) },
                         modifier = Modifier.weight(1f),
                         testTag = "appearance_option_default"

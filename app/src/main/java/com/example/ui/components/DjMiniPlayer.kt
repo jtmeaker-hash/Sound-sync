@@ -125,14 +125,16 @@ fun DjMiniPlayer(
     val durM = totalSec / 60
     val durS = totalSec % 60
 
+    val theme = SoundSyncTheme.current
+
     Card(
         modifier = modifier
             .fillMaxWidth()
             .height(72.dp)
-            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
             .clickable { onOpenNowPlaying() }
             .testTag("dj_mini_player"),
-        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        shape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp),
         colors = CardDefaults.cardColors(containerColor = DjSurfaceElevated),
         border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
     ) {
@@ -140,7 +142,7 @@ fun DjMiniPlayer(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(72.dp)
-                .clip(RoundedCornerShape(topStart = 15.dp, topEnd = 15.dp))
+                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
         ) {
             // Live Mini Waveform / Progress Strip
             MiniWaveformProgressStrip(
@@ -153,7 +155,7 @@ fun DjMiniPlayer(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(16.dp)
-                    .clip(RoundedCornerShape(topStart = 15.dp, topEnd = 15.dp))
+                    .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
             )
 
             Row(
@@ -166,9 +168,9 @@ fun DjMiniPlayer(
             ) {
                 // Visual Thumbnail (Waveform Icon vs Album Art Icon)
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (displayMode == NowPlayingDisplayMode.WAVEFORM) DeckACyan.copy(alpha = 0.2f) else DeckBPink.copy(alpha = 0.2f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, if (displayMode == NowPlayingDisplayMode.WAVEFORM) DeckACyan else DeckBPink),
+                    shape = RoundedCornerShape(3.dp),
+                    color = if (displayMode == NowPlayingDisplayMode.WAVEFORM) theme.accent.copy(alpha = 0.2f) else theme.surfaceSunken,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (displayMode == NowPlayingDisplayMode.WAVEFORM) theme.accent else theme.divider),
                     modifier = Modifier
                         .size(38.dp)
                         .clickable { onToggleDisplayMode() }
@@ -267,7 +269,7 @@ fun DjMiniPlayer(
 
                 Surface(
                     shape = CircleShape,
-                    color = if (isPlaying) DeckBPink else DeckACyan,
+                    color = if (isPlaying) theme.accentHover else theme.accent,
                     modifier = Modifier
                         .size(38.dp)
                         .clip(CircleShape)
@@ -278,7 +280,7 @@ fun DjMiniPlayer(
                         Icon(
                             imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = if (isPlaying) "Pause" else "Play",
-                            tint = DjObsidian,
+                            tint = theme.onAccent,
                             modifier = Modifier.size(22.dp)
                         )
                     }

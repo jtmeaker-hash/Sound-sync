@@ -859,6 +859,65 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         trackAnalysisManager.triggerQueueProcessing()
         com.example.analysis.LibraryAnalysisWorker.enqueueWork(application)
         setupAutoBackupObserver()
+        observeTrackMetadataUpdates()
+    }
+
+    private fun observeTrackMetadataUpdates() {
+        viewModelScope.launch(Dispatchers.Default) {
+            allTracks.collect { tracks ->
+                if (tracks.isEmpty()) return@collect
+                val trackMap = tracks.associateBy { it.id }
+
+                // 1. Update active playing track in audioEngine if its metadata updated
+                val cur = audioEngine.currentTrack.value
+                if (cur != null) {
+                    val updated = trackMap[cur.id]
+                    if (updated != null && (updated.title != cur.title ||
+                                updated.artist != cur.artist ||
+                                updated.album != cur.album ||
+                                updated.artworkUrl != cur.artworkUrl ||
+                                updated.bpm != cur.bpm ||
+                                updated.musicalKey != cur.musicalKey)) {
+                        audioEngine.updateCurrentTrackMetadata(updated)
+                    }
+                }
+
+                // 2. Update playback queue tracks in-place
+                val curQueue = playbackQueue.value
+                if (curQueue.isNotEmpty()) {
+                    var changed = false
+                    val newQueue = curQueue.map { qTrack ->
+                        val up = trackMap[qTrack.id]
+                        if (up != null && (up.title != qTrack.title ||
+                                    up.artist != qTrack.artist ||
+                                    up.album != qTrack.album ||
+                                    up.artworkUrl != qTrack.artworkUrl ||
+                                    up.bpm != qTrack.bpm ||
+                                    up.musicalKey != qTrack.musicalKey)) {
+                            changed = true
+                            up
+                        } else {
+                            qTrack
+                        }
+                    }
+                    if (changed) {
+                        playbackQueue.value = newQueue
+                    }
+                }
+
+                // 3. Update selectedArtist if its tracks updated
+                val selArtist = _selectedArtist.value
+                if (selArtist != null) {
+                    val matchingTracks = tracks.filter { it.artist.equals(selArtist.name, ignoreCase = true) }
+                    if (matchingTracks.isNotEmpty() && matchingTracks != selArtist.songs) {
+                        _selectedArtist.value = selArtist.copy(
+                            songs = matchingTracks,
+                            songCount = matchingTracks.size
+                        )
+                    }
+                }
+            }
+        }
     }
 
     private fun setupAutoBackupObserver() {

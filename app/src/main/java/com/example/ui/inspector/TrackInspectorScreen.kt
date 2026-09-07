@@ -107,16 +107,20 @@ fun TrackInspectorScreen(
 
     // Load reactive stats & track updates
     LaunchedEffect(initialTrack.id) {
-        withContext(Dispatchers.IO) {
-            val dbTrack = trackDao.getTrackById(initialTrack.id)?.toTrack()
-            if (dbTrack != null) {
-                withContext(Dispatchers.Main) { currentTrack = dbTrack }
-            }
+        launch(Dispatchers.IO) {
             val stats = playbackDao.getTrackStats(initialTrack.id)
             val playlists = playlistDao.getPlaylistsContainingTrack(initialTrack.id)
             withContext(Dispatchers.Main) {
                 playbackStats = stats
                 playlistsContainingTrack = playlists
+            }
+        }
+        trackDao.getTrackFlowById(initialTrack.id).collect { entity ->
+            if (entity != null) {
+                val dbTrack = entity.toTrack()
+                withContext(Dispatchers.Main) {
+                    currentTrack = dbTrack
+                }
             }
         }
     }
@@ -1833,7 +1837,9 @@ private fun EditMetadataDialog(
                         albumArtist = albumArtist.trim(),
                         genre = genre.trim(),
                         releaseYear = yr,
-                        composer = composer.trim()
+                        composer = composer.trim(),
+                        userConfirmedMetadata = true,
+                        metadataScanState = com.example.model.MetadataScanState.USER_CONFIRMED.name
                     )
                     onSave(updated)
                 },

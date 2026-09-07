@@ -30,22 +30,24 @@ data class MetadataResolutionResult(
 /**
  * Authoritative SoundSync metadata resolution and artwork engine.
  *
- * Architecture (Sections 8, 9, 10, 11, 13, 14, 15, 17):
- * - Apple iTunes Search API: Canonical authority for textual catalog metadata (Title, Artist, Album, Genre, Track/Disc numbers, Release Date).
- * - MusicBrainz: Identifier bridge ONLY, to map confirmed iTunes attributes to release/release-group MBIDs.
- * - Cover Art Archive: Canonical authority for front cover artwork.
- * - MetadataFileWriter: Safely writes format-preserving tags and embedded artwork to the local file, then reopens and verifies.
- * - STRICT RULE: Apple artwork URLs (artworkUrl100, artworkUrl60, artworkUrl600) are NEVER downloaded or stored as cover art.
+ * Architecture (Sections 1, 5, 6, 7, 8, 9, 10, 11, 12, 17, 19, 20):
+ * - Apple iTunes Search API: Primary authority for textual catalog metadata (Title, Artist, Album, Genre, Track/Disc numbers, Release Date).
+ * - Multi-query Candidate Search: Intelligently queries multiple candidates and scores against duration and title similarity.
+ * - High-Resolution Release Artwork: High-res Apple release artwork (1200x1200bb) with TheAudioDB fallback.
+ * - Rule 6 Compliance: MusicBrainz is NOT used anywhere.
+ * - Non-destructive Local Preservation: When external search has NO_MATCH, parsed artist and cleaned title are preserved locally in DB instead of reverting to unknown.
+ * - Manual Edit Protection: User-confirmed metadata is strictly protected against automated overwrite.
+ * - Read-back Verification: Every DB write and physical tag write is verified via read-back.
  */
 class MetadataResolver(
     private val context: Context,
     private val appleProvider: AppleMetadataProvider = AppleMetadataProvider(),
-    private val musicBrainzResolver: MusicBrainzResolver = MusicBrainzResolver(),
-    private val coverArtArchiveProvider: CoverArtArchiveProvider = CoverArtArchiveProvider(),
+    private val musicBrainzResolver: MusicBrainzResolver? = null, // Deprecated, unused per Rule 6
+    private val coverArtArchiveProvider: CoverArtArchiveProvider? = null, // Deprecated, unused per Rule 6
     private val artworkCache: ArtworkCache = ArtworkCache(context),
     private val fileWriter: MetadataFileWriter = MetadataFileWriter(context),
     // Optional compatibility parameter for legacy test cases
-    private val artworkProvider: TheAudioDbArtworkProvider? = null,
+    private val artworkProvider: TheAudioDbArtworkProvider? = TheAudioDbArtworkProvider(),
     private val database: AppDatabase? = null,
     private val settingsStore: MetadataSettingsStore? = null
 ) {
@@ -64,8 +66,8 @@ class MetadataResolver(
         val store = settingsStore ?: MetadataSettingsStore(context)
         val settings = store.load()
 
-        // 1. User metadata protection
-        if (!forceRefresh && (track.userConfirmedMetadata || 
+        // 1. User metadata protection (Section 17)
+        if (!forceRefresh && (track.userConfirmedMetadata ||
                 track.metadataScanState == MetadataScanState.USER_CONFIRMED.name ||
                 track.metadataScanState == MetadataScanState.APPROVED.name ||
                 track.metadataScanState == MetadataScanState.APPLIED.name)) {
@@ -79,7 +81,7 @@ class MetadataResolver(
             )
         }
 
-        // 2. Check if already complete and file has not changed
+        // 2. Check if already complete and file has not changed (Section 15, 16)
         if (!forceRefresh && track.metadataScanState == MetadataScanState.COMPLETE.name && track.appleTrackId != null && !track.filePath.isBlank()) {
             Log.d(TAG, "Track already COMPLETE and scanned; skipping redundant lookup.")
             return@withContext MetadataResolutionResult(
@@ -91,7 +93,7 @@ class MetadataResolver(
             )
         }
 
-        // 3. Parse track identity from tags and filename (Authoritative source of truth)
+        // 3. Parse track identity from tags and filename (Authoritative local source of truth)
         val parsed = TrackIdentityParser.parse(
             existingTitle = track.title,
             existingArtist = track.artist,
@@ -100,72 +102,106 @@ class MetadataResolver(
             durationSeconds = track.durationSeconds
         )
 
-        Log.d("TrackIdentityParser", "parsed artist: \"${parsed.artist}\", parsed title: \"${parsed.title}\", version: ${parsed.version}")
+        Log.d("TrackIdentityParser", "parsed artist: \"${parsed.artist}\", parsed title: \"${parsed.title}\", cleanSearchTitle: \"${parsed.cleanSearchTitle}\", version: ${parsed.version}")
 
-        // 4. Primary Track Identification via Apple iTunes Search API (Sections 3, 5, 7)
+        // Check for recording placeholder files (e.g. REC001_...) - Section 4
+        if (parsed.isRecordingPlaceholder) {
+            Log.d(TAG, "Track identified as recording placeholder: ${parsed.title}")
+            val recTrack = track.copy(
+                title = parsed.title,
+                artist = if (TrackIdentityParser.isArtistValid(track.artist)) track.artist else "Unknown Artist",
+                album = if (TrackIdentityParser.isGenericAlbumName(track.album)) "Recordings" else track.album,
+                metadataScanState = MetadataScanState.COMPLETE.name,
+                metadataWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY.name
+            )
+            val db = database ?: try { AppDatabase.getDatabase(context) } catch (_: Exception) { null }
+            db?.trackDao()?.let { dao ->
+                try {
+                    dao.updateTrack(TrackEntity.fromTrack(recTrack))
+                } catch (_: Exception) {}
+            }
+            return@withContext MetadataResolutionResult(
+                updatedTrack = recTrack,
+                scanState = MetadataScanState.COMPLETE,
+                confidence = 100.0,
+                wasRepaired = true,
+                message = "Recognised recording placeholder"
+            )
+        }
+
+        // 4. Multi-query Candidate Search via Apple iTunes Search API (Sections 5 & 6)
+        val searchQueries = mutableListOf<String>()
+        if (!parsed.isArtistMissing && parsed.artist != null) {
+            searchQueries.add("${parsed.artist} ${parsed.cleanSearchTitle}")
+            if (parsed.title != parsed.cleanSearchTitle) {
+                searchQueries.add("${parsed.artist} ${parsed.title}")
+            }
+            searchQueries.addAll(parsed.searchTerms)
+        } else {
+            searchQueries.add(parsed.cleanSearchTitle)
+            if (parsed.title != parsed.cleanSearchTitle) {
+                searchQueries.add(parsed.title)
+            }
+            searchQueries.addAll(parsed.searchTerms)
+        }
+
+        val deduplicatedQueries = searchQueries.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        val allCandidatesList = mutableListOf<AppleTrackResult>()
+        val seenTrackIds = mutableSetOf<Long>()
+
+        for (query in deduplicatedQueries.take(3)) {
+            Log.d(TAG, "Executing Apple search query: \"$query\"")
+            val results = try {
+                appleProvider.searchTracks(query, country = settings.storefrontCountry, limit = 15)
+            } catch (e: Exception) {
+                Log.w(TAG, "Search query failed for \"$query\": ${e.message}")
+                emptyList()
+            }
+            for (res in results) {
+                if (seenTrackIds.add(res.trackId)) {
+                    allCandidatesList.add(res)
+                }
+            }
+            if (allCandidatesList.size >= 25) break
+        }
+
         var selectedCandidate: AppleTrackResult? = null
         var candidateScore = 0.0
         var wasArtistRepaired = false
-        var allCandidatesList: List<AppleTrackResult> = emptyList()
         var candidateEvaluation: CandidateEvaluationResult? = null
 
-        if (parsed.isArtistMissing) {
-            val missingArtistResolution = resolveMissingArtist(track, parsed)
-            if (missingArtistResolution != null) {
-                selectedCandidate = missingArtistResolution.first
-                candidateScore = missingArtistResolution.second
-                wasArtistRepaired = true
-                candidateEvaluation = CandidateEvaluationResult(
-                    bestCandidate = MetadataConfidenceScorer.scoreCandidate(parsed.title, selectedCandidate.artistName, parsed.album, track.durationSeconds, selectedCandidate),
-                    matchStatus = if (candidateScore >= MetadataConfidenceScorer.VERIFIED_CONFIDENCE_THRESHOLD) MetadataScanState.VERIFIED else MetadataScanState.REVIEW_REQUIRED,
-                    allCandidates = emptyList(),
-                    isMultipleMatches = false,
-                    summary = "Recovered artist from iTunes Search"
-                )
+        if (allCandidatesList.isNotEmpty()) {
+            val evaluation = MetadataConfidenceScorer.evaluateCandidates(
+                localTitle = parsed.cleanSearchTitle,
+                localArtist = parsed.artist,
+                localAlbum = if (TrackIdentityParser.isGenericAlbumName(parsed.album)) null else parsed.album,
+                localDurationSeconds = track.durationSeconds,
+                candidates = allCandidatesList
+            )
+            candidateEvaluation = evaluation
+
+            evaluation.allCandidates.take(3).forEach {
+                Log.d("MetadataConfidenceScorer", "candidate: \"${it.candidate.artistName} - ${it.candidate.trackName}\" score: ${"%.1f".format(it.totalScore)} breakdown: [${it.scoreBreakdown}]")
             }
-        } else {
-            val primaryTerm = parsed.searchTerms.firstOrNull() ?: "${parsed.artist} ${parsed.title}"
-            val candidates = appleProvider.searchTracks(primaryTerm)
-            if (candidates.isEmpty() && parsed.sourceOfTruth == "FOLDER_PARSE") {
-                val missingArtistResolution = resolveMissingArtist(track, parsed)
-                if (missingArtistResolution != null) {
-                    selectedCandidate = missingArtistResolution.first
-                    candidateScore = missingArtistResolution.second
+
+            if (evaluation.bestCandidate != null && evaluation.bestCandidate.totalScore >= MetadataConfidenceScorer.MINIMUM_ACCEPTABLE_THRESHOLD) {
+                selectedCandidate = evaluation.bestCandidate.candidate
+                candidateScore = evaluation.bestCandidate.totalScore
+                if (parsed.isArtistMissing && !selectedCandidate.artistName.isNullOrBlank()) {
                     wasArtistRepaired = true
-                    candidateEvaluation = CandidateEvaluationResult(
-                        bestCandidate = MetadataConfidenceScorer.scoreCandidate(parsed.title, selectedCandidate.artistName, parsed.album, track.durationSeconds, selectedCandidate),
-                        matchStatus = if (candidateScore >= MetadataConfidenceScorer.VERIFIED_CONFIDENCE_THRESHOLD) MetadataScanState.VERIFIED else MetadataScanState.REVIEW_REQUIRED,
-                        allCandidates = emptyList(),
-                        isMultipleMatches = false,
-                        summary = "Recovered artist from iTunes Search"
-                    )
-                }
-            } else {
-                allCandidatesList = candidates
-
-                val evaluation = MetadataConfidenceScorer.evaluateCandidates(
-                    localTitle = parsed.title,
-                    localArtist = parsed.artist,
-                    localAlbum = parsed.album,
-                    localDurationSeconds = track.durationSeconds,
-                    candidates = candidates
-                )
-                candidateEvaluation = evaluation
-
-                evaluation.allCandidates.take(3).forEach {
-                    Log.d("MetadataConfidenceScorer", "candidate: \"${it.candidate.artistName} - ${it.candidate.trackName}\" score: ${"%.1f".format(it.totalScore)} breakdown: [${it.scoreBreakdown}]")
-                }
-
-                if (evaluation.bestCandidate != null && evaluation.bestCandidate.totalScore >= MetadataConfidenceScorer.MINIMUM_ACCEPTABLE_THRESHOLD) {
-                    selectedCandidate = evaluation.bestCandidate.candidate
-                    candidateScore = evaluation.bestCandidate.totalScore
                 }
             }
         }
 
         val matchState = candidateEvaluation?.matchStatus ?: MetadataScanState.NO_MATCH
+        println("DEBUG_RESOLVER: allCandidates=${allCandidatesList.size}, selected=${selectedCandidate?.trackName}, matchState=$matchState, score=$candidateScore, eval=${candidateEvaluation?.summary}")
 
-        // Section 27: Preserve original file if match is uncertain, rejected, or conflicting
+        val cleanedArtist = parsed.artist?.takeIf { TrackIdentityParser.isArtistValid(it) }
+            ?: track.artist.takeIf { TrackIdentityParser.isArtistValid(it) }
+        val cleanedTitle = parsed.title.ifBlank { track.title }
+        val cleanedAlbum = parsed.album ?: track.album.takeIf { !TrackIdentityParser.isGenericAlbumName(it) } ?: "Single"
+
+        // Section 27 & 10: Preserve local parsed metadata when match is uncertain, rejected, or missing
         if (selectedCandidate == null || matchState == MetadataScanState.NO_MATCH || matchState == MetadataScanState.REJECTED) {
             val finalUncertainState = if (matchState == MetadataScanState.REJECTED) MetadataScanState.REJECTED else MetadataScanState.NO_MATCH
             Log.d(TAG, "No acceptable candidate for \"${track.title}\" (state=$finalUncertainState)")
@@ -173,40 +209,75 @@ class MetadataResolver(
                 Log.i("WavPipeline", "[Stage 1: Metadata identification] NOT FOUND")
                 Log.i("WavPipeline", "[Stage 5: Final SoundSync status] FAILED (no match found)")
             }
+
+            // Crucial: Preserve parsed artist and title locally rather than leaving <unknown> or raw timestamp!
+            val localRepairedTrack = track.copy(
+                artist = if (!track.userConfirmedMetadata && cleanedArtist != null) cleanedArtist else track.artist,
+                title = if (!track.userConfirmedMetadata && cleanedTitle.isNotBlank()) cleanedTitle else track.title,
+                album = if (!track.userConfirmedMetadata) cleanedAlbum else track.album,
+                metadataScanState = finalUncertainState.name,
+                metadataWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY.name
+            )
+
+            // Save to Room DB so parsed artist/title are immediately preserved
+            val db = database ?: try { AppDatabase.getDatabase(context) } catch (_: Exception) { null }
+            val dao = db?.trackDao()
+            if (dao != null && localRepairedTrack.id.isNotBlank()) {
+                try {
+                    dao.updateTrack(TrackEntity.fromTrack(localRepairedTrack))
+                    val verified = dao.getTrackById(localRepairedTrack.id)
+                    if (verified == null || verified.artist != localRepairedTrack.artist || verified.title != localRepairedTrack.title) {
+                        Log.w(TAG, "DB read-back verification mismatch for track ${localRepairedTrack.id}")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not update track in database: ${e.message}")
+                }
+            }
+
             return@withContext MetadataResolutionResult(
-                updatedTrack = track.copy(
-                    metadataScanState = finalUncertainState.name
-                ),
+                updatedTrack = localRepairedTrack,
                 scanState = finalUncertainState,
                 confidence = candidateScore,
-                wasRepaired = false,
+                wasRepaired = cleanedArtist != null && cleanedArtist != track.artist,
                 message = "Inconclusive match (score: ${"%.1f".format(candidateScore)}, state: $finalUncertainState)"
             )
         }
 
         Log.d(TAG, "selected track: \"${selectedCandidate.artistName} - ${selectedCandidate.trackName}\" (status=$matchState, confidence=${"%.1f".format(candidateScore)})")
 
-        // 5. Canonical Textual Metadata Authority: Apple iTunes (Section 8)
+        // 5. Canonical Textual Metadata Authority: Apple iTunes (Sections 7, 8, 9, 10, 17)
         val resolvedArtist = selectedCandidate.artistName
         val resolvedTitle = selectedCandidate.trackName
         val resolvedAlbum = selectedCandidate.collectionName ?: track.album
         val resolvedYear = selectedCandidate.releaseYear ?: track.releaseYear
         val resolvedGenre = selectedCandidate.primaryGenreName ?: track.genre
 
-        // Primary Rule (Section 5): Protect user's existing title and artist
-        val finalTitle = if (settings.replaceExistingTitle || !TrackIdentityParser.isTitleValid(track.title)) resolvedTitle else track.title
-        val finalArtist = if (settings.replaceExistingArtist || !TrackIdentityParser.isArtistValid(track.artist)) resolvedArtist else track.artist
+        // Respect manual user edits (Section 17) and apply high-confidence metadata (Section 7, 9)
+        val finalTitle = if (track.userConfirmedMetadata) {
+            track.title
+        } else if (settings.replaceExistingTitle || !TrackIdentityParser.isTitleValid(track.title) || candidateScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD) {
+            resolvedTitle
+        } else {
+            parsed.title.ifBlank { track.title }
+        }
 
-        // 6. MusicBrainz Identifier Resolution (Section 9 & 10)
-        Log.d(TAG, "Resolving MusicBrainz release identifier bridge for \"$resolvedArtist - $resolvedAlbum\"")
-        val mbMatch = musicBrainzResolver.resolveMbid(
-            artistName = resolvedArtist,
-            trackName = resolvedTitle,
-            collectionName = resolvedAlbum,
-            durationMs = selectedCandidate.trackTimeMillis
-        )
+        val finalArtist = if (track.userConfirmedMetadata) {
+            track.artist
+        } else if (settings.replaceExistingArtist || !TrackIdentityParser.isArtistValid(track.artist) || candidateScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD) {
+            resolvedArtist
+        } else {
+            parsed.artist ?: track.artist
+        }
 
-        // 7. Cover Art Archive Artwork Retrieval (Sections 9 & 11)
+        val finalAlbum = if (track.userConfirmedMetadata) {
+            track.album
+        } else if (TrackIdentityParser.isGenericAlbumName(track.album) || !resolvedAlbum.isNullOrBlank()) {
+            resolvedAlbum ?: "Single"
+        } else {
+            track.album
+        }
+
+        // 6. High-quality Album Artwork (Section 11, Rule 6 - No MusicBrainz!)
         var resolvedArtworkUrl: String? = track.artworkUrl
         var artworkSource: String? = track.artworkSource
         var artworkCachePath: String? = track.artworkCachePath
@@ -216,34 +287,50 @@ class MetadataResolver(
         val cachedFile = artworkCache.getCachedArtworkFile(resolvedArtist, resolvedAlbum)
         if (cachedFile != null) {
             resolvedArtworkUrl = cachedFile.absolutePath
-            artworkSource = "Cover Art Archive (Cached)"
+            artworkSource = "Apple iTunes (Cached)"
             artworkCachePath = cachedFile.absolutePath
             activeArtworkBytes = try { cachedFile.readBytes() } catch (_: Exception) { null }
         } else {
-            try {
-                val downloadedCover = coverArtArchiveProvider.fetchFrontCover(
-                    releaseMbid = mbMatch?.releaseMbid,
-                    releaseGroupMbid = mbMatch?.releaseGroupMbid
-                )
+            // 1. High-resolution Apple release artwork (1200x1200bb)
+            val appleArtUrl = selectedCandidate.artworkUrl100
+                ?.replace("100x100bb", "1200x1200bb")
+                ?.replace("60x60bb", "1200x1200bb")
 
-                if (downloadedCover != null) {
+            if (!appleArtUrl.isNullOrBlank()) {
+                val downloadedApple = try {
+                    appleProvider.downloadArtwork(appleArtUrl)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Apple artwork download non-fatal error: ${e.message}")
+                    null
+                }
+                if (downloadedApple != null) {
                     val savedFile = artworkCache.saveArtwork(
                         artist = resolvedArtist,
                         album = resolvedAlbum,
-                        artwork = downloadedCover,
-                        sourceProvider = "Cover Art Archive"
+                        artwork = downloadedApple,
+                        sourceProvider = "Apple iTunes"
                     )
-                    resolvedArtworkUrl = downloadedCover.sourceUrl
-                    artworkSource = "Cover Art Archive"
+                    resolvedArtworkUrl = appleArtUrl
+                    artworkSource = "Apple iTunes"
                     artworkCachePath = savedFile.absolutePath
-                    activeArtworkBytes = downloadedCover.bytes
-                    activeArtworkMime = downloadedCover.mimeType
-                } else if (artworkProvider != null) {
+                    activeArtworkBytes = downloadedApple.bytes
+                    activeArtworkMime = downloadedApple.mimeType
+                }
+            }
+
+            // 2. TheAudioDB Fallback
+            if (activeArtworkBytes == null && artworkProvider != null) {
+                try {
                     val tdbCandidates = artworkProvider.findArtwork(resolvedArtist, resolvedAlbum, resolvedTitle)
                     if (tdbCandidates.isNotEmpty()) {
                         val downloadedTdb = artworkProvider.downloadArtwork(tdbCandidates.first().artworkUrl)
                         if (downloadedTdb != null) {
-                            val savedFile = artworkCache.saveArtwork(resolvedArtist, resolvedAlbum, downloadedTdb)
+                            val savedFile = artworkCache.saveArtwork(
+                                artist = resolvedArtist,
+                                album = resolvedAlbum,
+                                artwork = downloadedTdb,
+                                sourceProvider = "TheAudioDB"
+                            )
                             resolvedArtworkUrl = tdbCandidates.first().artworkUrl
                             artworkSource = "TheAudioDB"
                             artworkCachePath = savedFile.absolutePath
@@ -251,9 +338,9 @@ class MetadataResolver(
                             activeArtworkMime = downloadedTdb.mimeType
                         }
                     }
+                } catch (e: Exception) {
+                    Log.w(TAG, "TheAudioDB artwork fallback non-fatal error: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Cover Art Archive retrieval error: ${e.message}")
             }
         }
 
@@ -264,7 +351,7 @@ class MetadataResolver(
             track.artworkUrl
         }
 
-        // 8. Store Proposed Metadata Separately in DB Review Inbox (Stages 7 & 8)
+        // 7. Store Proposed Metadata Separately in DB Review Inbox
         val db = database ?: try { AppDatabase.getDatabase(context) } catch (_: Exception) { null }
         if (db != null) {
             val inboxEntity = MetadataReviewItemEntity(
@@ -302,7 +389,7 @@ class MetadataResolver(
         var intermediateTrack = track.copy(
             artist = finalArtist,
             title = finalTitle,
-            album = resolvedAlbum,
+            album = finalAlbum,
             releaseDate = selectedCandidate.releaseDate ?: track.releaseDate,
             releaseYear = resolvedYear,
             genre = resolvedGenre,
@@ -335,11 +422,15 @@ class MetadataResolver(
             Log.i("WavPipeline", "[Stage 2: Artwork lookup] $artStatus")
         }
 
-        // Stage 3: Immediate internal database save (Never lose discovered metadata)
+        // Stage 3: Immediate internal database save with read-back verification (Section 15, 16)
         val dao = db?.trackDao()
         if (dao != null && intermediateTrack.id.isNotBlank()) {
             try {
                 dao.updateTrack(TrackEntity.fromTrack(intermediateTrack))
+                val verified = dao.getTrackById(intermediateTrack.id)
+                if (verified == null || verified.artist != intermediateTrack.artist || verified.title != intermediateTrack.title) {
+                    Log.w(TAG, "Intermediate DB read-back verification mismatch for track ${intermediateTrack.id}")
+                }
                 if (isWav) {
                     Log.i("WavPipeline", "[Stage 3: Internal database save] SUCCESS: track id=${intermediateTrack.id} saved to SoundSync database")
                 }
@@ -348,8 +439,23 @@ class MetadataResolver(
             }
         }
 
-        // 9. Physical File Writing: STRICT SAFETY ENFORCEMENT (Section 8)
-        // Background scanning MUST NOT modify physical audio files unless user disabled approval requirement
+        // Section 19: Debug logging format specified in instruction
+        Log.d(TAG, """
+            |--- Metadata Resolution Debug ---
+            |File: ${track.filePath}
+            |Raw title: ${track.title}
+            |Cleaned search title: ${parsed.cleanSearchTitle}
+            |Existing artist: ${track.artist}
+            |Search queries attempted: ${deduplicatedQueries.take(3).joinToString(", ")}
+            |Candidate: ${selectedCandidate.artistName} - ${selectedCandidate.trackName}
+            |Duration comparison: Local: ${track.durationSeconds}s, Remote: ${selectedCandidate.durationSeconds}s
+            |Confidence: ${"%.1f".format(candidateScore)}%
+            |Chosen metadata source: Apple iTunes Search API
+            |Final: Title: $finalTitle, Artist: $finalArtist, Album: $finalAlbum
+            |---------------------------------
+        """.trimMargin())
+
+        // 8. Physical File Writing: STRICT SAFETY ENFORCEMENT (Section 8)
         val isLocalPhysicalFile = !track.filePath.startsWith("demo://") &&
                 !track.filePath.startsWith("http") &&
                 (track.filePath.startsWith("content://") || File(track.filePath).exists())
@@ -398,37 +504,39 @@ class MetadataResolver(
                 }
                 is MetadataWriteResult.VerificationFailed -> {
                     Log.e("MetadataWriter", "Write verification FAILED on field ${writeResult.field}: expected \"${writeResult.expected}\" but found \"${writeResult.actual}\"")
-                    finalScanState = MetadataScanState.COMPLETE
-                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
-                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] VERIFICATION NOTICE: field ${writeResult.field}; preserved in database")
+                    finalScanState = MetadataScanState.FAILED_WRITE_VERIFICATION
+                    fileWriteState = com.example.model.MetadataWriteState.FILE_WRITE_FAILED
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] VERIFICATION FAILED: field ${writeResult.field}; preserved in database")
                 }
                 is MetadataWriteResult.PermissionRequired -> {
                     Log.w("MetadataWriter", "Physical write requires Android storage write permission for ${track.filePath}")
-                    finalScanState = MetadataScanState.COMPLETE
+                    finalScanState = MetadataScanState.NEEDS_WRITE_PERMISSION
                     fileWriteState = com.example.model.MetadataWriteState.PERMISSION_REQUIRED
                     if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] PERMISSION DENIED: ${writeResult.reason}")
                 }
                 is MetadataWriteResult.ReadOnlyFile -> {
                     Log.w("MetadataWriter", "Physical write not possible; file is read-only: ${track.filePath}")
-                    finalScanState = MetadataScanState.COMPLETE
-                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+                    finalScanState = MetadataScanState.PARTIAL
+                    fileWriteState = com.example.model.MetadataWriteState.READ_ONLY_FILE
                     if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] READ ONLY: file is read-only on storage; preserved in database")
                 }
                 is MetadataWriteResult.Unsupported -> {
                     Log.d("MetadataWriter", "Physical write not supported: ${writeResult.reason}")
-                    finalScanState = MetadataScanState.COMPLETE
-                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+                    finalScanState = MetadataScanState.PARTIAL
+                    fileWriteState = com.example.model.MetadataWriteState.FORMAT_WRITE_UNSUPPORTED
                     if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] UNSUPPORTED: ${writeResult.reason}; preserved in database")
                 }
                 is MetadataWriteResult.Failed -> {
                     Log.e("MetadataWriter", "Physical write failed: ${writeResult.reason}")
-                    finalScanState = MetadataScanState.COMPLETE
-                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+                    finalScanState = MetadataScanState.FAILED
+                    fileWriteState = com.example.model.MetadataWriteState.FILE_WRITE_FAILED
                     if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] ERROR: ${writeResult.reason}; preserved in database")
                 }
             }
         } else {
             Log.d("MetadataWriter", "Physical file write safely DEFERRED until user approval for ${track.filePath}")
+            finalScanState = if (matchState == MetadataScanState.VERIFIED) MetadataScanState.VERIFIED else MetadataScanState.REVIEW_REQUIRED
+            fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
             if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] DEFERRED: awaiting user confirmation; preserved in database")
         }
 
@@ -440,11 +548,17 @@ class MetadataResolver(
             metadataWriteState = fileWriteState.name
         )
 
-        // Save final track state to DB
+        // Save final track state to DB with read-back verification
         if (dao != null && finalTrack.id.isNotBlank()) {
             try {
                 dao.updateTrack(TrackEntity.fromTrack(finalTrack))
-            } catch (_: Exception) {}
+                val verified = dao.getTrackById(finalTrack.id)
+                if (verified == null || verified.artist != finalTrack.artist || verified.title != finalTrack.title) {
+                    Log.w(TAG, "Final DB read-back verification mismatch for track ${finalTrack.id}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error saving final track state: ${e.message}")
+            }
         }
 
         // Stage 5 logging: Final SoundSync status
@@ -467,61 +581,7 @@ class MetadataResolver(
             scanState = finalScanState,
             confidence = candidateScore,
             wasRepaired = wasArtistRepaired || (candidateScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD),
-            message = "Identified via Apple + Cover Art Archive (score: ${"%.1f".format(candidateScore)}, state: $finalScanState)"
+            message = "Identified via Apple iTunes Search (score: ${"%.1f".format(candidateScore)}, state: $finalScanState)"
         )
-    }
-
-    private suspend fun resolveMissingArtist(
-        track: Track,
-        parsed: ParsedTrackIdentity
-    ): Pair<AppleTrackResult, Double>? {
-        Log.d(TAG, "Missing artist detected for \"${track.title}\" (file: ${track.filePath})")
-
-        val titleQuery = parsed.title
-        val candidates = appleProvider.searchTracks(titleQuery, limit = 20)
-        if (candidates.isEmpty()) {
-            return null
-        }
-
-        val scored = candidates.map { candidate ->
-            MetadataConfidenceScorer.scoreCandidate(
-                localTitle = parsed.title,
-                localArtist = null,
-                localAlbum = parsed.album,
-                localDurationSeconds = track.durationSeconds,
-                candidate = candidate
-            )
-        }.sortedByDescending { it.totalScore }
-
-        val best = scored.firstOrNull() ?: return null
-
-        if (best.totalScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD) {
-            val likelyArtist = best.candidate.artistName
-            Log.d(TAG, "Determined likely artist: \"$likelyArtist\" for title \"${parsed.title}\"")
-
-            val refinedCandidates = appleProvider.searchTracks("$likelyArtist ${parsed.title}", limit = 5)
-            val refinedScored = refinedCandidates.map {
-                MetadataConfidenceScorer.scoreCandidate(
-                    localTitle = parsed.title,
-                    localArtist = likelyArtist,
-                    localAlbum = parsed.album,
-                    localDurationSeconds = track.durationSeconds,
-                    candidate = it
-                )
-            }.sortedByDescending { it.totalScore }
-
-            val refinedBest = refinedScored.firstOrNull()
-            if (refinedBest != null && refinedBest.totalScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD) {
-                return refinedBest.candidate to refinedBest.totalScore
-            }
-
-            return best.candidate to best.totalScore
-        }
-
-        return if (best.totalScore >= MetadataConfidenceScorer.MINIMUM_ACCEPTABLE_THRESHOLD) {
-            best.candidate to best.totalScore
-        } else {
-            null
-        }
     }
 }

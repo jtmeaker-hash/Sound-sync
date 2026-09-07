@@ -8,6 +8,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.res.painterResource
 import com.example.R
@@ -265,9 +266,10 @@ fun MainDjScreen(
             )
         }
     ) {
+        val theme = SoundSyncTheme.current
         Scaffold(
-            modifier = Modifier.fillMaxSize().background(DjObsidian),
-            containerColor = DjObsidian,
+            modifier = Modifier.fillMaxSize().background(theme.background),
+            containerColor = theme.background,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 if (!isCarModeActive) {
@@ -307,10 +309,10 @@ fun MainDjScreen(
                         val analysisProgress by viewModel.analysisProgress.collectAsState()
                         AnimatedVisibility(visible = analysisProgress.isRunning && (analysisProgress.totalCount > 0 || analysisProgress.currentTrackTitle.isNotBlank())) {
                             Surface(
-                                color = if (analysisProgress.isPausedForPlayback) DjSurfaceDark else DjSurfaceElevated,
+                                color = if (analysisProgress.isPausedForPlayback) theme.surfaceSunken else theme.surfaceRaised,
                                 border = BorderStroke(
                                     0.5.dp,
-                                    if (analysisProgress.isPausedForPlayback) NeonAmber.copy(alpha = 0.5f) else DeckACyan.copy(alpha = 0.5f)
+                                    if (analysisProgress.isPausedForPlayback) theme.warning.copy(alpha = 0.5f) else theme.accent.copy(alpha = 0.5f)
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -328,7 +330,7 @@ fun MainDjScreen(
                                             } else 0f
                                         },
                                         modifier = Modifier.size(16.dp),
-                                        color = if (analysisProgress.isPausedForPlayback) NeonAmber else DeckACyan,
+                                        color = if (analysisProgress.isPausedForPlayback) theme.warning else theme.accent,
                                         strokeWidth = 2.dp
                                     )
                                     val bannerText = if (analysisProgress.isPausedForPlayback) {
@@ -350,7 +352,7 @@ fun MainDjScreen(
                                     }
                                     Text(
                                         text = bannerText,
-                                        color = TextSecondary,
+                                        color = theme.textSecondary,
                                         fontSize = 11.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -886,9 +888,10 @@ private fun DjTopAppBar(
     onOpenConfig: () -> Unit,
     onRescan: () -> Unit
 ) {
+    val theme = SoundSyncTheme.current
     Surface(
-        color = DjSurfaceDark,
-        border = androidx.compose.foundation.BorderStroke(0.5.dp, DjSurfaceBorder)
+        color = theme.surfaceRaised,
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, theme.divider)
     ) {
         Row(
             modifier = Modifier
@@ -909,22 +912,22 @@ private fun DjTopAppBar(
                     Icon(
                         imageVector = Icons.Default.Menu,
                         contentDescription = "Open Navigation Menu",
-                        tint = DeckACyan,
+                        tint = theme.accent,
                         modifier = Modifier.size(24.dp)
                     )
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = DeckACyan.copy(alpha = 0.2f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DeckACyan),
+                    shape = RoundedCornerShape(theme.cornerSmall),
+                    color = theme.surfaceSunken,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, theme.accent.copy(alpha = 0.4f)),
                     modifier = Modifier.size(32.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Image(
                             painter = painterResource(id = R.drawable.soundsync_logo),
                             contentDescription = "SoundSync Logo",
-                            modifier = Modifier.size(24.dp).clip(RoundedCornerShape(4.dp))
+                            modifier = Modifier.size(24.dp).clip(RoundedCornerShape(theme.cornerSmall))
                         )
                     }
                 }
@@ -933,29 +936,20 @@ private fun DjTopAppBar(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             text = "SOUNDSYNC",
-                            color = TextPrimary,
+                            color = theme.textPrimary,
                             fontWeight = FontWeight.Black,
                             fontSize = 14.sp,
                             fontFamily = FontFamily.Monospace,
                             letterSpacing = 1.sp
                         )
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = when (currentTab) {
-                                DjTab.LOCAL -> DeckACyan.copy(alpha = 0.2f)
-                                DjTab.FINDS -> NeonAmber.copy(alpha = 0.2f)
-                                DjTab.STREAMING -> SpotifyGreen.copy(alpha = 0.2f)
-                                DjTab.SPECTROGRAM -> NeonPurple.copy(alpha = 0.2f)
-                            }
+                            shape = RoundedCornerShape(theme.cornerSmall),
+                            color = theme.surfaceSunken,
+                            border = androidx.compose.foundation.BorderStroke(0.5.dp, theme.divider)
                         ) {
                             Text(
                                 text = currentTab.title.uppercase(),
-                                color = when (currentTab) {
-                                    DjTab.LOCAL -> DeckACyan
-                                    DjTab.FINDS -> NeonAmber
-                                    DjTab.STREAMING -> SpotifyGreen
-                                    DjTab.SPECTROGRAM -> NeonPurple
-                                },
+                                color = theme.accent,
                                 fontSize = 8.sp,
                                 fontWeight = FontWeight.Black,
                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
@@ -963,8 +957,8 @@ private fun DjTopAppBar(
                         }
                     }
                     Text(
-                        text = "$totalTracks Local Tracks • DJ & Streaming Suite",
-                        color = TextSecondary,
+                        text = "$totalTracks Local Tracks • DJ Workstation",
+                        color = theme.textSecondary,
                         fontSize = 10.sp
                     )
                 }
@@ -976,16 +970,16 @@ private fun DjTopAppBar(
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 IconButton(onClick = onOpenConfig, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.Settings, contentDescription = "API Config", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Settings, contentDescription = "API Config", tint = theme.textSecondary, modifier = Modifier.size(18.dp))
                 }
 
                 Surface(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(RoundedCornerShape(theme.cornerSmall))
                         .clickable(enabled = !isScanning, onClick = onRescan),
-                    shape = RoundedCornerShape(6.dp),
-                    color = DjSurfaceCard,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                    shape = RoundedCornerShape(theme.cornerSmall),
+                    color = theme.surfaceRaised,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
@@ -993,13 +987,13 @@ private fun DjTopAppBar(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         if (isScanning) {
-                            CircularProgressIndicator(modifier = Modifier.size(10.dp), color = DeckACyan, strokeWidth = 1.5.dp)
+                            CircularProgressIndicator(modifier = Modifier.size(10.dp), color = theme.accent, strokeWidth = 1.5.dp)
                         } else {
-                            Icon(Icons.Default.Refresh, contentDescription = "Rescan", tint = TextSecondary, modifier = Modifier.size(12.dp))
+                            Icon(Icons.Default.Refresh, contentDescription = "Rescan", tint = theme.textSecondary, modifier = Modifier.size(12.dp))
                         }
                         Text(
                             text = "SCAN",
-                            color = TextSecondary,
+                            color = theme.textSecondary,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
@@ -1016,10 +1010,13 @@ private fun DjBottomNavigationBar(
     selectedTab: DjTab,
     onTabSelected: (DjTab) -> Unit
 ) {
+    val theme = SoundSyncTheme.current
     NavigationBar(
-        modifier = Modifier.testTag("dj_bottom_nav_bar"),
-        containerColor = DjSurfaceDark,
-        tonalElevation = 8.dp
+        modifier = Modifier
+            .testTag("dj_bottom_nav_bar")
+            .border(BorderStroke(0.5.dp, theme.divider)),
+        containerColor = theme.surfaceRaised,
+        tonalElevation = 0.dp
     ) {
         val tabs = listOf(
             Triple(DjTab.LOCAL, "Local", Icons.Default.FolderOpen),
@@ -1028,17 +1025,9 @@ private fun DjBottomNavigationBar(
             Triple(DjTab.SPECTROGRAM, "Spectrum", Icons.Default.GraphicEq)
         )
 
-        val isPro = SoundSyncTheme.isPro
-        val proAccent = SoundSyncTheme.current.accent
-
         tabs.forEach { (tab, title, icon) ->
             val isSelected = selectedTab == tab
-            val tabColor = if (isPro) proAccent else when (tab) {
-                DjTab.LOCAL -> DeckACyan
-                DjTab.FINDS -> NeonAmber
-                DjTab.STREAMING -> SpotifyGreen
-                DjTab.SPECTROGRAM -> DeckACyan
-            }
+            val tabColor = theme.accent
 
             NavigationBarItem(
                 selected = isSelected,
@@ -1057,8 +1046,8 @@ private fun DjBottomNavigationBar(
                     selectedIconColor = tabColor,
                     selectedTextColor = tabColor,
                     indicatorColor = tabColor.copy(alpha = 0.15f),
-                    unselectedIconColor = TextMuted,
-                    unselectedTextColor = TextMuted
+                    unselectedIconColor = theme.textMuted,
+                    unselectedTextColor = theme.textMuted
                 )
             )
         }

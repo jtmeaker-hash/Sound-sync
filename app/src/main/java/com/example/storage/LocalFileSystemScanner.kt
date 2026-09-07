@@ -289,6 +289,23 @@ object LocalFileSystemScanner {
             retriever.release()
         } catch (_: Exception) {}
 
+        val parsed = com.example.metadata.parser.TrackIdentityParser.parse(
+            existingTitle = title,
+            existingArtist = if (com.example.metadata.parser.TrackIdentityParser.isArtistValid(artist)) artist else null,
+            album = album,
+            filename = path,
+            durationSeconds = durationSec
+        )
+        if (!com.example.metadata.parser.TrackIdentityParser.isArtistValid(artist)) {
+            artist = parsed.artist ?: "Unknown Artist"
+            title = parsed.title
+        } else {
+            title = com.example.metadata.parser.TrackIdentityParser.cleanGarbage(title)
+        }
+        if (com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(album)) {
+            album = parsed.album ?: "Single"
+        }
+
         val sizeMb = file.length().toDouble() / (1024.0 * 1024.0)
         val quality = if (format == "FLAC" || format == "WAV" || format == "AIFF") {
             AudioQualityRating.TRUE_LOSSLESS
