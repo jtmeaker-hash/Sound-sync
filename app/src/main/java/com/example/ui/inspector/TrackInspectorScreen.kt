@@ -257,6 +257,7 @@ fun TrackInspectorScreen(
                                 is MetadataWriteResult.PermissionRequired -> "Write permission required!"
                                 is MetadataWriteResult.ReadOnlyFile -> "File is read-only!"
                                 is MetadataWriteResult.Unsupported -> "Format unsupported: ${result.reason}"
+                                is MetadataWriteResult.LibraryOnly -> "Saved to SoundSync library: ${result.reason}"
                                 is MetadataWriteResult.Failed -> "File write failed: ${result.reason}"
                             }
                             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()

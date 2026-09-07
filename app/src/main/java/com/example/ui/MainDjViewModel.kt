@@ -2774,6 +2774,21 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         showSnackbar("Push metadata to files cancelled.")
     }
 
+    fun retryFailedFileWrites() {
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            showSnackbar("Retrying file writes for previously failed tracks using cached database metadata...")
+            val report = MetadataFileWriteQueue.getInstance(app).retryFailedTracks()
+            withContext(Dispatchers.Main) {
+                if (report.wasCancelled) {
+                    showSnackbar("Retry cancelled: ${report.successfullyWritten} written, ${report.libraryOnly} library only, ${report.failed} failed")
+                } else {
+                    showSnackbar("Retry complete: ${report.successfullyWritten} written, ${report.libraryOnly} library only, ${report.failed} failed")
+                }
+            }
+        }
+    }
+
     fun repairLibraryEmbeddedMetadata() {
         val app = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {

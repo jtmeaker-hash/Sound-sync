@@ -76,7 +76,8 @@ fun MetadataEnrichmentSettingsCard(
     pushProgress: PushMetadataProgress? = null,
     pushReport: PushMetadataReport? = null,
     onPushMetadataToFiles: () -> Unit = {},
-    onCancelPushMetadata: () -> Unit = {}
+    onCancelPushMetadata: () -> Unit = {},
+    onRetryFailedWrites: () -> Unit = {}
 ) {
     var minText by remember(settings.bpmMin) { mutableStateOf(settings.bpmMin.toString()) }
     var maxText by remember(settings.bpmMax) { mutableStateOf(settings.bpmMax.toString()) }
@@ -274,6 +275,9 @@ fun MetadataEnrichmentSettingsCard(
                             if (pushReport.partial > 0) {
                                 Text("Partial: ${pushReport.partial}", color = NeonAmber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             }
+                            if (pushReport.libraryOnly > 0) {
+                                Text("Library only: ${pushReport.libraryOnly}", color = NeonAmber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
                             if (pushReport.permissionRequired > 0) {
                                 Text("Perm Required: ${pushReport.permissionRequired}", color = NeonAmber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             }
@@ -282,6 +286,17 @@ fun MetadataEnrichmentSettingsCard(
                             }
                             if (pushReport.failed > 0) {
                                 Text("Failed: ${pushReport.failed}", color = NeonRed, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        if (pushReport.failed > 0 || pushReport.permissionRequired > 0 || pushReport.failureReasons.isNotEmpty()) {
+                            Button(
+                                onClick = onRetryFailedWrites,
+                                colors = ButtonDefaults.buttonColors(containerColor = DeckACyan.copy(alpha = 0.2f), contentColor = DeckACyan),
+                                modifier = Modifier.padding(top = 4.dp).height(32.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            ) {
+                                Text("Retry Failed Writes", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 

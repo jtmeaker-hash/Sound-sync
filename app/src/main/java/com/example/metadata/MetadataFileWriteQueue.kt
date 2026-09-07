@@ -64,7 +64,8 @@ data class PushMetadataProgress(
     val partialCount: Int = 0,
     val skippedCount: Int = 0,
     val unsupportedCount: Int = 0,
-    val permissionRequiredCount: Int = 0
+    val permissionRequiredCount: Int = 0,
+    val libraryOnlyCount: Int = 0
 )
 
 /**
@@ -102,6 +103,7 @@ data class PushMetadataReport(
     val skipped: Int = 0,
     val unsupported: Int = 0,
     val permissionRequired: Int = 0,
+    val libraryOnly: Int = 0,
     val wasCancelled: Boolean = false
 )
 
@@ -380,7 +382,8 @@ class MetadataFileWriteQueue private constructor(
                     is MetadataWriteResult.Partial -> writtenCount++
                     is MetadataWriteResult.AlreadyInSync -> syncedCount++
                     is MetadataWriteResult.Skipped, is MetadataWriteResult.ReadOnlyFile,
-                    is MetadataWriteResult.Unsupported, is MetadataWriteResult.PermissionRequired -> skippedCount++
+                    is MetadataWriteResult.Unsupported, is MetadataWriteResult.PermissionRequired,
+                    is MetadataWriteResult.LibraryOnly -> skippedCount++
                     is MetadataWriteResult.Failed, is MetadataWriteResult.VerificationFailed -> failedCount++
                 }
             }
@@ -431,6 +434,7 @@ class MetadataFileWriteQueue private constructor(
         var skippedCount = 0
         var unsupportedCount = 0
         var permissionRequiredCount = 0
+        var libraryOnlyCount = 0
         var failedCount = 0
         val failures = mutableListOf<PushMetadataFailure>()
         var tracksProcessed = 0
@@ -501,7 +505,8 @@ class MetadataFileWriteQueue private constructor(
                         partialCount = partialCount,
                         skippedCount = skippedCount,
                         unsupportedCount = unsupportedCount,
-                        permissionRequiredCount = permissionRequiredCount
+                        permissionRequiredCount = permissionRequiredCount,
+                        libraryOnlyCount = libraryOnlyCount
                     )
                     _pushProgress.value = p
                     onProgress?.invoke(p)
@@ -660,14 +665,20 @@ class MetadataFileWriteQueue private constructor(
                             writtenCount++
                             updateProgress(PushMetadataPhase.DONE_PARTIAL)
                         }
+                        is MetadataWriteResult.LibraryOnly -> {
+                            libraryOnlyCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, writeResult.reason, category = "Updated - Library Only"))
+                            updateProgress(PushMetadataPhase.SKIPPED)
+                        }
                         is MetadataWriteResult.Skipped -> {
-                            skippedCount++
+                            libraryOnlyCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, writeResult.reason, category = "Updated - Library Only"))
                             updateProgress(PushMetadataPhase.SKIPPED)
                         }
                         is MetadataWriteResult.ReadOnlyFile -> {
-                            failedCount++
-                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "File is read-only on device storage", category = "Read-Only"))
-                            updateProgress(PushMetadataPhase.FAILED)
+                            libraryOnlyCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "File is read-only on device storage; saved to SoundSync library", category = "Updated - Library Only"))
+                            updateProgress(PushMetadataPhase.SKIPPED)
                         }
                         is MetadataWriteResult.PermissionRequired -> {
                             permissionRequiredCount++
@@ -676,8 +687,9 @@ class MetadataFileWriteQueue private constructor(
                         }
                         is MetadataWriteResult.Unsupported -> {
                             unsupportedCount++
-                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "Format not supported for tag writing (${writeResult.reason})", category = "Unsupported"))
-                            updateProgress(PushMetadataPhase.FAILED)
+                            libraryOnlyCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "Format not supported for tag writing (${writeResult.reason}); saved to SoundSync library", category = "Updated - Library Only"))
+                            updateProgress(PushMetadataPhase.SKIPPED)
                         }
                         is MetadataWriteResult.VerificationFailed -> {
                             failedCount++
@@ -685,9 +697,17 @@ class MetadataFileWriteQueue private constructor(
                             updateProgress(PushMetadataPhase.FAILED)
                         }
                         is MetadataWriteResult.Failed -> {
-                            failedCount++
-                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, writeResult.reason, category = "Failed"))
-                            updateProgress(PushMetadataPhase.FAILED)
+                            val hasDbMetadata = currentTrack.isAppleIdentified ||
+                                    (currentTrack.title.isNotBlank() && currentTrack.title != "Unknown Title" && currentTrack.artist.isNotBlank() && currentTrack.artist != "Unknown Artist")
+                            if (hasDbMetadata) {
+                                libraryOnlyCount++
+                                failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, "${writeResult.reason}; saved to SoundSync library", category = "Updated - Library Only"))
+                                updateProgress(PushMetadataPhase.SKIPPED)
+                            } else {
+                                failedCount++
+                                failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, writeResult.reason, category = "Failed"))
+                                updateProgress(PushMetadataPhase.FAILED)
+                            }
                         }
                     }
                     // Step 12: Continue to next track
@@ -706,16 +726,121 @@ class MetadataFileWriteQueue private constructor(
             totalExamined = tracksProcessed,
             successfullyWritten = writtenCount,
             alreadySynchronized = syncedCount,
-            failed = failedCount + permissionRequiredCount + unsupportedCount,
+            failed = failedCount,
             failureReasons = failures,
             partial = partialCount,
             skipped = skippedCount,
             unsupported = unsupportedCount,
             permissionRequired = permissionRequiredCount,
+            libraryOnly = libraryOnlyCount,
             wasCancelled = wasCancelled
         )
         _lastPushReport.value = report
         Log.i(TAG, "Push metadata to files completed (wasCancelled=$wasCancelled): $report")
+        report
+    }
+
+    /**
+     * Retries writing previously failed or database-only tracks using already-discovered
+     * metadata stored in the Room database, WITHOUT making redundant internet queries.
+     */
+    suspend fun retryFailedTracks(
+        onProgress: ((PushMetadataProgress) -> Unit)? = null
+    ): PushMetadataReport = withContext(Dispatchers.IO) {
+        val failedEntities = trackDao?.getTracksWithWriteIssues() ?: emptyList()
+        val failedTracks = failedEntities.map { it.toTrack() }
+        val total = failedTracks.size
+
+        var writtenCount = 0
+        var syncedCount = 0
+        var partialCount = 0
+        var libraryOnlyCount = 0
+        var failedCount = 0
+        var permissionRequiredCount = 0
+        val failures = mutableListOf<PushMetadataFailure>()
+
+        Log.i(TAG, "Retrying file writes for $total tracks using existing database metadata...")
+
+        for ((index, track) in failedTracks.withIndex()) {
+            if (isCancelRequested || !coroutineContext.isActive) break
+
+            val current = index + 1
+            val fileName = File(track.filePath).name.ifBlank { track.filePath }
+
+            val p = PushMetadataProgress(
+                current = current,
+                total = total,
+                trackTitle = track.title.ifBlank { fileName },
+                trackArtist = track.artist.ifBlank { "Unknown Artist" },
+                fileName = fileName,
+                phase = PushMetadataPhase.WRITING_TAGS,
+                writtenCount = writtenCount,
+                syncedCount = syncedCount,
+                failedCount = failedCount,
+                partialCount = partialCount,
+                libraryOnlyCount = libraryOnlyCount
+            )
+            _pushProgress.value = p
+            onProgress?.invoke(p)
+
+            val activeArtworkBytes = track.artworkCachePath?.let { cachePath ->
+                try {
+                    val f = File(cachePath)
+                    if (f.exists() && f.canRead()) f.readBytes() else null
+                } catch (_: Exception) { null }
+            }
+
+            val writeResult = semaphore.withPermit {
+                fileWriter.writeAsync(track, activeArtworkBytes)
+            }
+
+            when (writeResult) {
+                is MetadataWriteResult.Written -> writtenCount++
+                is MetadataWriteResult.AlreadyInSync -> syncedCount++
+                is MetadataWriteResult.Partial -> {
+                    partialCount++
+                    writtenCount++
+                }
+                is MetadataWriteResult.LibraryOnly -> {
+                    libraryOnlyCount++
+                    failures.add(PushMetadataFailure(track.id, track.title, track.artist, track.filePath, writeResult.reason, category = "Updated - Library Only"))
+                }
+                is MetadataWriteResult.ReadOnlyFile -> {
+                    libraryOnlyCount++
+                    failures.add(PushMetadataFailure(track.id, track.title, track.artist, track.filePath, "Storage permission denied: File is read-only", category = "Updated - Library Only"))
+                }
+                is MetadataWriteResult.PermissionRequired -> {
+                    permissionRequiredCount++
+                    failures.add(PushMetadataFailure(track.id, track.title, track.artist, track.filePath, "Storage permission denied: ${writeResult.reason}", category = "Permission"))
+                }
+                is MetadataWriteResult.Unsupported -> {
+                    libraryOnlyCount++
+                    failures.add(PushMetadataFailure(track.id, track.title, track.artist, track.filePath, "Format not supported (${writeResult.reason})", category = "Updated - Library Only"))
+                }
+                is MetadataWriteResult.VerificationFailed -> {
+                    failedCount++
+                    failures.add(PushMetadataFailure(track.id, track.title, track.artist, track.filePath, "Verification failed for ${writeResult.field}", category = "Verification"))
+                }
+                is MetadataWriteResult.Failed -> {
+                    failedCount++
+                    failures.add(PushMetadataFailure(track.id, track.title, track.artist, track.filePath, writeResult.reason, category = "Failed"))
+                }
+                is MetadataWriteResult.Skipped -> libraryOnlyCount++
+            }
+        }
+
+        val report = PushMetadataReport(
+            totalExamined = total,
+            successfullyWritten = writtenCount,
+            alreadySynchronized = syncedCount,
+            failed = failedCount,
+            failureReasons = failures,
+            partial = partialCount,
+            permissionRequired = permissionRequiredCount,
+            libraryOnly = libraryOnlyCount,
+            wasCancelled = isCancelRequested || !coroutineContext.isActive
+        )
+        _lastPushReport.value = report
         report
     }
 }

@@ -233,15 +233,16 @@ object AudioEmbeddedMetadataReader {
             if (r < 8) break
 
             val chunkId = String(chunkHdr, 0, 4, StandardCharsets.US_ASCII)
-            val chunkSize = (chunkHdr[4].toInt() and 0xFF) or
-                    ((chunkHdr[5].toInt() and 0xFF) shl 8) or
-                    ((chunkHdr[6].toInt() and 0xFF) shl 16) or
-                    ((chunkHdr[7].toInt() and 0xFF) shl 24)
-            val pad = if (chunkSize % 2 != 0) 1 else 0
+            val chunkSize = (chunkHdr[4].toLong() and 0xFFL) or
+                    ((chunkHdr[5].toLong() and 0xFFL) shl 8) or
+                    ((chunkHdr[6].toLong() and 0xFFL) shl 16) or
+                    ((chunkHdr[7].toLong() and 0xFFL) shl 24)
+            val pad = if (chunkSize % 2L != 0L) 1L else 0L
 
             when {
                 chunkId.equals("id3 ", ignoreCase = true) -> {
-                    val id3Buf = ByteArray(minOf(chunkSize, MAX_TAG_HEADER_READ))
+                    val bufSize = minOf(chunkSize, MAX_TAG_HEADER_READ.toLong()).toInt()
+                    val id3Buf = ByteArray(bufSize)
                     var readTotal = 0
                     while (readTotal < id3Buf.size) {
                         val c = stream.read(id3Buf, readTotal, id3Buf.size - readTotal)
@@ -249,14 +250,24 @@ object AudioEmbeddedMetadataReader {
                         readTotal += c
                     }
                     val skipRemaining = chunkSize - readTotal + pad
-                    if (skipRemaining > 0) stream.skip(skipRemaining.toLong())
+                    if (skipRemaining > 0) {
+                        var skipped = 0L
+                        while (skipped < skipRemaining) {
+                            val s = stream.skip(skipRemaining - skipped)
+                            if (s <= 0) {
+                                if (stream.read() == -1) break
+                                skipped++
+                            } else skipped += s
+                        }
+                    }
 
                     if (id3Buf.size >= 10 && id3Buf[0] == 'I'.code.toByte() && id3Buf[1] == 'D'.code.toByte() && id3Buf[2] == '3'.code.toByte()) {
                         id3Meta = parseId3Tags(id3Buf.copyOfRange(0, 10), ByteArrayInputStream(id3Buf, 10, id3Buf.size - 10))
                     }
                 }
-                chunkId == "LIST" -> {
-                    val listBuf = ByteArray(minOf(chunkSize, MAX_TAG_HEADER_READ))
+                chunkId.equals("LIST", ignoreCase = true) -> {
+                    val bufSize = minOf(chunkSize, MAX_TAG_HEADER_READ.toLong()).toInt()
+                    val listBuf = ByteArray(bufSize)
                     var readTotal = 0
                     while (readTotal < listBuf.size) {
                         val c = stream.read(listBuf, readTotal, listBuf.size - readTotal)
@@ -264,14 +275,23 @@ object AudioEmbeddedMetadataReader {
                         readTotal += c
                     }
                     val skipRemaining = chunkSize - readTotal + pad
-                    if (skipRemaining > 0) stream.skip(skipRemaining.toLong())
+                    if (skipRemaining > 0) {
+                        var skipped = 0L
+                        while (skipped < skipRemaining) {
+                            val s = stream.skip(skipRemaining - skipped)
+                            if (s <= 0) {
+                                if (stream.read() == -1) break
+                                skipped++
+                            } else skipped += s
+                        }
+                    }
 
-                    if (listBuf.size >= 4 && String(listBuf, 0, 4, StandardCharsets.US_ASCII) == "INFO") {
+                    if (listBuf.size >= 4 && String(listBuf, 0, 4, StandardCharsets.US_ASCII).equals("INFO", ignoreCase = true)) {
                         infoMeta = parseRiffInfoChunk(listBuf, readTotal)
                     }
                 }
                 else -> {
-                    val toSkip = chunkSize.toLong() + pad
+                    val toSkip = chunkSize + pad
                     var skipped = 0L
                     while (skipped < toSkip) {
                         val s = stream.skip(toSkip - skipped)

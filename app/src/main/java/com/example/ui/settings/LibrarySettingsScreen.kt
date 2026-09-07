@@ -127,6 +127,7 @@ fun LibrarySettingsScreen(
     pushReport: PushMetadataReport? = null,
     onPushMetadataToFiles: () -> Unit = {},
     onCancelPushMetadata: () -> Unit = {},
+    onRetryFailedWrites: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val platformStatuses by CloudSyncManager.platformStatuses.collectAsState()
@@ -155,7 +156,8 @@ fun LibrarySettingsScreen(
                 pushProgress = pushProgress,
                 pushReport = pushReport,
                 onPushMetadataToFiles = onPushMetadataToFiles,
-                onCancelPushMetadata = onCancelPushMetadata
+                onCancelPushMetadata = onCancelPushMetadata,
+                onRetryFailedWrites = onRetryFailedWrites
             )
         }
 

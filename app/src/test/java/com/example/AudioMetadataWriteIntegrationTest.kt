@@ -15,6 +15,7 @@ import com.example.storage.AudioTagWriter
 import com.example.storage.CompleteTagPayload
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -122,6 +123,189 @@ class AudioMetadataWriteIntegrationTest {
             ))
             fos.write(byteArrayOf(4, 0)) // block align
             fos.write(byteArrayOf(16, 0)) // 16 bits per sample
+
+            // data chunk
+            fos.write("data".toByteArray(StandardCharsets.US_ASCII))
+            val dataSize = pcmData.size
+            fos.write(byteArrayOf(
+                (dataSize and 0xFF).toByte(),
+                ((dataSize shr 8) and 0xFF).toByte(),
+                ((dataSize shr 16) and 0xFF).toByte(),
+                ((dataSize shr 24) and 0xFF).toByte()
+            ))
+            fos.write(pcmData)
+        }
+        return file
+    }
+
+    /**
+     * Helper to create a 24-bit 96kHz PCM RIFF WAVE audio file.
+     */
+    private fun createSampleWavFile24Bit96k(file: File, pcmData: ByteArray): File {
+        FileOutputStream(file).use { fos ->
+            val totalRiffSize = 36 + pcmData.size
+            fos.write("RIFF".toByteArray(StandardCharsets.US_ASCII))
+            fos.write(byteArrayOf(
+                (totalRiffSize and 0xFF).toByte(),
+                ((totalRiffSize shr 8) and 0xFF).toByte(),
+                ((totalRiffSize shr 16) and 0xFF).toByte(),
+                ((totalRiffSize shr 24) and 0xFF).toByte()
+            ))
+            fos.write("WAVE".toByteArray(StandardCharsets.US_ASCII))
+
+            // fmt chunk: PCM 24-bit, 2 channels, 96000Hz
+            fos.write("fmt ".toByteArray(StandardCharsets.US_ASCII))
+            fos.write(byteArrayOf(16, 0, 0, 0))
+            fos.write(byteArrayOf(1, 0)) // PCM
+            fos.write(byteArrayOf(2, 0)) // 2 channels
+            val sampleRate = 96000
+            fos.write(byteArrayOf(
+                (sampleRate and 0xFF).toByte(),
+                ((sampleRate shr 8) and 0xFF).toByte(),
+                ((sampleRate shr 16) and 0xFF).toByte(),
+                ((sampleRate shr 24) and 0xFF).toByte()
+            ))
+            val byteRate = 96000 * 2 * 3
+            fos.write(byteArrayOf(
+                (byteRate and 0xFF).toByte(),
+                ((byteRate shr 8) and 0xFF).toByte(),
+                ((byteRate shr 16) and 0xFF).toByte(),
+                ((byteRate shr 24) and 0xFF).toByte()
+            ))
+            fos.write(byteArrayOf(6, 0)) // block align (2 channels * 3 bytes)
+            fos.write(byteArrayOf(24, 0)) // 24 bits per sample
+
+            // data chunk
+            fos.write("data".toByteArray(StandardCharsets.US_ASCII))
+            val dataSize = pcmData.size
+            fos.write(byteArrayOf(
+                (dataSize and 0xFF).toByte(),
+                ((dataSize shr 8) and 0xFF).toByte(),
+                ((dataSize shr 16) and 0xFF).toByte(),
+                ((dataSize shr 24) and 0xFF).toByte()
+            ))
+            fos.write(pcmData)
+        }
+        return file
+    }
+
+    /**
+     * Helper to create a WAV file with custom chunks such as 'bext' (Broadcast Wave) and 'cue ' (cue points).
+     */
+    private fun createSampleWavWithExtraChunks(file: File, pcmData: ByteArray, bextData: ByteArray, cueData: ByteArray): File {
+        FileOutputStream(file).use { fos ->
+            val bextPad = if (bextData.size % 2 != 0) 1 else 0
+            val cuePad = if (cueData.size % 2 != 0) 1 else 0
+            val totalRiffSize = 36 + (8 + bextData.size + bextPad) + (8 + cueData.size + cuePad) + pcmData.size
+            fos.write("RIFF".toByteArray(StandardCharsets.US_ASCII))
+            fos.write(byteArrayOf(
+                (totalRiffSize and 0xFF).toByte(),
+                ((totalRiffSize shr 8) and 0xFF).toByte(),
+                ((totalRiffSize shr 16) and 0xFF).toByte(),
+                ((totalRiffSize shr 24) and 0xFF).toByte()
+            ))
+            fos.write("WAVE".toByteArray(StandardCharsets.US_ASCII))
+
+            // fmt chunk
+            fos.write("fmt ".toByteArray(StandardCharsets.US_ASCII))
+            fos.write(byteArrayOf(16, 0, 0, 0, 1, 0, 2, 0))
+            val sampleRate = 44100
+            fos.write(byteArrayOf(
+                (sampleRate and 0xFF).toByte(),
+                ((sampleRate shr 8) and 0xFF).toByte(),
+                ((sampleRate shr 16) and 0xFF).toByte(),
+                ((sampleRate shr 24) and 0xFF).toByte()
+            ))
+            val byteRate = 44100 * 4
+            fos.write(byteArrayOf(
+                (byteRate and 0xFF).toByte(),
+                ((byteRate shr 8) and 0xFF).toByte(),
+                ((byteRate shr 16) and 0xFF).toByte(),
+                ((byteRate shr 24) and 0xFF).toByte()
+            ))
+            fos.write(byteArrayOf(4, 0, 16, 0))
+
+            // bext chunk
+            fos.write("bext".toByteArray(StandardCharsets.US_ASCII))
+            val bextSize = bextData.size
+            fos.write(byteArrayOf(
+                (bextSize and 0xFF).toByte(),
+                ((bextSize shr 8) and 0xFF).toByte(),
+                ((bextSize shr 16) and 0xFF).toByte(),
+                ((bextSize shr 24) and 0xFF).toByte()
+            ))
+            fos.write(bextData)
+            if (bextPad > 0) fos.write(0)
+
+            // cue chunk
+            fos.write("cue ".toByteArray(StandardCharsets.US_ASCII))
+            val cueSize = cueData.size
+            fos.write(byteArrayOf(
+                (cueSize and 0xFF).toByte(),
+                ((cueSize shr 8) and 0xFF).toByte(),
+                ((cueSize shr 16) and 0xFF).toByte(),
+                ((cueSize shr 24) and 0xFF).toByte()
+            ))
+            fos.write(cueData)
+            if (cuePad > 0) fos.write(0)
+
+            // data chunk
+            fos.write("data".toByteArray(StandardCharsets.US_ASCII))
+            val dataSize = pcmData.size
+            fos.write(byteArrayOf(
+                (dataSize and 0xFF).toByte(),
+                ((dataSize shr 8) and 0xFF).toByte(),
+                ((dataSize shr 16) and 0xFF).toByte(),
+                ((dataSize shr 24) and 0xFF).toByte()
+            ))
+            fos.write(pcmData)
+        }
+        return file
+    }
+
+    /**
+     * Helper to create a WAV file preceded by an ID3v2 tag at the start of the file.
+     */
+    private fun createSampleWavWithPrependedId3(file: File, pcmData: ByteArray): File {
+        FileOutputStream(file).use { fos ->
+            // ID3v2.3 header (10 bytes) + 32-byte payload synchsafe
+            fos.write(byteArrayOf(
+                'I'.code.toByte(), 'D'.code.toByte(), '3'.code.toByte(),
+                0x03, 0x00, // ID3v2.3
+                0x00,       // flags
+                0x00, 0x00, 0x00, 0x20 // 32 bytes payload
+            ))
+            fos.write(ByteArray(32) { 0x00 })
+
+            // RIFF WAVE
+            val totalRiffSize = 36 + pcmData.size
+            fos.write("RIFF".toByteArray(StandardCharsets.US_ASCII))
+            fos.write(byteArrayOf(
+                (totalRiffSize and 0xFF).toByte(),
+                ((totalRiffSize shr 8) and 0xFF).toByte(),
+                ((totalRiffSize shr 16) and 0xFF).toByte(),
+                ((totalRiffSize shr 24) and 0xFF).toByte()
+            ))
+            fos.write("WAVE".toByteArray(StandardCharsets.US_ASCII))
+
+            // fmt chunk
+            fos.write("fmt ".toByteArray(StandardCharsets.US_ASCII))
+            fos.write(byteArrayOf(16, 0, 0, 0, 1, 0, 2, 0))
+            val sampleRate = 44100
+            fos.write(byteArrayOf(
+                (sampleRate and 0xFF).toByte(),
+                ((sampleRate shr 8) and 0xFF).toByte(),
+                ((sampleRate shr 16) and 0xFF).toByte(),
+                ((sampleRate shr 24) and 0xFF).toByte()
+            ))
+            val byteRate = 44100 * 4
+            fos.write(byteArrayOf(
+                (byteRate and 0xFF).toByte(),
+                ((byteRate shr 8) and 0xFF).toByte(),
+                ((byteRate shr 16) and 0xFF).toByte(),
+                ((byteRate shr 24) and 0xFF).toByte()
+            ))
+            fos.write(byteArrayOf(4, 0, 16, 0))
 
             // data chunk
             fos.write("data".toByteArray(StandardCharsets.US_ASCII))
@@ -354,6 +538,29 @@ class AudioMetadataWriteIntegrationTest {
     }
 
     /**
+     * Helper to extract the raw bytes of an arbitrary chunk from a WAV file.
+     */
+    private fun extractWavChunkBytes(file: File, targetChunkId: String): ByteArray {
+        val bytes = file.readBytes()
+        var offset = 12
+        while (offset + 8 <= bytes.size) {
+            val chunkId = String(bytes, offset, 4, StandardCharsets.US_ASCII)
+            val chunkSize = (bytes[offset + 4].toInt() and 0xFF) or
+                    ((bytes[offset + 5].toInt() and 0xFF) shl 8) or
+                    ((bytes[offset + 6].toInt() and 0xFF) shl 16) or
+                    ((bytes[offset + 7].toInt() and 0xFF) shl 24)
+            val pad = if (chunkSize % 2 != 0) 1 else 0
+            if (chunkId.equals(targetChunkId, ignoreCase = true)) {
+                val data = ByteArray(chunkSize)
+                System.arraycopy(bytes, offset + 8, data, 0, chunkSize)
+                return data
+            }
+            offset += 8 + chunkSize + pad
+        }
+        throw IllegalStateException("No $targetChunkId chunk found in ${file.name}")
+    }
+
+    /**
      * Executes external exiftool and returns its output key-value map.
      */
     private fun runExifTool(file: File): Map<String, String> {
@@ -543,7 +750,7 @@ class AudioMetadataWriteIntegrationTest {
             arrayOf(TrackDao::class.java)
         ) { _, method, args ->
             when (method.name) {
-                "insertTrack" -> {
+                "insertTrack", "updateTrack" -> {
                     val t = args[0] as TrackEntity
                     tracks[t.id] = t
                     null
@@ -562,6 +769,15 @@ class AudioMetadataWriteIntegrationTest {
                 }
                 "getCountNeedingFileWrite" -> {
                     tracks.values.count { it.metadataWriteState != MetadataWriteState.FILE_WRITE_SUCCESS.name }
+                }
+                "getTracksWithWriteIssues" -> {
+                    val issueStates = setOf(
+                        MetadataWriteState.FILE_WRITE_FAILED.name,
+                        MetadataWriteState.READ_ONLY_FILE.name,
+                        MetadataWriteState.PERMISSION_REQUIRED.name,
+                        MetadataWriteState.DATABASE_ONLY.name
+                    )
+                    tracks.values.filter { it.metadataWriteState in issueStates }.toList()
                 }
                 "getAllTracksList", "getAllTracksSync" -> {
                     tracks.values.toList()
@@ -1050,5 +1266,298 @@ class AudioMetadataWriteIntegrationTest {
         val readBack = AudioEmbeddedMetadataReader.read(context, flacFile.absolutePath)
         assertEquals("No Art Track", readBack.title)
         assertEquals("No Art Artist", readBack.artist)
+    }
+
+    @Test
+    fun `24-bit 96kHz High-Res PCM WAV metadata writing preserves audio verbatim`() = runBlocking {
+        val wavFile = File(tempFolder.root, "high_res_24bit_96k.wav")
+        // Create 24-bit PCM data (multiples of 6 bytes: 2 channels * 3 bytes)
+        val originalPcm = ByteArray(3072) { i -> ((i * 47 + 19) % 256).toByte() }
+        createSampleWavFile24Bit96k(wavFile, originalPcm)
+
+        val track = Track(
+            id = "track-24bit-96k",
+            title = "Subterranean",
+            artist = "High Res Master",
+            album = "Audiophile Edition",
+            genre = "Drum & Bass",
+            releaseYear = 2024,
+            bpm = 174.0,
+            musicalKey = "9A",
+            camelotKey = "9A",
+            trackNumber = 3,
+            filePath = wavFile.absolutePath,
+            notes = "Lossless 24-bit 96kHz master file"
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = sampleArtworkBytes)
+        assertTrue("Expected Written or Partial, got $result",
+            result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        // 1. Read-back verification
+        val readBack = AudioEmbeddedMetadataReader.read(context, wavFile.absolutePath)
+        assertEquals("Subterranean", readBack.title)
+        assertEquals("High Res Master", readBack.artist)
+        assertEquals("Audiophile Edition", readBack.album)
+        assertEquals("Drum & Bass", readBack.genre)
+        assertEquals(2024, readBack.releaseYear)
+        assertEquals(174.0, readBack.bpm ?: 0.0, 0.5)
+        assertEquals("9A", readBack.musicalKey)
+        assertEquals(3, readBack.trackNumber)
+        assertTrue(readBack.hasEmbeddedArtwork)
+
+        // 2. Verbatim 24-bit PCM audio sample preservation
+        val postWritePcm = extractWavDataChunkBytes(wavFile)
+        assertEquals("24-bit PCM length must match exactly", originalPcm.size, postWritePcm.size)
+        for (i in originalPcm.indices) {
+            assertEquals("24-bit PCM byte at index $i must match", originalPcm[i], postWritePcm[i])
+        }
+    }
+
+    @Test
+    fun `wav with non-audio chunks bext and cue points preserves those chunks verbatim`() = runBlocking {
+        val wavFile = File(tempFolder.root, "broadcast_with_cues.wav")
+        val originalPcm = ByteArray(1200) { i -> ((i * 17) % 256).toByte() }
+        val bextData = "BWF_DESCRIPTION=SoundSyncStudio;ORIGINATOR=DJ;ORIG_REF=REF12345".toByteArray(StandardCharsets.US_ASCII)
+        val cueData = ByteArray(64) { i -> (i + 1).toByte() }
+
+        createSampleWavWithExtraChunks(wavFile, originalPcm, bextData, cueData)
+
+        val track = Track(
+            id = "track-bext-cue",
+            title = "Broadcast Master Track",
+            artist = "Pro Producer",
+            album = "Studio Archive",
+            genre = "Electronic",
+            releaseYear = 2022,
+            bpm = 128.0,
+            musicalKey = "11B",
+            filePath = wavFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track)
+        assertTrue("Expected Written or Partial, got $result",
+            result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        // 1. Verify tags were written and read back
+        val readBack = AudioEmbeddedMetadataReader.read(context, wavFile.absolutePath)
+        assertEquals("Broadcast Master Track", readBack.title)
+        assertEquals("Pro Producer", readBack.artist)
+        assertEquals(128.0, readBack.bpm ?: 0.0, 0.5)
+        assertEquals("11B", readBack.musicalKey)
+
+        // 2. Verify non-audio chunks were preserved verbatim
+        val preservedBext = extractWavChunkBytes(wavFile, "bext")
+        assertEquals("bext chunk size must match", bextData.size, preservedBext.size)
+        for (i in bextData.indices) {
+            assertEquals("bext byte at $i must match", bextData[i], preservedBext[i])
+        }
+
+        val preservedCue = extractWavChunkBytes(wavFile, "cue ")
+        assertEquals("cue chunk size must match", cueData.size, preservedCue.size)
+        for (i in cueData.indices) {
+            assertEquals("cue byte at $i must match", cueData[i], preservedCue[i])
+        }
+
+        // 3. Verify PCM audio was preserved verbatim
+        val postWritePcm = extractWavDataChunkBytes(wavFile)
+        assertEquals("PCM audio size must match", originalPcm.size, postWritePcm.size)
+        for (i in originalPcm.indices) {
+            assertEquals("PCM byte at index $i must match", originalPcm[i], postWritePcm[i])
+        }
+    }
+
+    @Test
+    fun `wav with prepended id3 tag parses and updates cleanly without failure`() = runBlocking {
+        val wavFile = File(tempFolder.root, "prepended_id3.wav")
+        val originalPcm = ByteArray(1600) { i -> ((i * 31 + 7) % 256).toByte() }
+        createSampleWavWithPrependedId3(wavFile, originalPcm)
+
+        val track = Track(
+            id = "track-prepended-id3",
+            title = "Clean Recovery",
+            artist = "Resilient Tagging",
+            album = "Fixed Streams",
+            genre = "Progressive",
+            releaseYear = 2025,
+            bpm = 130.0,
+            musicalKey = "6A",
+            filePath = wavFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track)
+        assertTrue("Expected Written or Partial without failure, got $result",
+            result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        // Verify tags read back correctly
+        val readBack = AudioEmbeddedMetadataReader.read(context, wavFile.absolutePath)
+        assertEquals("Clean Recovery", readBack.title)
+        assertEquals("Resilient Tagging", readBack.artist)
+        assertEquals("Fixed Streams", readBack.album)
+        assertEquals(130.0, readBack.bpm ?: 0.0, 0.5)
+        assertEquals("6A", readBack.musicalKey)
+
+        // Verify PCM audio was preserved verbatim
+        val postWritePcm = extractWavDataChunkBytes(wavFile)
+        assertEquals("PCM audio size must match", originalPcm.size, postWritePcm.size)
+        for (i in originalPcm.indices) {
+            assertEquals("PCM byte at index $i must match", originalPcm[i], postWritePcm[i])
+        }
+    }
+
+    @Test
+    fun `wav with large artwork safely skips massive artwork embedding and marks partial`() = runBlocking {
+        val wavFile = File(tempFolder.root, "large_artwork_test.wav")
+        val originalPcm = ByteArray(800) { 0x33 }
+        createSampleWavFile(wavFile, originalPcm)
+
+        val track = Track(
+            id = "track-large-art",
+            title = "Oversized Cover Track",
+            artist = "Hi-Res Studio",
+            album = "Heavy Album",
+            genre = "Electronic",
+            releaseYear = 2024,
+            bpm = 125.0,
+            musicalKey = "1A",
+            filePath = wavFile.absolutePath
+        )
+
+        // Massive artwork: 75KB (> 64KB threshold for WAV files)
+        val largeArtwork = ByteArray(75_000) { 0x55 }
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = largeArtwork)
+
+        // Should return Partial because large artwork is stored in library/cache and skipped in WAV
+        assertTrue("Expected Partial result for WAV with oversized artwork, got $result",
+            result is MetadataWriteResult.Partial)
+        val partial = result as MetadataWriteResult.Partial
+        assertTrue("Partial result must mention artwork stored in library",
+            partial.unverifiedFields.any { it.contains("artwork", ignoreCase = true) })
+
+        // Read back from WAV file - metadata is embedded, but APIC artwork frame was skipped to protect WAV integrity
+        val readBack = AudioEmbeddedMetadataReader.read(context, wavFile.absolutePath)
+        assertEquals("Oversized Cover Track", readBack.title)
+        assertEquals("Hi-Res Studio", readBack.artist)
+        assertEquals("Heavy Album", readBack.album)
+        assertEquals(125.0, readBack.bpm ?: 0.0, 0.5)
+        assertEquals("1A", readBack.musicalKey)
+        assertFalse("Oversized artwork must not be embedded in WAV container", readBack.hasEmbeddedArtwork)
+
+        // Verbatim PCM audio preservation
+        val postWritePcm = extractWavDataChunkBytes(wavFile)
+        assertEquals(originalPcm.size, postWritePcm.size)
+        for (i in originalPcm.indices) {
+            assertEquals(originalPcm[i], postWritePcm[i])
+        }
+    }
+
+    @Test
+    fun `retryFailedTracks reattempts file writing using database metadata without internet lookups`() = runBlocking {
+        val (trackDao, _) = createFakeTrackDao()
+
+        // Track 1: WAV track in FILE_WRITE_FAILED state with full database metadata
+        val wavFile1 = File(tempFolder.root, "RetryTrack1.wav")
+        createSampleWavFile(wavFile1, ByteArray(1000) { 0x11 })
+        val track1 = Track(
+            id = "track-retry-1",
+            title = "Resilient Beat",
+            artist = "SoundSync DJ",
+            album = "Recovery Session",
+            genre = "House",
+            releaseYear = 2023,
+            bpm = 126.0,
+            musicalKey = "2B",
+            filePath = wavFile1.absolutePath,
+            metadataWriteState = MetadataWriteState.FILE_WRITE_FAILED.name
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(track1))
+
+        // Track 2: WAV track in READ_ONLY_FILE state
+        val wavFile2 = File(tempFolder.root, "RetryTrack2_readonly.wav")
+        createSampleWavFile(wavFile2, ByteArray(800) { 0x22 })
+        val track2 = Track(
+            id = "track-retry-2",
+            title = "Protected Track",
+            artist = "Locked Artist",
+            album = "Secure Album",
+            genre = "Techno",
+            releaseYear = 2021,
+            bpm = 132.0,
+            musicalKey = "5A",
+            filePath = wavFile2.absolutePath,
+            metadataWriteState = MetadataWriteState.READ_ONLY_FILE.name
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(track2))
+
+        val queue = MetadataFileWriteQueue.createForTesting(context, trackDao)
+
+        try {
+            // Track 2 file is read-only
+            com.example.storage.StorageWritePermissionHelper.isWritableOverrideForTesting = { file ->
+                !file.name.contains("readonly")
+            }
+
+            val report = queue.retryFailedTracks()
+
+            assertEquals(2, report.totalExamined)
+            assertEquals(1, report.successfullyWritten)
+            assertEquals(1, report.libraryOnly)
+            assertEquals(0, report.failed)
+
+            // Track 1 tags were written and verified on disk
+            val readBack1 = AudioEmbeddedMetadataReader.read(context, wavFile1.absolutePath)
+            assertEquals("Resilient Beat", readBack1.title)
+            assertEquals("SoundSync DJ", readBack1.artist)
+            assertEquals("Recovery Session", readBack1.album)
+            assertEquals(126.0, readBack1.bpm ?: 0.0, 0.5)
+            assertEquals("2B", readBack1.musicalKey)
+
+            // Track 1 DB state updated to FILE_WRITE_SUCCESS
+            val updatedTrack1 = trackDao.getTrackById("track-retry-1")
+            assertEquals(MetadataWriteState.FILE_WRITE_SUCCESS.name, updatedTrack1!!.metadataWriteState)
+
+            // Track 2 DB state remains READ_ONLY_FILE
+            val updatedTrack2 = trackDao.getTrackById("track-retry-2")
+            assertEquals(MetadataWriteState.READ_ONLY_FILE.name, updatedTrack2!!.metadataWriteState)
+        } finally {
+            com.example.storage.StorageWritePermissionHelper.isWritableOverrideForTesting = null
+        }
+    }
+
+    @Test
+    fun `read-only wav file falls back to database overlay Updated - Library Only without Failed status`() = runBlocking {
+        val wavFile = File(tempFolder.root, "readonly_wav_test.wav")
+        createSampleWavFile(wavFile, ByteArray(600) { 0x77 })
+
+        val track = Track(
+            id = "track-ro-wav",
+            title = "Locked Hardstyle",
+            artist = "Headhunterz",
+            album = "Sacrifice",
+            genre = "Hardstyle",
+            bpm = 150.0,
+            musicalKey = "10B",
+            filePath = wavFile.absolutePath,
+            metadataScanState = com.example.model.MetadataScanState.COMPLETE.name,
+            metadataWriteState = MetadataWriteState.DATABASE_ONLY.name
+        )
+
+        try {
+            com.example.storage.StorageWritePermissionHelper.isWritableOverrideForTesting = { false }
+
+            val writer = MetadataFileWriter(context)
+            val result = writer.writeAsync(track)
+
+            // Must return ReadOnlyFile
+            assertTrue("Expected ReadOnlyFile result, got $result", result is MetadataWriteResult.ReadOnlyFile)
+            assertEquals(MetadataWriteState.READ_ONLY_FILE, result.writeState)
+        } finally {
+            com.example.storage.StorageWritePermissionHelper.isWritableOverrideForTesting = null
+        }
     }
 }

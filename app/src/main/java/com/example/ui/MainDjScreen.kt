@@ -1388,7 +1388,8 @@ private fun SideDestinationScreen(
                         pushProgress = viewModel.pushMetadataProgress.collectAsState().value,
                         pushReport = viewModel.pushMetadataReport.collectAsState().value,
                         onPushMetadataToFiles = { viewModel.pushMetadataToFiles() },
-                        onCancelPushMetadata = { viewModel.cancelPushMetadata() }
+                        onCancelPushMetadata = { viewModel.cancelPushMetadata() },
+                        onRetryFailedWrites = { viewModel.retryFailedFileWrites() }
                     )
                 }
                 SideMenuDestination.MetadataSettings -> {
@@ -1425,7 +1426,8 @@ private fun SideDestinationScreen(
                         pushProgress = viewModel.pushMetadataProgress.collectAsState().value,
                         pushReport = viewModel.pushMetadataReport.collectAsState().value,
                         onPushMetadataToFiles = { viewModel.pushMetadataToFiles() },
-                        onCancelPushMetadata = { viewModel.cancelPushMetadata() }
+                        onCancelPushMetadata = { viewModel.cancelPushMetadata() },
+                        onRetryFailedWrites = { viewModel.retryFailedFileWrites() }
                     )
                 }
                 SideMenuDestination.AppearanceSettings -> {

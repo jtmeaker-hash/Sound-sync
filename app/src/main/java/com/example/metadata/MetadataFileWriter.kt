@@ -31,6 +31,7 @@ sealed interface MetadataWriteResult {
     data class Written(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
     data class AlreadyInSync(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
     data class Partial(val verifiedTags: EmbeddedAudioMetadata, val unverifiedFields: List<String>) : MetadataWriteResult
+    data class LibraryOnly(val reason: String) : MetadataWriteResult
     data class Skipped(val reason: String) : MetadataWriteResult
     data class Unsupported(val reason: String) : MetadataWriteResult
     data class Failed(val reason: String, val cause: Throwable? = null) : MetadataWriteResult
@@ -48,7 +49,7 @@ sealed interface MetadataWriteResult {
         get() = when (this) {
             is Written, is AlreadyInSync -> MetadataWriteState.FILE_WRITE_SUCCESS
             is Partial -> MetadataWriteState.FILE_WRITE_PARTIAL
-            is Skipped -> MetadataWriteState.DATABASE_ONLY
+            is Skipped, is LibraryOnly -> MetadataWriteState.DATABASE_ONLY
             is Unsupported -> MetadataWriteState.FORMAT_WRITE_UNSUPPORTED
             is PermissionRequired -> MetadataWriteState.PERMISSION_REQUIRED
             is ReadOnlyFile -> MetadataWriteState.READ_ONLY_FILE
@@ -365,6 +366,11 @@ class MetadataFileWriter(
                 updateDbState(track.id, res.writeState)
                 return@withContext res
             }
+            is TagWriteResult.LibraryOnly -> {
+                val res = MetadataWriteResult.LibraryOnly(writeTagResult.reason)
+                updateDbState(track.id, res.writeState)
+                return@withContext res
+            }
             is TagWriteResult.Failed -> {
                 PhysicalTagWriteLogger.logFailure(
                     tag = TAG,
@@ -376,9 +382,19 @@ class MetadataFileWriter(
                     isWritable = false,
                     exception = writeTagResult.cause ?: Exception(writeTagResult.message)
                 )
-                val res = MetadataWriteResult.Failed(writeTagResult.message, writeTagResult.cause)
-                updateDbState(track.id, res.writeState)
-                return@withContext res
+                val hasDiscoveredMetadata = (track.appleTrackId != null) ||
+                        track.metadataScanState in listOf("COMPLETE", "VERIFIED", "IDENTIFIED", "REVIEW_REQUIRED") ||
+                        (track.title.isNotBlank() && track.title != "Unknown Title" && track.artist.isNotBlank() && track.artist != "Unknown Artist")
+                if (hasDiscoveredMetadata) {
+                    Log.w(TAG, "File write engine failed (${writeTagResult.message}); preserved in SoundSync database as Library Only")
+                    val res = MetadataWriteResult.LibraryOnly("File embedding unavailable: ${writeTagResult.message}; preserved in SoundSync library")
+                    updateDbState(track.id, res.writeState)
+                    return@withContext res
+                } else {
+                    val res = MetadataWriteResult.Failed(writeTagResult.message, writeTagResult.cause)
+                    updateDbState(track.id, res.writeState)
+                    return@withContext res
+                }
             }
             is TagWriteResult.Success -> {
                 // Proceed to readback verification
@@ -465,8 +481,13 @@ class MetadataFileWriter(
         // 7. Verify embedded artwork
         if (activeArtworkBytes != null && activeArtworkBytes.isNotEmpty()) {
             if (!verified.hasEmbeddedArtwork || verified.embeddedArtworkSize <= 0) {
-                Log.w(TAG, "Write verification notice: embedded artwork not detected on disk after write")
-                unverifiedFields.add("embeddedArtwork")
+                if (ext == "wav") {
+                    Log.i(TAG, "WAV artwork preserved in SoundSync database/cache rather than bloated into RIFF container")
+                    unverifiedFields.add("artwork (stored in library)")
+                } else {
+                    Log.w(TAG, "Write verification notice: embedded artwork not detected on disk after write")
+                    unverifiedFields.add("embeddedArtwork")
+                }
             } else {
                 Log.d(TAG, "Embedded artwork verified: ${verified.embeddedArtworkSize} bytes on disk")
             }

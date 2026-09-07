@@ -53,6 +53,7 @@ sealed interface TagWriteResult {
     data class PermissionRequired(val uri: Uri, val cause: Throwable, val intentSender: IntentSender? = null) : TagWriteResult
     data class Failed(val message: String, val cause: Throwable? = null) : TagWriteResult
     data class Unsupported(val message: String) : TagWriteResult
+    data class LibraryOnly(val reason: String) : TagWriteResult
 }
 
 /**
@@ -416,29 +417,102 @@ object AudioTagWriter {
     }
 
     // =========================================================================
-    // WAV (RIFF WAVE) IMPLEMENTATION: Writes BOTH 'id3 ' chunk and 'LIST INFO'
+    // WAV (RIFF WAVE) IMPLEMENTATION: Dedicated, format-compliant tag writer
+    // Writes standard RIFF LIST INFO chunk + companion compact 'id3 ' chunk
+    // Guarantees PCM audio data is preserved 100% bit-for-bit verbatim untouched
+    // Safely skips massive APIC artwork in WAV to prevent container corruption
     // =========================================================================
 
     private fun writeWavTags(file: File, payload: CompleteTagPayload): Boolean {
         var tempFile: File? = null
         try {
             val fileLength = file.length()
-            if (fileLength < 12) return false
+            if (fileLength < 12) {
+                Log.w(TAG, "File ${file.name} is too small to be a WAV file ($fileLength bytes)")
+                return false
+            }
 
             val inputStream = FileInputStream(file)
-            val header = ByteArray(12)
-            if (inputStream.read(header) < 12) {
+            val initialHeader = ByteArray(12)
+            if (!readFully(inputStream, initialHeader)) {
                 inputStream.close()
                 return false
             }
 
-            if (header[0] != 'R'.code.toByte() || header[1] != 'I'.code.toByte() ||
-                header[2] != 'F'.code.toByte() || header[3] != 'F'.code.toByte() ||
-                header[8] != 'W'.code.toByte() || header[9] != 'A'.code.toByte() ||
-                header[10] != 'V'.code.toByte() || header[11] != 'E'.code.toByte()) {
-                inputStream.close()
-                Log.w(TAG, "File ${file.name} is not a valid RIFF WAVE file")
-                return false
+            var riffOffset = 0L
+            val existingId3Frames = mutableListOf<Id3Frame>()
+
+            // 1. Resilient Header Detection: Check for prepended ID3v2 tag
+            if (initialHeader[0] == 'I'.code.toByte() &&
+                initialHeader[1] == 'D'.code.toByte() &&
+                initialHeader[2] == '3'.code.toByte()
+            ) {
+                val majorVer = initialHeader[3].toInt()
+                val flags = initialHeader[5].toInt()
+                val hasFooter = (flags and 0x10) != 0
+                val tagBodySize = decodeSyncSafe(initialHeader, 6)
+                val totalId3Size = 10L + tagBodySize + (if (hasFooter) 10L else 0L)
+
+                if (tagBodySize in 1..(10 * 1024 * 1024)) {
+                    val bodyBuf = ByteArray(tagBodySize)
+                    if (readFully(inputStream, bodyBuf)) {
+                        parseId3Frames(bodyBuf, majorVer, existingId3Frames)
+                    }
+                }
+
+                // Locate the RIFF/RF64 chunk following the prepended ID3 tag
+                var foundRiff = false
+                val checkBuf = ByteArray(12)
+                for (searchOffset in totalId3Size..minOf(fileLength - 12L, totalId3Size + 4096L)) {
+                    inputStream.channel.position(searchOffset)
+                    if (!readFully(inputStream, checkBuf)) break
+                    val magic = String(checkBuf, 0, 4, StandardCharsets.US_ASCII)
+                    val format = String(checkBuf, 8, 4, StandardCharsets.US_ASCII)
+                    if ((magic.equals("RIFF", ignoreCase = true) || magic.equals("RF64", ignoreCase = true)) &&
+                        format.equals("WAVE", ignoreCase = true)
+                    ) {
+                        riffOffset = searchOffset
+                        foundRiff = true
+                        break
+                    }
+                }
+
+                if (!foundRiff) {
+                    inputStream.close()
+                    Log.w(TAG, "File ${file.name} has prepended ID3 but no valid RIFF WAVE header found")
+                    return false
+                }
+            } else {
+                // Check if initialHeader is RIFF....WAVE or RF64....WAVE
+                val magic = String(initialHeader, 0, 4, StandardCharsets.US_ASCII)
+                val format = String(initialHeader, 8, 4, StandardCharsets.US_ASCII)
+                if ((magic.equals("RIFF", ignoreCase = true) || magic.equals("RF64", ignoreCase = true)) &&
+                    format.equals("WAVE", ignoreCase = true)
+                ) {
+                    riffOffset = 0L
+                } else {
+                    // Search first 64KB for RIFF WAVE
+                    var foundRiff = false
+                    val checkBuf = ByteArray(12)
+                    for (searchOffset in 0L..minOf(fileLength - 12L, 65536L)) {
+                        inputStream.channel.position(searchOffset)
+                        if (!readFully(inputStream, checkBuf)) break
+                        val m = String(checkBuf, 0, 4, StandardCharsets.US_ASCII)
+                        val f = String(checkBuf, 8, 4, StandardCharsets.US_ASCII)
+                        if ((m.equals("RIFF", ignoreCase = true) || m.equals("RF64", ignoreCase = true)) &&
+                            f.equals("WAVE", ignoreCase = true)
+                        ) {
+                            riffOffset = searchOffset
+                            foundRiff = true
+                            break
+                        }
+                    }
+                    if (!foundRiff) {
+                        inputStream.close()
+                        Log.w(TAG, "File ${file.name} is not a valid RIFF WAVE file")
+                        return false
+                    }
+                }
             }
 
             data class RiffChunk(val id: String, val data: ByteArray)
@@ -446,112 +520,88 @@ object AudioTagWriter {
             var dataChunkOffset: Long = 0L
             var dataChunkSize: Long = 0L
             val preservedChunks = mutableListOf<RiffChunk>()
-            val existingId3Frames = mutableListOf<Id3Frame>()
             val existingInfoSubchunks = mutableMapOf<String, ByteArray>()
 
-            var currentOffset = 12L
+            var currentOffset = riffOffset + 12L
             val chunkHdr = ByteArray(8)
 
             while (currentOffset + 8 <= fileLength) {
-                val r = inputStream.read(chunkHdr)
-                if (r < 8) break
+                inputStream.channel.position(currentOffset)
+                if (!readFully(inputStream, chunkHdr)) break
                 currentOffset += 8
 
                 val chunkId = String(chunkHdr, 0, 4, StandardCharsets.US_ASCII)
-                val chunkSize = (chunkHdr[4].toInt() and 0xFF) or
-                        ((chunkHdr[5].toInt() and 0xFF) shl 8) or
-                        ((chunkHdr[6].toInt() and 0xFF) shl 16) or
-                        ((chunkHdr[7].toInt() and 0xFF) shl 24)
-                val padSize = if (chunkSize % 2 != 0) 1 else 0
+                val chunkSize = readLittleEndianUInt(chunkHdr, 4)
+                val padSize = if (chunkSize % 2L != 0L) 1L else 0L
 
                 when {
-                    chunkId == "fmt " -> {
-                        val fmtData = ByteArray(chunkSize)
-                        var readTotal = 0
-                        while (readTotal < chunkSize) {
-                            val count = inputStream.read(fmtData, readTotal, chunkSize - readTotal)
-                            if (count <= 0) break
-                            readTotal += count
+                    chunkId.equals("fmt ", ignoreCase = true) -> {
+                        if (chunkSize in 14..1048576) {
+                            val fmtData = ByteArray(chunkSize.toInt())
+                            readFully(inputStream, fmtData)
+                            fmtChunk = RiffChunk(chunkId, fmtData)
                         }
-                        if (padSize > 0) inputStream.skip(padSize.toLong())
                         currentOffset += chunkSize + padSize
-                        fmtChunk = RiffChunk(chunkId, fmtData)
                     }
-                    chunkId == "data" -> {
+                    chunkId.equals("data", ignoreCase = true) -> {
                         dataChunkOffset = currentOffset
-                        dataChunkSize = chunkSize.toLong() and 0xFFFFFFFFL
-                        skipFully(inputStream, dataChunkSize + padSize)
-                        currentOffset += dataChunkSize + padSize
+                        dataChunkSize = chunkSize
+                        currentOffset += chunkSize + padSize
                     }
                     chunkId.equals("id3 ", ignoreCase = true) -> {
-                        val id3Data = ByteArray(chunkSize)
-                        var readTotal = 0
-                        while (readTotal < chunkSize) {
-                            val count = inputStream.read(id3Data, readTotal, chunkSize - readTotal)
-                            if (count <= 0) break
-                            readTotal += count
-                        }
-                        if (padSize > 0) inputStream.skip(padSize.toLong())
-                        currentOffset += chunkSize + padSize
-
-                        if (id3Data.size >= 10 && id3Data[0] == 'I'.code.toByte() && id3Data[1] == 'D'.code.toByte() && id3Data[2] == '3'.code.toByte()) {
-                            val majorVer = id3Data[3].toInt()
-                            val tagBodySize = decodeSyncSafe(id3Data, 6)
-                            if (tagBodySize > 0 && 10 + tagBodySize <= id3Data.size) {
-                                val bodyBuf = ByteArray(tagBodySize)
-                                System.arraycopy(id3Data, 10, bodyBuf, 0, tagBodySize)
-                                parseId3Frames(bodyBuf, majorVer, existingId3Frames)
-                            }
-                        }
-                    }
-                    chunkId == "LIST" -> {
-                        val listData = ByteArray(chunkSize)
-                        var readTotal = 0
-                        while (readTotal < chunkSize) {
-                            val count = inputStream.read(listData, readTotal, chunkSize - readTotal)
-                            if (count <= 0) break
-                            readTotal += count
-                        }
-                        if (padSize > 0) inputStream.skip(padSize.toLong())
-                        currentOffset += chunkSize + padSize
-
-                        val listType = if (listData.size >= 4) String(listData, 0, 4, StandardCharsets.US_ASCII) else ""
-                        if (listType != "INFO") {
-                            preservedChunks.add(RiffChunk(chunkId, listData))
-                        } else {
-                            var subOff = 4
-                            while (subOff + 8 <= listData.size) {
-                                val subId = String(listData, subOff, 4, StandardCharsets.US_ASCII)
-                                val subSize = (listData[subOff + 4].toInt() and 0xFF) or
-                                        ((listData[subOff + 5].toInt() and 0xFF) shl 8) or
-                                        ((listData[subOff + 6].toInt() and 0xFF) shl 16) or
-                                        ((listData[subOff + 7].toInt() and 0xFF) shl 24)
-                                val subPad = if (subSize % 2 != 0) 1 else 0
-                                if (subSize > 0 && subOff + 8 + subSize <= listData.size) {
-                                    val subData = ByteArray(subSize)
-                                    System.arraycopy(listData, subOff + 8, subData, 0, subSize)
-                                    existingInfoSubchunks[subId] = subData
+                        if (chunkSize in 1..10485760) {
+                            val id3Data = ByteArray(chunkSize.toInt())
+                            if (readFully(inputStream, id3Data)) {
+                                if (id3Data.size >= 10 && id3Data[0] == 'I'.code.toByte() && id3Data[1] == 'D'.code.toByte() && id3Data[2] == '3'.code.toByte()) {
+                                    val majorVer = id3Data[3].toInt()
+                                    val tagBodySize = decodeSyncSafe(id3Data, 6)
+                                    if (tagBodySize > 0 && 10 + tagBodySize <= id3Data.size) {
+                                        val bodyBuf = ByteArray(tagBodySize)
+                                        System.arraycopy(id3Data, 10, bodyBuf, 0, tagBodySize)
+                                        parseId3Frames(bodyBuf, majorVer, existingId3Frames)
+                                    }
                                 }
-                                subOff += 8 + subSize + subPad
                             }
                         }
+                        currentOffset += chunkSize + padSize
+                    }
+                    chunkId.equals("LIST", ignoreCase = true) -> {
+                        if (chunkSize in 4..10485760) {
+                            val listData = ByteArray(chunkSize.toInt())
+                            if (readFully(inputStream, listData)) {
+                                val listType = String(listData, 0, 4, StandardCharsets.US_ASCII)
+                                if (listType.equals("INFO", ignoreCase = true)) {
+                                    var subOff = 4
+                                    while (subOff + 8 <= listData.size) {
+                                        val subId = String(listData, subOff, 4, StandardCharsets.US_ASCII)
+                                        val subSize = ((listData[subOff + 4].toLong() and 0xFFL) or
+                                                ((listData[subOff + 5].toLong() and 0xFFL) shl 8) or
+                                                ((listData[subOff + 6].toLong() and 0xFFL) shl 16) or
+                                                ((listData[subOff + 7].toLong() and 0xFFL) shl 24)).toInt()
+                                        val subPad = if (subSize % 2 != 0) 1 else 0
+                                        if (subSize > 0 && subOff + 8 + subSize <= listData.size) {
+                                            val subData = ByteArray(subSize)
+                                            System.arraycopy(listData, subOff + 8, subData, 0, subSize)
+                                            existingInfoSubchunks[subId] = subData
+                                        }
+                                        subOff += 8 + subSize + subPad
+                                    }
+                                } else {
+                                    preservedChunks.add(RiffChunk(chunkId, listData))
+                                }
+                            }
+                        }
+                        currentOffset += chunkSize + padSize
                     }
                     else -> {
-                        if (chunkSize in 1..1048576) {
-                            val chunkData = ByteArray(chunkSize)
-                            var readTotal = 0
-                            while (readTotal < chunkSize) {
-                                val count = inputStream.read(chunkData, readTotal, chunkSize - readTotal)
-                                if (count <= 0) break
-                                readTotal += count
+                        // Preserves bext (Broadcast Wave Format), cue, smpl, fact, etc.
+                        if (chunkSize in 1..10485760) {
+                            val chunkData = ByteArray(chunkSize.toInt())
+                            if (readFully(inputStream, chunkData)) {
+                                preservedChunks.add(RiffChunk(chunkId, chunkData))
                             }
-                            if (padSize > 0) inputStream.skip(padSize.toLong())
-                            currentOffset += chunkSize + padSize
-                            preservedChunks.add(RiffChunk(chunkId, chunkData))
-                        } else {
-                            skipFully(inputStream, chunkSize.toLong() + padSize)
-                            currentOffset += chunkSize + padSize
                         }
+                        currentOffset += chunkSize + padSize
                     }
                 }
             }
@@ -562,6 +612,7 @@ object AudioTagWriter {
                 return false
             }
 
+            // 2. Build standard RIFF LIST INFO chunk
             val infoStream = ByteArrayOutputStream()
             infoStream.write("INFO".toByteArray(StandardCharsets.US_ASCII))
 
@@ -572,7 +623,7 @@ object AudioTagWriter {
                 System.arraycopy(bytes, 0, nullTerminated, 0, bytes.size)
                 nullTerminated[bytes.size] = 0
 
-                infoStream.write(id.take(4).toByteArray(StandardCharsets.US_ASCII))
+                infoStream.write(id.take(4).padEnd(4, ' ').toByteArray(StandardCharsets.US_ASCII))
                 writeLittleEndianInt(infoStream, nullTerminated.size)
                 infoStream.write(nullTerminated)
                 if (nullTerminated.size % 2 != 0) {
@@ -587,7 +638,7 @@ object AudioTagWriter {
                     writtenInfoIds.add(id)
                 } else if (existingInfoSubchunks.containsKey(id)) {
                     val raw = existingInfoSubchunks[id]!!
-                    infoStream.write(id.take(4).toByteArray(StandardCharsets.US_ASCII))
+                    infoStream.write(id.take(4).padEnd(4, ' ').toByteArray(StandardCharsets.US_ASCII))
                     writeLittleEndianInt(infoStream, raw.size)
                     infoStream.write(raw)
                     if (raw.size % 2 != 0) infoStream.write(0)
@@ -610,7 +661,7 @@ object AudioTagWriter {
             // Preserve any other existing INFO subchunks (ICOP, IENG, etc.)
             for ((subId, subData) in existingInfoSubchunks) {
                 if (!writtenInfoIds.contains(subId)) {
-                    infoStream.write(subId.take(4).toByteArray(StandardCharsets.US_ASCII))
+                    infoStream.write(subId.take(4).padEnd(4, ' ').toByteArray(StandardCharsets.US_ASCII))
                     writeLittleEndianInt(infoStream, subData.size)
                     infoStream.write(subData)
                     if (subData.size % 2 != 0) infoStream.write(0)
@@ -627,7 +678,24 @@ object AudioTagWriter {
             }
             val listChunkBytes = listChunkStream.toByteArray()
 
-            val id3TagBytes = buildId3v2Tag(payload, existingId3Frames)
+            // 3. Build companion compact 'id3 ' chunk (BPM, Key, comments)
+            // Safe artwork rule for WAV: Never embed massive artwork (> 64KB) in WAV containers
+            // to avoid RIFF chunk overflow, corruption of legacy WAV players, and out-of-memory errors.
+            // Artwork is safely cached on disk and in the database.
+            // If artwork is small (e.g. <= 64KB), it can be embedded safely.
+            val safeArtworkBytes = if (payload.artworkBytes != null && payload.artworkBytes.size <= 64 * 1024) {
+                payload.artworkBytes
+            } else {
+                null
+            }
+            val id3Payload = payload.copy(artworkBytes = safeArtworkBytes, artworkMimeType = if (safeArtworkBytes != null) payload.artworkMimeType else "")
+            val wavId3Frames = if (safeArtworkBytes == null) {
+                existingId3Frames.filter { it.id != "APIC" && it.id != "PIC" }
+            } else {
+                existingId3Frames
+            }
+
+            val id3TagBytes = buildId3v2Tag(id3Payload, wavId3Frames)
             val id3ChunkStream = ByteArrayOutputStream()
             id3ChunkStream.write("id3 ".toByteArray(StandardCharsets.US_ASCII))
             writeLittleEndianInt(id3ChunkStream, id3TagBytes.size)
@@ -637,8 +705,8 @@ object AudioTagWriter {
             }
             val id3ChunkBytes = id3ChunkStream.toByteArray()
 
-            val fmtChunkTotalSize = 8L + fmtChunk.data.size + (if (fmtChunk.data.size % 2 != 0) 1 else 0)
-            val preservedChunksTotalSize = preservedChunks.sumOf { 8L + it.data.size + (if (it.data.size % 2 != 0) 1 else 0) }
+            val fmtChunkTotalSize = 8L + fmtChunk.data.size + (if (fmtChunk.data.size % 2 != 0) 1L else 0L)
+            val preservedChunksTotalSize = preservedChunks.sumOf { 8L + it.data.size + (if (it.data.size % 2 != 0) 1L else 0L) }
             val dataChunkTotalSize = 8L + dataChunkSize + (if (dataChunkSize % 2L != 0L) 1L else 0L)
 
             val totalRiffSize = 4L + fmtChunkTotalSize + id3ChunkBytes.size + listChunkBytes.size + preservedChunksTotalSize + dataChunkTotalSize
@@ -647,21 +715,11 @@ object AudioTagWriter {
             val fos = FileOutputStream(tempFile)
 
             fos.write("RIFF".toByteArray(StandardCharsets.US_ASCII))
-            val riffSizeBuf = ByteArray(4)
-            riffSizeBuf[0] = (totalRiffSize and 0xFF).toByte()
-            riffSizeBuf[1] = ((totalRiffSize shr 8) and 0xFF).toByte()
-            riffSizeBuf[2] = ((totalRiffSize shr 16) and 0xFF).toByte()
-            riffSizeBuf[3] = ((totalRiffSize shr 24) and 0xFF).toByte()
-            fos.write(riffSizeBuf)
+            writeLittleEndianInt(fos, totalRiffSize)
             fos.write("WAVE".toByteArray(StandardCharsets.US_ASCII))
 
-            fos.write(fmtChunk.id.toByteArray(StandardCharsets.US_ASCII))
-            val fmtLenBuf = ByteArray(4)
-            fmtLenBuf[0] = (fmtChunk.data.size and 0xFF).toByte()
-            fmtLenBuf[1] = ((fmtChunk.data.size shr 8) and 0xFF).toByte()
-            fmtLenBuf[2] = ((fmtChunk.data.size shr 16) and 0xFF).toByte()
-            fmtLenBuf[3] = ((fmtChunk.data.size shr 24) and 0xFF).toByte()
-            fos.write(fmtLenBuf)
+            fos.write(fmtChunk.id.take(4).padEnd(4, ' ').toByteArray(StandardCharsets.US_ASCII))
+            writeLittleEndianInt(fos, fmtChunk.data.size)
             fos.write(fmtChunk.data)
             if (fmtChunk.data.size % 2 != 0) fos.write(0)
 
@@ -669,27 +727,18 @@ object AudioTagWriter {
             fos.write(listChunkBytes)
 
             for (p in preservedChunks) {
-                fos.write(p.id.toByteArray(StandardCharsets.US_ASCII))
-                val pLenBuf = ByteArray(4)
-                pLenBuf[0] = (p.data.size and 0xFF).toByte()
-                pLenBuf[1] = ((p.data.size shr 8) and 0xFF).toByte()
-                pLenBuf[2] = ((p.data.size shr 16) and 0xFF).toByte()
-                pLenBuf[3] = ((p.data.size shr 24) and 0xFF).toByte()
-                fos.write(pLenBuf)
+                fos.write(p.id.take(4).padEnd(4, ' ').toByteArray(StandardCharsets.US_ASCII))
+                writeLittleEndianInt(fos, p.data.size)
                 fos.write(p.data)
                 if (p.data.size % 2 != 0) fos.write(0)
             }
 
             fos.write("data".toByteArray(StandardCharsets.US_ASCII))
-            val dataLenBuf = ByteArray(4)
-            dataLenBuf[0] = (dataChunkSize and 0xFF).toByte()
-            dataLenBuf[1] = ((dataChunkSize shr 8) and 0xFF).toByte()
-            dataLenBuf[2] = ((dataChunkSize shr 16) and 0xFF).toByte()
-            dataLenBuf[3] = ((dataChunkSize shr 24) and 0xFF).toByte()
-            fos.write(dataLenBuf)
+            writeLittleEndianInt(fos, dataChunkSize)
 
+            // Stream verbatim PCM samples from original dataChunkOffset untouched
             val audioIn = FileInputStream(file)
-            skipFully(audioIn, dataChunkOffset)
+            audioIn.channel.position(dataChunkOffset)
             val copyBuf = ByteArray(64 * 1024)
             var bytesRemaining = dataChunkSize
             while (bytesRemaining > 0) {
@@ -705,13 +754,18 @@ object AudioTagWriter {
             audioIn.close()
 
             fos.flush()
+            fos.fd.sync()
             fos.close()
 
-            if (tempFile.length() >= (fileLength / 2)) {
+            if (tempFile.length() >= (dataChunkSize + 36L)) {
                 if (replaceOriginalFile(file, tempFile)) {
                     Log.d(TAG, "Successfully wrote RIFF INFO + ID3 tags to WAV ${file.name}")
                     return true
+                } else {
+                    Log.e(TAG, "Failed replacing original file with temp staging file for ${file.name}")
                 }
+            } else {
+                Log.e(TAG, "Temp staging file size too small (${tempFile.length()} vs expected >= ${dataChunkSize + 36L})")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed writing WAV tags to ${file.name}: ${e.message}", e)
@@ -2160,17 +2214,38 @@ object AudioTagWriter {
         out.write(length and 0xFF)
     }
 
-    private fun writeLittleEndianInt(out: ByteArrayOutputStream, value: Int) {
-        out.write(value and 0xFF)
-        out.write((value shr 8) and 0xFF)
-        out.write((value shr 16) and 0xFF)
-        out.write((value shr 24) and 0xFF)
+    private fun writeLittleEndianInt(out: java.io.OutputStream, value: Long) {
+        out.write((value and 0xFFL).toInt())
+        out.write(((value shr 8) and 0xFFL).toInt())
+        out.write(((value shr 16) and 0xFFL).toInt())
+        out.write(((value shr 24) and 0xFFL).toInt())
     }
 
-    private fun writeBigEndianInt(out: ByteArrayOutputStream, value: Int) {
+    private fun writeLittleEndianInt(out: java.io.OutputStream, value: Int) {
+        writeLittleEndianInt(out, value.toLong() and 0xFFFFFFFFL)
+    }
+
+    private fun writeBigEndianInt(out: java.io.OutputStream, value: Int) {
         out.write((value shr 24) and 0xFF)
         out.write((value shr 16) and 0xFF)
         out.write((value shr 8) and 0xFF)
         out.write(value and 0xFF)
+    }
+
+    private fun readLittleEndianUInt(b: ByteArray, offset: Int): Long {
+        return (b[offset].toLong() and 0xFFL) or
+                ((b[offset + 1].toLong() and 0xFFL) shl 8) or
+                ((b[offset + 2].toLong() and 0xFFL) shl 16) or
+                ((b[offset + 3].toLong() and 0xFFL) shl 24)
+    }
+
+    private fun readFully(stream: InputStream, buffer: ByteArray, offset: Int = 0, length: Int = buffer.size - offset): Boolean {
+        var total = 0
+        while (total < length) {
+            val count = stream.read(buffer, offset + total, length - total)
+            if (count < 0) return false
+            total += count
+        }
+        return true
     }
 }

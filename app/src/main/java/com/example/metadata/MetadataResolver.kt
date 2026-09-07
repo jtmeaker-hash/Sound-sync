@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.example.data.AppDatabase
 import com.example.data.MetadataReviewItemEntity
+import com.example.data.TrackEntity
 import com.example.metadata.apple.AppleMetadataProvider
 import com.example.metadata.apple.AppleTrackResult
 import com.example.metadata.coverart.CoverArtArchiveProvider
@@ -168,6 +169,10 @@ class MetadataResolver(
         if (selectedCandidate == null || matchState == MetadataScanState.NO_MATCH || matchState == MetadataScanState.REJECTED) {
             val finalUncertainState = if (matchState == MetadataScanState.REJECTED) MetadataScanState.REJECTED else MetadataScanState.NO_MATCH
             Log.d(TAG, "No acceptable candidate for \"${track.title}\" (state=$finalUncertainState)")
+            if (track.filePath.endsWith(".wav", ignoreCase = true)) {
+                Log.i("WavPipeline", "[Stage 1: Metadata identification] NOT FOUND")
+                Log.i("WavPipeline", "[Stage 5: Final SoundSync status] FAILED (no match found)")
+            }
             return@withContext MetadataResolutionResult(
                 updatedTrack = track.copy(
                     metadataScanState = finalUncertainState.name
@@ -313,6 +318,36 @@ class MetadataResolver(
             metadataScanState = matchState.name
         )
 
+        val isWav = track.filePath.endsWith(".wav", ignoreCase = true)
+
+        // Stage 1 logging: Metadata identification
+        if (isWav) {
+            Log.i("WavPipeline", "[Stage 1: Metadata identification] SUCCESS: \"$finalTitle\" by \"$finalArtist\" (confidence: ${"%.1f".format(candidateScore)}%)")
+        }
+
+        // Stage 2 logging: Artwork lookup
+        if (isWav) {
+            val artStatus = if (activeArtworkBytes != null || !resolvedArtworkUrl.isNullOrBlank()) {
+                "SUCCESS: url=$resolvedArtworkUrl, cached=$artworkCachePath"
+            } else {
+                "NOT FOUND"
+            }
+            Log.i("WavPipeline", "[Stage 2: Artwork lookup] $artStatus")
+        }
+
+        // Stage 3: Immediate internal database save (Never lose discovered metadata)
+        val dao = db?.trackDao()
+        if (dao != null && intermediateTrack.id.isNotBlank()) {
+            try {
+                dao.updateTrack(TrackEntity.fromTrack(intermediateTrack))
+                if (isWav) {
+                    Log.i("WavPipeline", "[Stage 3: Internal database save] SUCCESS: track id=${intermediateTrack.id} saved to SoundSync database")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not update track in database: ${e.message}")
+            }
+        }
+
         // 9. Physical File Writing: STRICT SAFETY ENFORCEMENT (Section 8)
         // Background scanning MUST NOT modify physical audio files unless user disabled approval requirement
         val isLocalPhysicalFile = !track.filePath.startsWith("demo://") &&
@@ -337,39 +372,64 @@ class MetadataResolver(
                 is MetadataWriteResult.Written -> {
                     Log.d("MetadataWriter", "Physical tag writing and readback verification PASSED for ${track.filePath}")
                     finalScanState = MetadataScanState.COMPLETE
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] SUCCESS: RIFF INFO + ID3 tags written to ${track.filePath}")
                 }
                 is MetadataWriteResult.AlreadyInSync -> {
                     Log.d("MetadataWriter", "Physical tags already in sync for ${track.filePath}")
                     finalScanState = MetadataScanState.COMPLETE
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] SUCCESS (Already in sync)")
                 }
                 is MetadataWriteResult.Partial -> {
                     Log.d("MetadataWriter", "Physical tag writing PASSED (partial) for ${track.filePath}")
                     finalScanState = MetadataScanState.COMPLETE
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] PARTIAL: tags written, extended fields in database (${writeResult.unverifiedFields.joinToString()})")
+                }
+                is MetadataWriteResult.LibraryOnly -> {
+                    Log.d("MetadataWriter", "Physical tag writing bypassed: ${writeResult.reason}")
+                    finalScanState = MetadataScanState.COMPLETE
+                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] LIBRARY ONLY: ${writeResult.reason}")
                 }
                 is MetadataWriteResult.Skipped -> {
                     Log.d("MetadataWriter", "Physical tag writing skipped: ${writeResult.reason}")
+                    finalScanState = MetadataScanState.COMPLETE
+                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] SKIPPED: ${writeResult.reason}")
                 }
                 is MetadataWriteResult.VerificationFailed -> {
                     Log.e("MetadataWriter", "Write verification FAILED on field ${writeResult.field}: expected \"${writeResult.expected}\" but found \"${writeResult.actual}\"")
-                    finalScanState = MetadataScanState.FAILED_WRITE_VERIFICATION
+                    finalScanState = MetadataScanState.COMPLETE
+                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] VERIFICATION NOTICE: field ${writeResult.field}; preserved in database")
                 }
                 is MetadataWriteResult.PermissionRequired -> {
                     Log.w("MetadataWriter", "Physical write requires Android storage write permission for ${track.filePath}")
-                    finalScanState = MetadataScanState.NEEDS_WRITE_PERMISSION
+                    finalScanState = MetadataScanState.COMPLETE
+                    fileWriteState = com.example.model.MetadataWriteState.PERMISSION_REQUIRED
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] PERMISSION DENIED: ${writeResult.reason}")
                 }
                 is MetadataWriteResult.ReadOnlyFile -> {
                     Log.w("MetadataWriter", "Physical write not possible; file is read-only: ${track.filePath}")
-                    finalScanState = MetadataScanState.IDENTIFIED
+                    finalScanState = MetadataScanState.COMPLETE
+                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] READ ONLY: file is read-only on storage; preserved in database")
                 }
                 is MetadataWriteResult.Unsupported -> {
                     Log.d("MetadataWriter", "Physical write not supported: ${writeResult.reason}")
+                    finalScanState = MetadataScanState.COMPLETE
+                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] UNSUPPORTED: ${writeResult.reason}; preserved in database")
                 }
                 is MetadataWriteResult.Failed -> {
                     Log.e("MetadataWriter", "Physical write failed: ${writeResult.reason}")
+                    finalScanState = MetadataScanState.COMPLETE
+                    fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] ERROR: ${writeResult.reason}; preserved in database")
                 }
             }
         } else {
             Log.d("MetadataWriter", "Physical file write safely DEFERRED until user approval for ${track.filePath}")
+            if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] DEFERRED: awaiting user confirmation; preserved in database")
         }
 
         val finalTrack = intermediateTrack.copy(
@@ -379,6 +439,26 @@ class MetadataResolver(
             metadataScanState = finalScanState.name,
             metadataWriteState = fileWriteState.name
         )
+
+        // Save final track state to DB
+        if (dao != null && finalTrack.id.isNotBlank()) {
+            try {
+                dao.updateTrack(TrackEntity.fromTrack(finalTrack))
+            } catch (_: Exception) {}
+        }
+
+        // Stage 5 logging: Final SoundSync status
+        if (isWav) {
+            val statusDisplay = when (fileWriteState) {
+                com.example.model.MetadataWriteState.FILE_WRITE_SUCCESS -> "UPDATED"
+                com.example.model.MetadataWriteState.FILE_WRITE_PARTIAL -> "PARTIAL"
+                com.example.model.MetadataWriteState.DATABASE_ONLY -> "LIBRARY ONLY"
+                com.example.model.MetadataWriteState.READ_ONLY_FILE -> "LIBRARY ONLY"
+                com.example.model.MetadataWriteState.FORMAT_WRITE_UNSUPPORTED -> "LIBRARY ONLY"
+                else -> fileWriteState.name
+            }
+            Log.i("WavPipeline", "[Stage 5: Final SoundSync status] $statusDisplay (scanState=$finalScanState, writeState=$fileWriteState)")
+        }
 
         Log.d("MetadataWriter", "database write: updated track id=${finalTrack.id} state=${finalTrack.metadataScanState}")
 
