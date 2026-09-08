@@ -52,6 +52,7 @@ import com.example.storage.ScanStateManager
 import com.example.storage.ScanStatus
 import com.example.sync.CloudSyncManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOn
@@ -122,6 +123,18 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val driveDownloadProgressMap = googleDriveRepository.downloadProgressMap
     private val _isDriveBrowserOpen = MutableStateFlow(false)
     val isDriveBrowserOpen = _isDriveBrowserOpen.asStateFlow()
+
+    val metadataReviewInboxDao = db.metadataReviewInboxDao()
+    val pendingReviewInboxCount: StateFlow<Int> = metadataReviewInboxDao.observePendingCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    private val _isMdScanning = MutableStateFlow(false)
+    val isMdScanning: StateFlow<Boolean> = _isMdScanning.asStateFlow()
+
+    private val _mdScanProgress = MutableStateFlow("")
+    val mdScanProgress: StateFlow<String> = _mdScanProgress.asStateFlow()
+
+    private var mdScanJob: Job? = null
 
     val scanStateManager = ScanStateManager(application)
     private val scanMutex = Mutex()
@@ -1291,9 +1304,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 if (wasScanning && !state.isScanning && state.isCompleted) {
                     refreshStorageSourcesList()
                     showSnackbar("Background scan finished: ${state.totalIndexedInLastRun} audio tracks indexed successfully!")
-                    if (state.totalIndexedInLastRun > 0 && metadataSettings.value.enrichmentEnabled && metadataSettings.value.appleSearchEnabled) {
-                        scheduleBackgroundMetadataEnrichment()
-                    }
+                    // MD scanning is a manual process initiated via Settings; do not auto-enrich here
                 }
                 wasScanning = state.isScanning
             }
@@ -1312,13 +1323,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun onPermissionResult(isGranted: Boolean) {
         _hasStoragePermission.value = isGranted
         if (isGranted) {
-            showSnackbar("Storage access granted!")
-            viewModelScope.launch(Dispatchers.IO) {
-                val existingCount = trackDao.getTrackCount()
-                if (existingCount == 0 && scanStateManager.status != ScanStatus.SCANNING) {
-                    scanDeviceMediaStore()
-                }
-            }
+            showSnackbar("Storage access granted! You can index folders or run an MD scan from Settings.")
         } else {
             showSnackbar("Storage permission denied. You can import audio files individually or pick folders via SAF.")
         }
@@ -1349,9 +1354,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                         inspectTrackSpectrogram(firstTrack)
                     }
                 }
-            } else if (_hasStoragePermission.value && scanStateManager.status == ScanStatus.IDLE && !wasInterrupted) {
-                // Only perform auto-scan on clean initial launch if permission is granted and no crash occurred
-                scanDeviceMediaStoreInternal()
+            } else {
+                // MD and library scanning is a manual process initiated via Settings. Do not auto-scan on open.
+                Log.d("MainDjViewModel", "Library empty on startup; awaiting manual scan or import from Settings.")
             }
         }
     }
@@ -1544,6 +1549,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             if (imported.isNotEmpty()) {
                 trackDao.insertTracks(imported.map { TrackEntity.fromTrack(it) })
                 refreshStorageSourcesList()
+
+                // Scan metadata for newly added files only (Section: Add a new file -> scan metadata for that new file only)
+                if (metadataSettings.value.enrichmentEnabled) {
+                    scanMetadataForTracks(imported.map { it.id })
+                }
 
                 val log = OperationJournalItem(
                     id = "op_${UUID.randomUUID().toString().take(6)}",
@@ -3184,6 +3194,93 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 } catch (e: Exception) {
                     Log.d("MainDjViewModel", "Background enrichment skipped for ${track.title}: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun startManualMdScan(forceRefresh: Boolean = false) {
+        if (_isMdScanning.value) return
+        mdScanJob?.cancel()
+        mdScanJob = viewModelScope.launch(Dispatchers.IO) {
+            _isMdScanning.value = true
+            _mdScanProgress.value = "Preparing metadata scan..."
+            try {
+                val allEntities = trackDao.getAllTracksSync()
+                val targetTracks = if (forceRefresh) {
+                    allEntities.map { it.toTrack() }
+                } else {
+                    allEntities.filter { entity ->
+                        val track = entity.toTrack()
+                        !track.userConfirmedMetadata &&
+                        !track.isAppleIdentified &&
+                        entity.metadataScanState !in listOf("COMPLETE", "RESTORED", "APPROVED", "APPLIED", "USER_CONFIRMED")
+                    }.map { it.toTrack() }
+                }
+
+                if (targetTracks.isEmpty()) {
+                    _mdScanProgress.value = "Library already up to date. No tracks need metadata scanning."
+                    withContext(Dispatchers.Main) {
+                        showSnackbar("Library already up to date. No tracks need metadata scanning.")
+                    }
+                    delay(2500)
+                    return@launch
+                }
+
+                var proposedCount = 0
+                for ((idx, track) in targetTracks.withIndex()) {
+                    if (!isActive) break
+                    _mdScanProgress.value = "Scanning (${idx + 1}/${targetTracks.size}): ${track.title}"
+                    try {
+                        val result = metadataResolver.resolveTrackMetadata(
+                            track = track,
+                            forceRefresh = forceRefresh,
+                            embedArtworkToFile = false // Safe: physical file writes require user approval in MD Approval Tool
+                        )
+                        if (result.scanState == com.example.model.MetadataScanState.VERIFIED ||
+                            result.scanState == com.example.model.MetadataScanState.REVIEW_REQUIRED ||
+                            result.scanState == com.example.model.MetadataScanState.COMPLETE) {
+                            proposedCount++
+                        }
+                    } catch (e: Exception) {
+                        Log.d("MainDjViewModel", "MD scan error for ${track.title}: ${e.message}")
+                    }
+                }
+                val summary = "MD scan completed. $proposedCount proposed changes queued for approval."
+                _mdScanProgress.value = summary
+                withContext(Dispatchers.Main) {
+                    showSnackbar(summary)
+                }
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    _mdScanProgress.value = "Scan error: ${e.message}"
+                }
+            } finally {
+                _isMdScanning.value = false
+            }
+        }
+    }
+
+    fun cancelManualMdScan() {
+        mdScanJob?.cancel()
+        _isMdScanning.value = false
+        _mdScanProgress.value = "Scan cancelled."
+    }
+
+    fun scanMetadataForTracks(trackIds: List<String>) {
+        if (trackIds.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            for (trackId in trackIds) {
+                val entity = trackDao.getTrackById(trackId) ?: continue
+                val track = entity.toTrack()
+                try {
+                    metadataResolver.resolveTrackMetadata(
+                        track = track,
+                        forceRefresh = false,
+                        embedArtworkToFile = false // Safe: writes only permitted after user approval
+                    )
+                } catch (e: Exception) {
+                    Log.d("MainDjViewModel", "Scan for new track ${track.title} failed: ${e.message}")
                 }
             }
         }

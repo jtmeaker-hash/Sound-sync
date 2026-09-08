@@ -1378,7 +1378,13 @@ private fun SideDestinationScreen(
                         pushReport = viewModel.pushMetadataReport.collectAsState().value,
                         onPushMetadataToFiles = { viewModel.pushMetadataToFiles() },
                         onCancelPushMetadata = { viewModel.cancelPushMetadata() },
-                        onRetryFailedWrites = { viewModel.retryFailedFileWrites() }
+                        onRetryFailedWrites = { viewModel.retryFailedFileWrites() },
+                        isMdScanning = viewModel.isMdScanning.collectAsState().value,
+                        mdScanProgress = viewModel.mdScanProgress.collectAsState().value,
+                        pendingReviewCount = viewModel.pendingReviewInboxCount.collectAsState().value,
+                        onStartMdScan = { viewModel.startManualMdScan() },
+                        onCancelMdScan = { viewModel.cancelManualMdScan() },
+                        onNavigateToReviewInbox = { onNavigate(SideMenuDestination.MetadataReviewInbox) }
                     )
                 }
                 SideMenuDestination.MetadataSettings -> {
@@ -1416,7 +1422,13 @@ private fun SideDestinationScreen(
                         pushReport = viewModel.pushMetadataReport.collectAsState().value,
                         onPushMetadataToFiles = { viewModel.pushMetadataToFiles() },
                         onCancelPushMetadata = { viewModel.cancelPushMetadata() },
-                        onRetryFailedWrites = { viewModel.retryFailedFileWrites() }
+                        onRetryFailedWrites = { viewModel.retryFailedFileWrites() },
+                        isMdScanning = viewModel.isMdScanning.collectAsState().value,
+                        mdScanProgress = viewModel.mdScanProgress.collectAsState().value,
+                        pendingReviewCount = viewModel.pendingReviewInboxCount.collectAsState().value,
+                        onStartMdScan = { viewModel.startManualMdScan() },
+                        onCancelMdScan = { viewModel.cancelManualMdScan() },
+                        onNavigateToReviewInbox = { onNavigate(SideMenuDestination.MetadataReviewInbox) }
                     )
                 }
                 SideMenuDestination.AppearanceSettings -> {

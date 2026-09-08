@@ -128,6 +128,12 @@ fun LibrarySettingsScreen(
     onPushMetadataToFiles: () -> Unit = {},
     onCancelPushMetadata: () -> Unit = {},
     onRetryFailedWrites: () -> Unit = {},
+    isMdScanning: Boolean = false,
+    mdScanProgress: String = "",
+    pendingReviewCount: Int = 0,
+    onStartMdScan: () -> Unit = {},
+    onCancelMdScan: () -> Unit = {},
+    onNavigateToReviewInbox: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val platformStatuses by CloudSyncManager.platformStatuses.collectAsState()
@@ -157,7 +163,13 @@ fun LibrarySettingsScreen(
                 pushReport = pushReport,
                 onPushMetadataToFiles = onPushMetadataToFiles,
                 onCancelPushMetadata = onCancelPushMetadata,
-                onRetryFailedWrites = onRetryFailedWrites
+                onRetryFailedWrites = onRetryFailedWrites,
+                isMdScanning = isMdScanning,
+                mdScanProgress = mdScanProgress,
+                pendingReviewCount = pendingReviewCount,
+                onStartMdScan = onStartMdScan,
+                onCancelMdScan = onCancelMdScan,
+                onNavigateToReviewInbox = onNavigateToReviewInbox
             )
         }
 

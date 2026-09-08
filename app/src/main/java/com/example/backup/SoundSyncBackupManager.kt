@@ -269,7 +269,18 @@ class SoundSyncBackupManager(
                         // Unmatched track (not on current device yet or scanned under different root)
                         // Restore as an offline track so all historical analysis and tags are preserved!
                         val restoredEntity = result.backupTrack.toEntity().copy(
-                            isOfflineReady = false
+                            isOfflineReady = false,
+                            metadataScanState = if (result.backupTrack.metadataScanState.isNotBlank() && result.backupTrack.metadataScanState != "NOT_SCANNED") {
+                                result.backupTrack.metadataScanState
+                            } else {
+                                com.example.model.MetadataScanState.RESTORED.name
+                            },
+                            analysisState = if (result.backupTrack.bpm > 0.0 || result.backupTrack.musicalKey.isNotBlank() || result.backupTrack.analysisState == "COMPLETE") {
+                                "COMPLETE"
+                            } else {
+                                result.backupTrack.analysisState
+                            },
+                            userConfirmedMetadata = true
                         )
                         tracksToInsert.add(restoredEntity)
                         restoredTracks++

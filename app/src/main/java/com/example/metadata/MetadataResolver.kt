@@ -70,23 +70,24 @@ class MetadataResolver(
         if (!forceRefresh && (track.userConfirmedMetadata ||
                 track.metadataScanState == MetadataScanState.USER_CONFIRMED.name ||
                 track.metadataScanState == MetadataScanState.APPROVED.name ||
-                track.metadataScanState == MetadataScanState.APPLIED.name)) {
-            Log.d(TAG, "Track has user confirmed / applied metadata; skipping auto-resolution to protect manual choices.")
+                track.metadataScanState == MetadataScanState.APPLIED.name ||
+                track.metadataScanState == MetadataScanState.RESTORED.name)) {
+            Log.d(TAG, "Track has user confirmed / applied / restored metadata; skipping auto-resolution to protect manual choices.")
             return@withContext MetadataResolutionResult(
                 updatedTrack = track,
-                scanState = MetadataScanState.USER_CONFIRMED,
-                confidence = 100.0,
+                scanState = if (track.metadataScanState == MetadataScanState.RESTORED.name) MetadataScanState.RESTORED else MetadataScanState.USER_CONFIRMED,
+                confidence = track.metadataConfidence.coerceAtLeast(100.0),
                 wasRepaired = false,
-                message = "Protected user-confirmed metadata"
+                message = "Protected user-confirmed / restored metadata"
             )
         }
 
-        // 2. Check if already complete and file has not changed (Section 15, 16)
-        if (!forceRefresh && track.metadataScanState == MetadataScanState.COMPLETE.name && track.appleTrackId != null && !track.filePath.isBlank()) {
-            Log.d(TAG, "Track already COMPLETE and scanned; skipping redundant lookup.")
+        // 2. Check if already complete or restored and file has not changed (Section 15, 16)
+        if (!forceRefresh && (track.metadataScanState == MetadataScanState.COMPLETE.name || track.metadataScanState == MetadataScanState.RESTORED.name) && !track.filePath.isBlank()) {
+            Log.d(TAG, "Track already COMPLETE or RESTORED; skipping redundant lookup.")
             return@withContext MetadataResolutionResult(
                 updatedTrack = track,
-                scanState = MetadataScanState.COMPLETE,
+                scanState = if (track.metadataScanState == MetadataScanState.RESTORED.name) MetadataScanState.RESTORED else MetadataScanState.COMPLETE,
                 confidence = track.metadataConfidence,
                 wasRepaired = false,
                 message = "Already resolved"
@@ -461,7 +462,7 @@ class MetadataResolver(
                 (track.filePath.startsWith("content://") || File(track.filePath).exists())
 
         val shouldWritePhysicalFile = embedArtworkToFile && isLocalPhysicalFile &&
-                (!settings.writeMetadataOnlyAfterApproval || forceRefresh || matchState == MetadataScanState.VERIFIED)
+                (!settings.writeMetadataOnlyAfterApproval || track.userConfirmedMetadata || track.metadataScanState == MetadataScanState.APPROVED.name || track.metadataScanState == MetadataScanState.APPLIED.name)
 
         var finalScanState = matchState
         var fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY

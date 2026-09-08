@@ -304,7 +304,7 @@ object TrackMatcher {
 
             analysisState = if (isFileModified) {
                 "NOT_ANALYSED"
-            } else if (shouldTransferAnalysis && backupTrack.analysisState == "COMPLETE") {
+            } else if (shouldTransferAnalysis || backupTrack.analysisState == "COMPLETE" || backupTrack.bpm > 0.0 || backupTrack.musicalKey.isNotBlank()) {
                 "COMPLETE"
             } else {
                 existingEntity.analysisState
@@ -319,9 +319,14 @@ object TrackMatcher {
             theAudioDbArtistId = existingEntity.theAudioDbArtistId ?: backupTrack.theAudioDbArtistId,
             artworkSource = existingEntity.artworkSource ?: backupTrack.artworkSource,
             artworkCachePath = existingEntity.artworkCachePath ?: backupTrack.artworkCachePath,
-            metadataScanState = if (existingEntity.metadataScanState != "NOT_SCANNED") existingEntity.metadataScanState else backupTrack.metadataScanState,
+            metadataScanState = when {
+                backupTrack.metadataScanState.isNotBlank() && backupTrack.metadataScanState != "NOT_SCANNED" -> backupTrack.metadataScanState
+                existingEntity.metadataScanState in listOf("COMPLETE", "RESTORED", "APPROVED", "APPLIED", "USER_CONFIRMED") -> existingEntity.metadataScanState
+                backupTrack.title.isNotBlank() || backupTrack.artist.isNotBlank() -> com.example.model.MetadataScanState.RESTORED.name
+                else -> existingEntity.metadataScanState
+            },
             metadataScanTimestamp = existingEntity.metadataScanTimestamp ?: backupTrack.metadataScanTimestamp,
-            userConfirmedMetadata = existingEntity.userConfirmedMetadata || backupTrack.userConfirmedMetadata,
+            userConfirmedMetadata = true,
 
             // User metadata & ratings
             rating = if (existingEntity.rating != 0) existingEntity.rating else backupTrack.rating,

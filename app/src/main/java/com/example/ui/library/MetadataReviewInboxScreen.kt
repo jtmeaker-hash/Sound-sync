@@ -55,7 +55,7 @@ fun MetadataReviewInboxScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Metadata Review", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text("MD Approval Tool", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         Text(
                             text = "${pendingItems.size} pending (${verifiedCount} verified)",
                             color = TextMuted,

@@ -252,7 +252,15 @@ data class Track(
         get() = musicalKey.isNotBlank() && musicalKey != "—" && musicalKey != "-" && !musicalKey.equals("Unknown", ignoreCase = true)
 
     val isAppleIdentified: Boolean
-        get() = appleTrackId != null || !theAudioDbAlbumId.isNullOrBlank() || metadataScanState == MetadataScanState.COMPLETE.name || metadataScanState == MetadataScanState.IDENTIFIED.name || metadataScanState == MetadataScanState.USER_CONFIRMED.name
+        get() = appleTrackId != null || !theAudioDbAlbumId.isNullOrBlank() ||
+                metadataScanState == MetadataScanState.COMPLETE.name ||
+                metadataScanState == MetadataScanState.IDENTIFIED.name ||
+                metadataScanState == MetadataScanState.USER_CONFIRMED.name ||
+                metadataScanState == MetadataScanState.RESTORED.name ||
+                metadataScanState == MetadataScanState.APPROVED.name ||
+                metadataScanState == MetadataScanState.APPLIED.name ||
+                metadataScanState == MetadataScanState.VERIFIED.name ||
+                userConfirmedMetadata
 
     val isLocallyAnalyzed: Boolean
         get() = (bpmLastAnalyzed != null && bpmLastAnalyzed > 0L) ||

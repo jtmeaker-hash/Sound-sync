@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Divider
@@ -197,7 +198,7 @@ fun SideNavigationDrawerContent(
                 // ── 1. MUSIC ─────────────────────────────────────
                 ProCategoryHeader(
                     title = "MUSIC",
-                    badge = "7 ITEMS",
+                    badge = "8 ITEMS",
                     isExpanded = expandedMap["MUSIC"] == true,
                     onToggle = { expandedMap["MUSIC"] = !(expandedMap["MUSIC"] ?: false) }
                 )
@@ -223,6 +224,15 @@ fun SideNavigationDrawerContent(
                             onClick = {
                                 onCloseDrawer()
                                 onSelectDestination(SideMenuDestination.MetadataSettings)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "MD Approval Tool",
+                            subtitle = "Review & approve proposed metadata changes",
+                            icon = Icons.Default.Verified,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.MetadataReviewInbox)
                             }
                         )
                         ProDrawerItem(

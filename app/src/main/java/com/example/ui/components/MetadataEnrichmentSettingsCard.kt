@@ -1,12 +1,17 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.BorderStroke
@@ -15,6 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Publish
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -77,7 +84,13 @@ fun MetadataEnrichmentSettingsCard(
     pushReport: PushMetadataReport? = null,
     onPushMetadataToFiles: () -> Unit = {},
     onCancelPushMetadata: () -> Unit = {},
-    onRetryFailedWrites: () -> Unit = {}
+    onRetryFailedWrites: () -> Unit = {},
+    isMdScanning: Boolean = false,
+    mdScanProgress: String = "",
+    pendingReviewCount: Int = 0,
+    onStartMdScan: () -> Unit = {},
+    onCancelMdScan: () -> Unit = {},
+    onNavigateToReviewInbox: () -> Unit = {}
 ) {
     var minText by remember(settings.bpmMin) { mutableStateOf(settings.bpmMin.toString()) }
     var maxText by remember(settings.bpmMax) { mutableStateOf(settings.bpmMax.toString()) }
@@ -116,6 +129,145 @@ fun MetadataEnrichmentSettingsCard(
             SettingSwitch("Write completed metadata to ID3 tags", settings.writeToFileEnabled, onSetWriteToFileEnabled)
 
             MetadataProvenanceLegend(modifier = Modifier.padding(vertical = 4.dp))
+
+            Spacer(Modifier.height(4.dp))
+
+            // ── MD APPROVAL TOOL ─────────────────────────────────────
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DjSurfaceBorder.copy(alpha = 0.25f)),
+                border = BorderStroke(1.dp, if (pendingReviewCount > 0) NeonAmber else DjSurfaceBorder),
+                modifier = Modifier.fillMaxWidth().testTag("md_approval_tool_card"),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(
+                                Icons.Default.Verified,
+                                contentDescription = null,
+                                tint = if (pendingReviewCount > 0) NeonAmber else NeonGreen
+                            )
+                            Text("MD Approval Tool", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+                        if (pendingReviewCount > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .background(NeonAmber.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                                    .border(0.5.dp, NeonAmber, RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    "$pendingReviewCount PENDING",
+                                    color = NeonAmber,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        "Proposed metadata changes must be reviewed and approved here before they can be written to your files.",
+                        color = TextSecondary,
+                        fontSize = 10.5.sp
+                    )
+                    Button(
+                        onClick = onNavigateToReviewInbox,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (pendingReviewCount > 0) NeonAmber else DeckACyan
+                        ),
+                        modifier = Modifier.fillMaxWidth().testTag("open_md_approval_tool_button"),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Verified,
+                            contentDescription = null,
+                            tint = androidx.compose.ui.graphics.Color.Black
+                        )
+                        Spacer(Modifier.padding(horizontal = 4.dp))
+                        Text(
+                            if (pendingReviewCount > 0) "Review & Approve Updates ($pendingReviewCount)" else "Open MD Approval Tool",
+                            color = androidx.compose.ui.graphics.Color.Black,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+            // ── MANUAL MD SCAN SECTION ──────────────────────────────
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DjSurfaceBorder.copy(alpha = 0.15f)),
+                border = BorderStroke(1.dp, if (isMdScanning) DeckACyan else DjSurfaceBorder),
+                modifier = Modifier.fillMaxWidth().testTag("manual_md_scan_card"),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.Search, contentDescription = null, tint = DeckACyan)
+                            Text("Metadata Discovery (MD) Scan", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+                    }
+                    Text(
+                        "MD scanning is a manual process. Scan your library for missing tags, BPM, key, and artwork. Results are held for approval before writing to audio files.",
+                        color = TextSecondary,
+                        fontSize = 10.5.sp
+                    )
+
+                    if (isMdScanning) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().height(4.dp),
+                            color = DeckACyan,
+                            trackColor = DjSurfaceBorder
+                        )
+                        if (mdScanProgress.isNotBlank()) {
+                            Text(
+                                mdScanProgress,
+                                color = NeonAmber,
+                                fontSize = 10.sp,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = onCancelMdScan,
+                            modifier = Modifier.fillMaxWidth(),
+                            border = BorderStroke(1.dp, NeonRed)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null, tint = NeonRed)
+                            Spacer(Modifier.padding(horizontal = 4.dp))
+                            Text("Cancel Scan", color = NeonRed, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        if (mdScanProgress.isNotBlank()) {
+                            Text(
+                                mdScanProgress,
+                                color = NeonGreen,
+                                fontSize = 10.sp,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        }
+                        Button(
+                            onClick = onStartMdScan,
+                            colors = ButtonDefaults.buttonColors(containerColor = DeckACyan.copy(alpha = 0.85f)),
+                            modifier = Modifier.fillMaxWidth().testTag("start_md_scan_button"),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.Search, contentDescription = null, tint = androidx.compose.ui.graphics.Color.Black)
+                            Spacer(Modifier.padding(horizontal = 4.dp))
+                            Text("Start MD Scan", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
 
             Spacer(Modifier.height(4.dp))
             Text("Physical File Tag Embedding", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
