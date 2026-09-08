@@ -63,7 +63,13 @@ class MetadataResolverTest {
             artist = "Daft Punk",
             appleTrackId = 636990666L,
             metadataScanState = MetadataScanState.COMPLETE.name,
-            metadataConfidence = 95.0
+            metadataConfidence = 95.0,
+            // filePath must be non-blank: MetadataResolver.kt guards the COMPLETE early-return with
+            // !track.filePath.isBlank() to exclude in-memory / demo tracks from the skip logic.
+            filePath = "/storage/emulated/0/Music/get_lucky.mp3",
+            // album must be a valid, non-generic name: MetadataResolver's inner AlbumValidator check
+            // returns wasRepaired=true for any blank/generic album even when the track is COMPLETE.
+            album = "Random Access Memories"
         )
 
         val result = resolver.resolveTrackMetadata(completeTrack, forceRefresh = false)
