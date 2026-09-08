@@ -112,7 +112,16 @@ object SafeFileManager {
             if (!copied) {
                 return@withContext FileOperationResult.Failure("Failed to move file to ${destinationFile.absolutePath}")
             }
-            sourceFile.delete()
+            // Stage 2 & 6: Verify destination exists and matches size before deleting source
+            if (!destinationFile.exists() || destinationFile.length() != sourceFile.length() || destinationFile.length() == 0L) {
+                FileDeletionGuard.deleteTempFile(destinationFile, "SafeFileManager:moveTrackFile:CorruptDestCleanup")
+                return@withContext FileOperationResult.Failure("Destination file verification failed after copy. Source file preserved.")
+            }
+            FileDeletionGuard.deleteAudioFile(
+                file = sourceFile,
+                reason = DeletionReason.EXPLICIT_USER_ACTION,
+                caller = "SafeFileManager:moveTrackFile"
+            )
         }
 
         try {
@@ -157,6 +166,7 @@ object SafeFileManager {
 
     /**
      * Deletes the physical file and removes or marks track missing.
+     * Requires explicit user action via FileDeletionGuard.
      */
     suspend fun deleteTrackFile(
         database: AppDatabase,
@@ -164,18 +174,27 @@ object SafeFileManager {
         removeFromDatabase: Boolean = true
     ): FileOperationResult = withContext(Dispatchers.IO) {
         val sourceFile = File(track.filePath)
-        val deleted = if (sourceFile.exists()) sourceFile.delete() else true
+        val deletionResult = FileDeletionGuard.deleteAudioFile(
+            file = sourceFile,
+            reason = DeletionReason.EXPLICIT_USER_ACTION,
+            caller = "SafeFileManager:deleteTrackFile"
+        )
 
-        if (!deleted) {
-            return@withContext FileOperationResult.Failure("Failed to delete physical file: ${track.filePath}")
+        when (deletionResult) {
+            is FileDeletionResult.Blocked -> {
+                return@withContext FileOperationResult.Failure("Deletion blocked: ${deletionResult.reason}")
+            }
+            is FileDeletionResult.Failed -> {
+                return@withContext FileOperationResult.Failure("Failed to delete physical file: ${deletionResult.error}")
+            }
+            is FileDeletionResult.Success -> {
+                if (removeFromDatabase) {
+                    database.trackDao().deleteTrackById(track.id)
+                    database.playlistDao().deleteTrackFromPlaylist("%", track.id)
+                }
+                FileOperationResult.Success("", "Track and file deleted safely.")
+            }
         }
-
-        if (removeFromDatabase) {
-            database.trackDao().deleteTrackById(track.id)
-            // Also clean playlist references
-            database.playlistDao().deleteTrackFromPlaylist("%", track.id)
-        }
-        FileOperationResult.Success("", "Track and file deleted.")
     }
 
     private fun copyFileAtomic(src: File, dst: File): Boolean {

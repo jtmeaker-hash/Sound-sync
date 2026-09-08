@@ -368,6 +368,16 @@ class MetadataFileWriter(
                 return@withContext res
             }
             is TagWriteResult.Failed -> {
+                val isTargetWritable = targetWritePath.startsWith("content://") || File(targetWritePath).canWrite()
+                AudioTagWriter.logDiagnostic(
+                    operation = "METADATA_FILE_WRITER_FAILED",
+                    filePathOrUri = targetWritePath,
+                    ext = ext,
+                    payload = payload,
+                    isWritable = isTargetWritable,
+                    backend = "MetadataFileWriter",
+                    exception = writeTagResult.cause
+                )
                 PhysicalTagWriteLogger.logFailure(
                     tag = TAG,
                     track = track,
@@ -479,6 +489,9 @@ class MetadataFileWriter(
             if (!verified.hasEmbeddedArtwork || verified.embeddedArtworkSize <= 0) {
                 if (ext == "wav") {
                     Log.i(TAG, "WAV artwork preserved in SoundSync database/cache rather than bloated into RIFF container")
+                    unverifiedFields.add("artwork (stored in library)")
+                } else if (ext == "flac") {
+                    Log.i(TAG, "FLAC artwork embedding omitted or failed; textual tags saved, artwork preserved in library")
                     unverifiedFields.add("artwork (stored in library)")
                 } else {
                     Log.w(TAG, "Write verification notice: embedded artwork not detected on disk after write")

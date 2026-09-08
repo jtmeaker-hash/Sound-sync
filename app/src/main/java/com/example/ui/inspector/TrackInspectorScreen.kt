@@ -622,11 +622,14 @@ fun TrackInspectorScreen(
                 Button(
                     onClick = {
                         showDeleteConfirmDialog = false
+                        coroutineScope.launch(Dispatchers.IO) {
+                            com.example.storage.FileDeletionGuard.deleteAudioFile(
+                                file = File(currentTrack.filePath),
+                                reason = com.example.storage.DeletionReason.EXPLICIT_USER_ACTION,
+                                caller = "TrackInspectorScreen"
+                            )
+                        }
                         viewModel.deleteTrack(currentTrack)
-                        try {
-                            val f = File(currentTrack.filePath)
-                            if (f.exists()) f.delete()
-                        } catch (_: Exception) {}
                         onClose()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = NeonRed)

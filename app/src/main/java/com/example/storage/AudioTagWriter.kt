@@ -71,6 +71,73 @@ sealed interface TagWriteResult {
 object AudioTagWriter {
 
     private const val TAG = "AudioTagWriter"
+    private const val TAG_WRITER = "SoundSyncTagWriter"
+
+    @Volatile
+    private var appContext: Context? = null
+
+    /**
+     * Initializes or updates the application context for staging file allocation and MediaStore lookups.
+     */
+    fun setApplicationContext(context: Context?) {
+        if (context != null && appContext == null) {
+            appContext = context.applicationContext
+        }
+    }
+
+    /**
+     * Emits a comprehensive structured diagnostic report to logcat under the SoundSyncTagWriter tag.
+     */
+    fun logDiagnostic(
+        operation: String,
+        filePathOrUri: String,
+        ext: String,
+        payload: CompleteTagPayload,
+        isWritable: Boolean,
+        backend: String,
+        exception: Throwable? = null
+    ) {
+        val uriType = when {
+            filePathOrUri.startsWith("content://") -> "ContentURI"
+            filePathOrUri.startsWith("file://") -> "FileURI"
+            else -> "DirectFilesystemPath"
+        }
+        val fields = mutableListOf<String>()
+        if (!payload.title.isNullOrBlank()) fields.add("title=${payload.title}")
+        if (!payload.artist.isNullOrBlank()) fields.add("artist=${payload.artist}")
+        if (!payload.album.isNullOrBlank()) fields.add("album=${payload.album}")
+        if (!payload.albumArtist.isNullOrBlank()) fields.add("albumArtist=${payload.albumArtist}")
+        if (!payload.genre.isNullOrBlank()) fields.add("genre=${payload.genre}")
+        if (payload.trackNumber != null && payload.trackNumber > 0) fields.add("trackNumber=${payload.trackNumber}")
+        if (payload.discNumber != null && payload.discNumber > 0) fields.add("discNumber=${payload.discNumber}")
+        if (payload.releaseYear != null && payload.releaseYear > 0) fields.add("year=${payload.releaseYear}")
+        if (payload.bpm != null && payload.bpm > 0) fields.add("bpm=${payload.bpm}")
+        if (!payload.musicalKey.isNullOrBlank()) fields.add("key=${payload.musicalKey}")
+        if (!payload.comment.isNullOrBlank()) fields.add("comment")
+
+        val hasArtwork = payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()
+        val artSize = payload.artworkBytes?.size ?: 0
+
+        val msg = buildString {
+            appendLine("[$operation] SoundSync Diagnostic Report:")
+            appendLine("  Tag Backend: $backend")
+            appendLine("  File Extension: .$ext")
+            appendLine("  URI / Path: $filePathOrUri (Type: $uriType)")
+            appendLine("  Directly Writable: $isWritable")
+            appendLine("  Metadata Fields: [${fields.joinToString(", ")}]")
+            appendLine("  Artwork Included: $hasArtwork (bytes: $artSize, mime: ${payload.artworkMimeType})")
+            if (exception != null) {
+                appendLine("  Exception Class: ${exception.javaClass.name}")
+                appendLine("  Exception Message: ${exception.message}")
+                appendLine("  Stack Trace:\n${Log.getStackTraceString(exception)}")
+            }
+        }
+        if (exception != null) {
+            Log.e(TAG_WRITER, msg, exception)
+        } else {
+            Log.i(TAG_WRITER, msg)
+        }
+    }
 
     private val OGG_CRC_TABLE = IntArray(256) { i ->
         var r = i shl 24
@@ -118,44 +185,58 @@ object AudioTagWriter {
         filePathOrUri: String,
         payload: CompleteTagPayload
     ): TagWriteResult = withContext(Dispatchers.IO) {
+        setApplicationContext(context)
         if (filePathOrUri.isBlank() || filePathOrUri.startsWith("demo://") || filePathOrUri.startsWith("http")) {
             Log.w(TAG, "Cannot write tags: invalid or virtual path: $filePathOrUri")
             return@withContext TagWriteResult.Unsupported("Invalid or virtual path: $filePathOrUri")
         }
 
-        if (filePathOrUri.startsWith("content://")) {
-            return@withContext writeContentUriTagsWithResult(context, filePathOrUri, payload)
-        }
-
-        val file = File(filePathOrUri)
-        if (!file.exists() || !file.isFile) {
-            Log.w(TAG, "Cannot write tags: file does not exist: ${file.absolutePath}")
-            return@withContext TagWriteResult.Failed("File does not exist: ${file.absolutePath}")
-        }
-
-        if (!isFileDirectlyWritable(file)) {
-            Log.w(TAG, "Direct file write not permitted for ${file.absolutePath}, checking MediaStore fallback...")
-            if (context != null) {
-                val mediaUri = getMediaStoreUriForPath(context, file.absolutePath)
-                if (mediaUri != null) {
-                    Log.i(TAG, "Using MediaStore URI fallback: $mediaUri for ${file.absolutePath}")
-                    return@withContext writeContentUriTagsWithResult(context, mediaUri.toString(), payload)
-                }
+        FileLockManager.withFileLock(filePathOrUri) {
+            if (filePathOrUri.startsWith("content://")) {
+                return@withFileLock writeContentUriTagsWithResult(context, filePathOrUri, payload)
             }
-            Log.w(TAG, "Cannot write tags: file is inaccessible or read-only: ${file.absolutePath}")
-            val ex = SecurityException("File is read-only on device storage: ${file.absolutePath}")
-            return@withContext TagWriteResult.PermissionRequired(Uri.fromFile(file), ex)
-        }
 
-        val ext = file.extension.lowercase(Locale.ROOT)
-        val success = writeTagsToFile(file, ext, payload)
-        if (success && context != null) {
-            try {
-                MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), null, null)
-            } catch (_: Exception) {}
-            return@withContext TagWriteResult.Success
+            val file = File(filePathOrUri)
+            if (!file.exists() || !file.isFile) {
+                Log.w(TAG, "Cannot write tags: file does not exist: ${file.absolutePath}")
+                return@withFileLock TagWriteResult.Failed("File does not exist: ${file.absolutePath}")
+            }
+
+            if (!isFileDirectlyWritable(file)) {
+                Log.w(TAG, "Direct file write not permitted for ${file.absolutePath}, checking MediaStore fallback...")
+                if (context != null) {
+                    val mediaUri = getMediaStoreUriForPath(context, file.absolutePath)
+                    if (mediaUri != null) {
+                        Log.i(TAG, "Using MediaStore URI fallback: $mediaUri for ${file.absolutePath}")
+                        return@withFileLock writeContentUriTagsWithResult(context, mediaUri.toString(), payload)
+                    }
+                }
+                Log.w(TAG, "Cannot write tags: file is inaccessible or read-only: ${file.absolutePath}")
+                val ex = SecurityException("File is read-only on device storage: ${file.absolutePath}")
+                return@withFileLock TagWriteResult.PermissionRequired(Uri.fromFile(file), ex)
+            }
+
+            val ext = file.extension.lowercase(Locale.ROOT)
+            val writeResult = writeTagsToFile(file, ext, payload, context)
+            if (writeResult is TagWriteResult.Success && context != null) {
+                try {
+                    MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), null, null)
+                } catch (_: Exception) {}
+            }
+            if (writeResult !is TagWriteResult.Success) {
+                val cause = (writeResult as? TagWriteResult.Failed)?.cause
+                logDiagnostic(
+                    operation = "DIRECT_FILE_WRITE_FAILURE",
+                    filePathOrUri = file.absolutePath,
+                    ext = ext,
+                    payload = payload,
+                    isWritable = file.canWrite(),
+                    backend = "SoundSyncTagWriter",
+                    exception = cause
+                )
+            }
+            return@withFileLock writeResult
         }
-        return@withContext if (success) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .$ext file")
     }
 
     private fun writeContentUriTagsWithResult(
@@ -208,7 +289,7 @@ object AudioTagWriter {
 
         var tempFile: File? = null
         return try {
-            tempFile = File(context.cacheDir, "soundsync_saf_${System.currentTimeMillis()}.$ext")
+            tempFile = File(context.cacheDir, "ss_tag_${System.currentTimeMillis()}.$ext.tmp")
             try {
                 contentResolver.openInputStream(uri)?.use { inStream ->
                     FileOutputStream(tempFile).use { outStream ->
@@ -222,10 +303,10 @@ object AudioTagWriter {
                 return TagWriteResult.Failed("Failed copying audio stream from $uriString: ${e.message}", e)
             }
 
-            val success = writeTagsToFile(tempFile, ext, payload)
-            if (!success) {
-                Log.e(TAG, "Tag writing failed on SAF temp file for .$ext")
-                return TagWriteResult.Failed("Tag writing engine failed for .$ext container")
+            val writeResult = writeTagsToFile(tempFile, ext, payload, context)
+            if (writeResult !is TagWriteResult.Success) {
+                Log.e(TAG_WRITER, "Tag writing failed on SAF temp file for .$ext: ${(writeResult as? TagWriteResult.Failed)?.message}")
+                return writeResult
             }
 
             try {
@@ -356,38 +437,58 @@ object AudioTagWriter {
      * Prefers the same directory to allow atomic rename, falling back to cache if unwritable.
      */
     fun createTempStagingFile(file: File, context: Context? = null): File {
+        val ctx = context ?: appContext
+        // 1. Try parent directory if writable
+        val parent = file.parentFile
+        if (parent != null && parent.exists() && parent.canWrite()) {
+            try {
+                val candidate = File(parent, ".${file.name}.${System.currentTimeMillis()}.tmp")
+                if (candidate.createNewFile()) return candidate
+            } catch (_: Throwable) {}
+        }
+        // 2. Try app cache directory
+        if (ctx?.cacheDir != null && ctx.cacheDir.exists()) {
+            try {
+                val candidate = File(ctx.cacheDir, "ss_tag_${System.currentTimeMillis()}_${file.name}.tmp")
+                if (candidate.createNewFile()) return candidate
+            } catch (_: Throwable) {}
+        }
+        // 3. Try app files directory
+        if (ctx?.filesDir != null && ctx.filesDir.exists()) {
+            try {
+                val candidate = File(ctx.filesDir, "ss_tag_${System.currentTimeMillis()}_${file.name}.tmp")
+                if (candidate.createNewFile()) return candidate
+            } catch (_: Throwable) {}
+        }
+        // 4. Try alongside the file directly
+        try {
+            val candidate = File(file.absolutePath + ".${System.currentTimeMillis()}.tmp")
+            if (candidate.createNewFile()) return candidate
+        } catch (_: Throwable) {}
+        // 5. Try java.io.tmpdir with explicit directory
         return try {
-            val parent = file.parentFile
-            if (parent != null && parent.exists() && parent.canWrite()) {
-                File(parent, ".${file.name}.${System.currentTimeMillis()}.tmp")
-            } else if (context?.cacheDir != null && context.cacheDir.exists()) {
-                File(context.cacheDir, "ss_tag_${System.currentTimeMillis()}_${file.name}.tmp")
+            val tmpDir = File(System.getProperty("java.io.tmpdir") ?: ".")
+            if (tmpDir.exists() && tmpDir.canWrite()) {
+                File.createTempFile("ss_tag_", ".tmp", tmpDir)
             } else {
-                File.createTempFile("ss_tag_", ".tmp")
+                File(file.name + ".tmp")
             }
         } catch (_: Throwable) {
-            try {
-                if (context?.cacheDir != null && context.cacheDir.exists()) {
-                    File(context.cacheDir, "ss_tag_${System.currentTimeMillis()}_${file.name}.tmp")
-                } else {
-                    File.createTempFile("ss_tag_", ".tmp")
-                }
-            } catch (_: Throwable) {
-                File.createTempFile("ss_tag_", ".tmp")
-            }
+            File(file.name + ".tmp")
         }
     }
 
     /**
      * Replaces the contents of [originalFile] with the contents of [tempFile].
      *
-     * CRITICAL FOR ANDROID STORAGE & MEDIASTORE STABILITY:
-     * We prioritize IN-PLACE TRUNCATE & OVERWRITE (Tier 1) so that the file's inode,
-     * MediaStore identity, and SAF URI permissions remain completely intact.
-     * Deleting/renaming causes Android's FUSE daemon to assign a new inode,
-     * invalidating MediaStore URIs and causing false "external storage disconnected" errors.
+     * CRITICAL FOR AUDIO INTEGRITY & MEDIASTORE STABILITY:
+     * 1. Prioritizes IN-PLACE TRUNCATE & OVERWRITE (Tier 1) so that the file's inode,
+     *    MediaStore identity, and SAF URI permissions remain completely intact.
+     * 2. Transaction Safety: The original file is NEVER deleted before the replacement
+     *    is completely verified.
+     * 3. If any fallback rename/swap fails, the original audio file is immediately restored from backup.
      */
-    fun replaceOriginalFile(originalFile: File, tempFile: File): Boolean {
+    fun replaceOriginalFile(originalFile: File, tempFile: File, context: Context? = null): Boolean {
         if (!tempFile.exists() || tempFile.length() == 0L) {
             Log.e(TAG, "[AudioTagWriter] replaceOriginalFile: Staging file is missing or empty for ${originalFile.absolutePath}")
             return false
@@ -410,16 +511,18 @@ object AudioTagWriter {
                         dst.fd.sync()
                     }
                 }
-                tempFile.delete()
                 val finalSize = originalFile.length()
-                Log.i(TAG, "[AudioTagWriter] In-place write SUCCESS: '$originalPath' ($finalSize bytes written, inode preserved)")
-                return true
+                if (finalSize > 0L && finalSize == stagingSize) {
+                    FileDeletionGuard.deleteTempFile(tempFile, "AudioTagWriter:replaceOriginalFile:Tier1")
+                    Log.i(TAG, "[AudioTagWriter] In-place write SUCCESS: '$originalPath' ($finalSize bytes written, inode preserved)")
+                    return true
+                }
             }
         } catch (e: Throwable) {
             Log.w(TAG, "[AudioTagWriter] In-place overwrite failed for '$originalPath', trying fallback tiers: ${e.message}")
         }
 
-        // Tier 2: Atomic move via NIO
+        // Tier 2: Atomic move via NIO (atomic replacement without prior deletion)
         try {
             Files.move(
                 tempFile.toPath(),
@@ -427,8 +530,10 @@ object AudioTagWriter {
                 StandardCopyOption.REPLACE_EXISTING,
                 StandardCopyOption.ATOMIC_MOVE
             )
-            Log.i(TAG, "[AudioTagWriter] Replacement via NIO ATOMIC_MOVE succeeded for '$originalPath'")
-            return true
+            if (originalFile.exists() && originalFile.length() > 0L) {
+                Log.i(TAG, "[AudioTagWriter] Replacement via NIO ATOMIC_MOVE succeeded for '$originalPath'")
+                return true
+            }
         } catch (_: Throwable) {}
 
         // Tier 3: Replace existing via NIO
@@ -438,63 +543,180 @@ object AudioTagWriter {
                 originalFile.toPath(),
                 StandardCopyOption.REPLACE_EXISTING
             )
-            Log.i(TAG, "[AudioTagWriter] Replacement via NIO REPLACE_EXISTING succeeded for '$originalPath'")
-            return true
+            if (originalFile.exists() && originalFile.length() > 0L) {
+                Log.i(TAG, "[AudioTagWriter] Replacement via NIO REPLACE_EXISTING succeeded for '$originalPath'")
+                return true
+            }
         } catch (_: Throwable) {}
 
-        // Tier 4: Direct renameTo
+        // Tier 4: Direct renameTo (safe if destination does not exist or atomic rename is supported)
         try {
             if (tempFile.renameTo(originalFile)) {
-                Log.i(TAG, "[AudioTagWriter] Replacement via renameTo succeeded for '$originalPath'")
-                return true
-            }
-        } catch (_: Throwable) {}
-
-        // Tier 5: Delete original and rename
-        try {
-            if (originalFile.delete() && tempFile.renameTo(originalFile)) {
-                Log.i(TAG, "[AudioTagWriter] Replacement via delete + renameTo succeeded for '$originalPath'")
-                return true
-            }
-        } catch (_: Throwable) {}
-
-        // Tier 6: Final fallback stream copy
-        return try {
-            tempFile.inputStream().buffered().use { src ->
-                FileOutputStream(originalFile, false).use { dst ->
-                    src.copyTo(dst, 64 * 1024)
-                    dst.flush()
-                    dst.fd.sync()
+                if (originalFile.exists() && originalFile.length() > 0L) {
+                    Log.i(TAG, "[AudioTagWriter] Replacement via renameTo succeeded for '$originalPath'")
+                    return true
                 }
             }
-            tempFile.delete()
-            Log.i(TAG, "[AudioTagWriter] Final stream fallback succeeded for '$originalPath'")
-            true
+        } catch (_: Throwable) {}
+
+        // Tier 5: Transactional backup-and-swap (CRITICAL SAFETY: NEVER delete original until verified!)
+        // Step A: Rename original to backup (.bak)
+        val parent = originalFile.parentFile
+        val backupFile = if (parent != null && parent.canWrite()) {
+            File(parent, ".${originalFile.name}.${System.currentTimeMillis()}.bak")
+        } else null
+
+        var backupCreated = false
+        if (backupFile != null && originalFile.exists()) {
+            try {
+                backupCreated = originalFile.renameTo(backupFile)
+                if (backupCreated) {
+                    ForensicFileLogger.logEvent(
+                        operation = "BACKUP_CREATED",
+                        path = backupFile.absolutePath,
+                        caller = "AudioTagWriter:replaceOriginalFile",
+                        reason = DeletionReason.TEMPORARY_STAGING_CLEANUP,
+                        outcome = "SUCCESS",
+                        details = "Created backup of original audio file before rename"
+                    )
+                }
+            } catch (_: Throwable) {
+                backupCreated = false
+            }
+        }
+
+        if (backupCreated && backupFile != null) {
+            // Attempt to move tempFile into originalFile position
+            val swapped = try {
+                tempFile.renameTo(originalFile)
+            } catch (_: Throwable) { false }
+
+            if (swapped && originalFile.exists() && originalFile.length() > 0L) {
+                // VERIFIED SUCCESS: Safely delete the backup file now that originalFile is completely replaced and verified
+                FileDeletionGuard.deleteTempFile(backupFile, "AudioTagWriter:replaceOriginalFile:Tier5BackupCleanup")
+                Log.i(TAG, "[AudioTagWriter] Transactional backup-and-swap succeeded for '$originalPath'")
+                return true
+            } else {
+                // SWAP FAILED: RESTORE ORIGINAL FILE FROM BACKUP IMMEDIATELY!
+                Log.e(TAG, "[AudioTagWriter] Swap failed for '$originalPath'. Restoring original from backup...")
+                val restored = backupFile.renameTo(originalFile)
+                ForensicFileLogger.logEvent(
+                    operation = "BACKUP_RESTORED",
+                    path = originalFile.absolutePath,
+                    caller = "AudioTagWriter:replaceOriginalFile",
+                    reason = DeletionReason.TEMPORARY_STAGING_CLEANUP,
+                    outcome = if (restored) "SUCCESS" else "FAILED",
+                    details = "Restored original audio file after swap failure"
+                )
+                if (!restored) {
+                    try {
+                        backupFile.inputStream().use { src ->
+                            FileOutputStream(originalFile, false).use { dst ->
+                                src.copyTo(dst)
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
+
+        // Tier 6: Stream copy directly into originalFile without deleting original beforehand
+        try {
+            if (originalFile.exists() && originalFile.canWrite()) {
+                tempFile.inputStream().buffered(64 * 1024).use { src ->
+                    FileOutputStream(originalFile, false).use { dst ->
+                        src.copyTo(dst, 64 * 1024)
+                        dst.flush()
+                        dst.fd.sync()
+                    }
+                }
+                if (originalFile.exists() && originalFile.length() == stagingSize) {
+                    FileDeletionGuard.deleteTempFile(tempFile, "AudioTagWriter:replaceOriginalFile:Tier6")
+                    Log.i(TAG, "[AudioTagWriter] Final stream fallback succeeded for '$originalPath'")
+                    return true
+                }
+            }
         } catch (e: Throwable) {
-            Log.e(TAG, "[AudioTagWriter] ALL replacement tiers failed for '$originalPath': ${e.message}", e)
-            false
+            Log.w(TAG, "[AudioTagWriter] Tier 6 stream overwrite failed for '$originalPath': ${e.message}")
+        }
+
+        // Tier 7: MediaStore ContentResolver stream fallback for Scoped Storage
+        val ctx = context ?: appContext
+        if (ctx != null) {
+            try {
+                val mediaUri = getMediaStoreUriForPath(ctx, originalPath)
+                if (mediaUri != null) {
+                    val pfd = try {
+                        ctx.contentResolver.openFileDescriptor(mediaUri, "rwt")
+                            ?: ctx.contentResolver.openFileDescriptor(mediaUri, "w")
+                    } catch (_: Throwable) { null }
+
+                    if (pfd != null) {
+                        pfd.use { p ->
+                            FileOutputStream(p.fileDescriptor).use { dst ->
+                                tempFile.inputStream().buffered(64 * 1024).use { src ->
+                                    src.copyTo(dst, 64 * 1024)
+                                    dst.flush()
+                                    try { p.fileDescriptor.sync() } catch (_: Throwable) {}
+                                }
+                            }
+                        }
+                        if (originalFile.exists() && originalFile.length() > 0L) {
+                            FileDeletionGuard.deleteTempFile(tempFile, "AudioTagWriter:replaceOriginalFile:Tier7MediaStore")
+                            Log.i(TAG, "[AudioTagWriter] MediaStore stream replacement succeeded for '$originalPath'")
+                            return true
+                        }
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "[AudioTagWriter] MediaStore replacement fallback failed for '$originalPath': ${e.message}")
+            }
+        }
+
+        Log.e(TAG, "[AudioTagWriter] ALL replacement tiers failed for '$originalPath'")
+        return false
+    }
+
+    fun writeTagsToFile(file: File, ext: String, payload: CompleteTagPayload, context: Context? = null): TagWriteResult {
+        return when (ext) {
+            "flac" -> writeFlacTagsWithResult(file, payload, context)
+            "wav" -> {
+                val ok = writeWavTags(file, payload)
+                if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .wav file")
+            }
+            "mp3" -> {
+                val ok = writeMp3Tags(file, payload)
+                if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .mp3 file")
+            }
+            "m4a", "mp4" -> {
+                val ok = writeM4aTags(file, payload)
+                if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .$ext file")
+            }
+            "aac" -> {
+                val ok = if (writeM4aTags(file, payload)) true else writeMp3Tags(file, payload)
+                if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .aac file")
+            }
+            "ogg" -> {
+                val ok = writeOggVorbisTags(file, payload)
+                if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .ogg file")
+            }
+            "opus" -> {
+                val ok = writeOggOpusTags(file, payload)
+                if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .opus file")
+            }
+            "aif", "aiff" -> {
+                val ok = writeAiffTags(file, payload)
+                if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .$ext file")
+            }
+            else -> {
+                Log.w(TAG, "Tag writing not supported for extension .$ext; file preserved unmodified.")
+                TagWriteResult.Unsupported("Tag writing not supported for extension .$ext")
+            }
         }
     }
 
-    private fun writeTagsToFile(file: File, ext: String, payload: CompleteTagPayload): Boolean {
-        return when (ext) {
-            "wav" -> writeWavTags(file, payload)
-            "mp3" -> writeMp3Tags(file, payload)
-            "flac" -> writeFlacTags(file, payload)
-            "m4a", "mp4" -> writeM4aTags(file, payload)
-            "aac" -> {
-                if (writeM4aTags(file, payload)) true
-                else writeMp3Tags(file, payload)
-            }
-            "ogg" -> writeOggVorbisTags(file, payload)
-            "opus" -> writeOggOpusTags(file, payload)
-            "aif", "aiff" -> writeAiffTags(file, payload)
-            else -> {
-                Log.w(TAG, "Tag writing not supported for extension .$ext; file preserved unmodified.")
-                false
-            }
-        }
-    }
+    fun writeTagsToFile(file: File, ext: String, payload: CompleteTagPayload): Boolean =
+        writeTagsToFile(file, ext, payload, null) is TagWriteResult.Success
 
     // =========================================================================
     // WAV (RIFF WAVE) IMPLEMENTATION: Dedicated, format-compliant tag writer
@@ -1157,22 +1379,112 @@ object AudioTagWriter {
 
     // =========================================================================
     // FLAC (VORBIS_COMMENT + PICTURE) IMPLEMENTATION
+    // Separates Stage A (Vorbis comments) and Stage B (Artwork picture block)
+    // Ensures text metadata is written even if artwork embedding fails,
+    // and original file is NEVER deleted or corrupted.
     // =========================================================================
 
+    fun writeFlacTagsWithResult(
+        file: File,
+        payload: CompleteTagPayload,
+        context: Context? = null
+    ): TagWriteResult {
+        // Attempt Full write: Stage A (Vorbis comments) + Stage B (Artwork)
+        var fullWriteException: Throwable? = null
+        try {
+            val fullResult = attemptFlacWrite(file, payload, includeArtwork = true, context = context)
+            if (fullResult is TagWriteResult.Success) {
+                logDiagnostic(
+                    operation = "FLAC_FULL_WRITE_SUCCESS",
+                    filePathOrUri = file.absolutePath,
+                    ext = "flac",
+                    payload = payload,
+                    isWritable = file.canWrite(),
+                    backend = "SoundSyncFlacEngine"
+                )
+                return fullResult
+            } else if (fullResult is TagWriteResult.Failed) {
+                fullWriteException = fullResult.cause
+            }
+        } catch (e: Throwable) {
+            fullWriteException = e
+            logDiagnostic(
+                operation = "FLAC_COMBINED_STAGE_B_FAILURE",
+                filePathOrUri = file.absolutePath,
+                ext = "flac",
+                payload = payload,
+                isWritable = file.canWrite(),
+                backend = "SoundSyncFlacEngine",
+                exception = e
+            )
+            Log.w(TAG_WRITER, "Stage B / Combined FLAC write failed for ${file.name}: ${e.message}. Retrying Stage A (text tags only)...", e)
+        }
+
+        // If artwork was included and combined write failed, attempt Stage A only (Vorbis comment text tags)
+        val hasArtwork = payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()
+        if (hasArtwork) {
+            try {
+                val stageAResult = attemptFlacWrite(file, payload, includeArtwork = false, context = context)
+                if (stageAResult is TagWriteResult.Success) {
+                    Log.i(TAG_WRITER, "Stage A (text tags) FLAC write SUCCEEDED for ${file.name}; artwork preserved in library cache.")
+                    logDiagnostic(
+                        operation = "FLAC_STAGE_A_SUCCESS",
+                        filePathOrUri = file.absolutePath,
+                        ext = "flac",
+                        payload = payload,
+                        isWritable = file.canWrite(),
+                        backend = "SoundSyncFlacEngine"
+                    )
+                    return stageAResult
+                }
+            } catch (e: Throwable) {
+                logDiagnostic(
+                    operation = "FLAC_STAGE_A_FAILURE",
+                    filePathOrUri = file.absolutePath,
+                    ext = "flac",
+                    payload = payload,
+                    isWritable = file.canWrite(),
+                    backend = "SoundSyncFlacEngine",
+                    exception = e
+                )
+                return TagWriteResult.Failed("Tag writing engine failed for .flac file: ${e.javaClass.simpleName}: ${e.message}", e)
+            }
+        }
+
+        val finalMsg = if (fullWriteException != null) {
+            "Tag writing engine failed for .flac file: ${fullWriteException.javaClass.simpleName}: ${fullWriteException.message}"
+        } else {
+            "Tag writing engine failed for .flac file: stream reconstruction failed"
+        }
+        return TagWriteResult.Failed(finalMsg, fullWriteException)
+    }
+
     private fun writeFlacTags(file: File, payload: CompleteTagPayload): Boolean {
+        return writeFlacTagsWithResult(file, payload, null) is TagWriteResult.Success
+    }
+
+    private fun attemptFlacWrite(
+        file: File,
+        payload: CompleteTagPayload,
+        includeArtwork: Boolean,
+        context: Context?
+    ): TagWriteResult {
         var tempFile: File? = null
+        var inputStream: FileInputStream? = null
+        var fos: FileOutputStream? = null
         try {
             val fileLength = file.length()
-            if (fileLength < 4) return false
+            if (fileLength < 4) {
+                return TagWriteResult.Failed("File is too small to be a FLAC file ($fileLength bytes)")
+            }
 
-            val inputStream = FileInputStream(file)
+            inputStream = FileInputStream(file)
             var flacOffset = 0L
 
             val initialHeader = ByteArray(10)
             val readInitial = inputStream.read(initialHeader)
             if (readInitial < 4) {
-                inputStream.close()
-                return false
+                return TagWriteResult.Failed("Cannot read initial FLAC header bytes")
             }
 
             if (initialHeader[0] == 'I'.code.toByte() &&
@@ -1222,9 +1534,7 @@ object AudioTagWriter {
                 }
 
                 if (!foundFlac) {
-                    inputStream.close()
-                    Log.w(TAG, "File ${file.name} has prepended ID3 but no valid fLaC marker")
-                    return false
+                    return TagWriteResult.Failed("FLAC magic 'fLaC' not found after prepended ID3 header in ${file.name}")
                 }
             } else if (initialHeader[0] == 'f'.code.toByte() &&
                 initialHeader[1] == 'L'.code.toByte() &&
@@ -1251,9 +1561,7 @@ object AudioTagWriter {
                     }
                 }
                 if (!foundFlac) {
-                    inputStream.close()
-                    Log.w(TAG, "File ${file.name} is not a valid FLAC stream")
-                    return false
+                    return TagWriteResult.Failed("File ${file.name} is not a valid FLAC stream (magic 'fLaC' not found)")
                 }
             }
 
@@ -1277,6 +1585,11 @@ object AudioTagWriter {
                         ((blockHeader[2].toInt() and 0xFF) shl 8) or
                         (blockHeader[3].toInt() and 0xFF)
 
+                if (blockLength < 0 || blockLength > 32 * 1024 * 1024) {
+                    Log.w(TAG_WRITER, "Corrupt or oversized FLAC metadata block: type=$blockType, length=$blockLength")
+                    break
+                }
+
                 val blockData = ByteArray(blockLength)
                 if (!readFully(inputStream, blockData)) break
 
@@ -1290,22 +1603,27 @@ object AudioTagWriter {
             }
 
             if (streamInfoBlock == null) {
-                inputStream.close()
-                Log.w(TAG, "File ${file.name} is missing mandatory FLAC STREAMINFO block")
-                return false
+                return TagWriteResult.Failed("File ${file.name} is missing mandatory FLAC STREAMINFO block")
             }
 
+            // Build Vorbis Comment block (Stage A)
             val existingComments = extractExistingVorbisComments(existingVorbisCommentBytes)
             val vorbisCommentBytes = buildVorbisCommentBody(payload, existingComments)
-            val pictureBlockBytes = buildFlacPictureBlock(payload.artworkBytes, payload.artworkMimeType)
-                ?: existingPictureBlock?.data
 
-            tempFile = createTempStagingFile(file)
-            val fos = FileOutputStream(tempFile)
+            // Build Picture block (Stage B, only if includeArtwork is true)
+            val pictureBlockBytes = if (includeArtwork) {
+                buildFlacPictureBlock(payload.artworkBytes, payload.artworkMimeType)
+                    ?: existingPictureBlock?.data
+            } else {
+                existingPictureBlock?.data
+            }
+
+            tempFile = createTempStagingFile(file, context)
+            fos = FileOutputStream(tempFile)
             val flacMagic = "fLaC".toByteArray(StandardCharsets.US_ASCII)
             fos.write(flacMagic)
 
-            // Block 0: STREAMINFO (mandatory first block per FLAC spec)
+            // Block 0: STREAMINFO (mandatory first block per FLAC spec, isLast = false)
             writeFlacBlockHeader(fos, isLast = false, blockType = 0, length = streamInfoBlock.data.size)
             fos.write(streamInfoBlock.data)
 
@@ -1325,7 +1643,7 @@ object AudioTagWriter {
                 fos.write(pictureBlockBytes)
             }
 
-            // Padding block (1024 bytes, marked as isLast = true)
+            // Padding block (1024 bytes, marked as isLast = true per FLAC spec)
             val paddingBytes = ByteArray(1024)
             writeFlacBlockHeader(fos, isLast = true, blockType = 1, length = paddingBytes.size)
             fos.write(paddingBytes)
@@ -1339,22 +1657,32 @@ object AudioTagWriter {
             }
 
             fos.flush()
-            try { fos.fd.sync() } catch (_: Exception) {}
+            try { fos.fd.sync() } catch (_: Throwable) {}
             fos.close()
+            fos = null
             inputStream.close()
+            inputStream = null
 
-            if (tempFile.length() > 42) {
-                if (replaceOriginalFile(file, tempFile)) {
-                    Log.d(TAG, "Successfully wrote complete FLAC tags and artwork to ${file.name}")
-                    return true
-                }
+            // Staging verification: must have STREAMINFO (34) + magic (4) + comments + frames
+            if (tempFile.length() < 42 || (fileLength > 1000 && tempFile.length() < (fileLength / 2))) {
+                FileDeletionGuard.deleteTempFile(tempFile, "AudioTagWriter:attemptFlacWrite:SuspiciousStagingSize")
+                return TagWriteResult.Failed("Staging file verification failed: size ${tempFile.length()} is suspiciously smaller than original $fileLength")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed writing FLAC tags to ${file.name}: ${e.message}", e)
+
+            val replaced = replaceOriginalFile(file, tempFile, context)
+            if (replaced) {
+                Log.d(TAG_WRITER, "Successfully wrote FLAC tags (artwork=$includeArtwork) to ${file.name}")
+                return TagWriteResult.Success
+            } else {
+                return TagWriteResult.Failed("Failed replacing original file ${file.name} with staged tags")
+            }
+        } catch (e: Throwable) {
+            tempFile?.let { FileDeletionGuard.deleteTempFile(it, "AudioTagWriter:attemptFlacWrite:ErrorCleanup") }
+            throw e
         } finally {
-            tempFile?.let { if (it.exists()) it.delete() }
+            try { fos?.close() } catch (_: Throwable) {}
+            try { inputStream?.close() } catch (_: Throwable) {}
         }
-        return false
     }
 
     // =========================================================================
@@ -1986,31 +2314,44 @@ object AudioTagWriter {
     }
 
     private fun buildFlacPictureBlock(artworkBytes: ByteArray?, mimeType: String): ByteArray? {
-        if (artworkBytes == null || artworkBytes.isEmpty()) return null
-        val picStream = ByteArrayOutputStream()
-        writeBigEndianInt(picStream, 3) // Picture type: Front Cover
-        val mime = mimeType.ifBlank { "image/jpeg" }
-        val mimeBytes = mime.toByteArray(StandardCharsets.US_ASCII)
-        writeBigEndianInt(picStream, mimeBytes.size)
-        picStream.write(mimeBytes)
-        writeBigEndianInt(picStream, 0) // Description length = 0
+        if (artworkBytes == null || artworkBytes.isEmpty() || artworkBytes.size > 16_000_000) return null
+        return try {
+            val picStream = ByteArrayOutputStream()
+            writeBigEndianInt(picStream, 3) // Picture type: Front Cover
 
-        var width = 0
-        var height = 0
-        try {
-            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(artworkBytes, 0, artworkBytes.size, opts)
-            width = opts.outWidth
-            height = opts.outHeight
-        } catch (_: Exception) {}
+            // Auto-detect PNG signature
+            val isPng = artworkBytes.size >= 8 &&
+                    artworkBytes[0] == 0x89.toByte() &&
+                    artworkBytes[1] == 0x50.toByte() &&
+                    artworkBytes[2] == 0x4E.toByte() &&
+                    artworkBytes[3] == 0x47.toByte()
+            val mime = if (isPng) "image/png" else mimeType.ifBlank { "image/jpeg" }
 
-        writeBigEndianInt(picStream, width)
-        writeBigEndianInt(picStream, height)
-        writeBigEndianInt(picStream, 24) // Bits per pixel
-        writeBigEndianInt(picStream, 0)  // Number of indexed colors
-        writeBigEndianInt(picStream, artworkBytes.size)
-        picStream.write(artworkBytes)
-        return picStream.toByteArray()
+            val mimeBytes = mime.toByteArray(StandardCharsets.US_ASCII)
+            writeBigEndianInt(picStream, mimeBytes.size)
+            picStream.write(mimeBytes)
+            writeBigEndianInt(picStream, 0) // Description length = 0
+
+            var width = 0
+            var height = 0
+            try {
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(artworkBytes, 0, artworkBytes.size, opts)
+                width = maxOf(0, opts.outWidth)
+                height = maxOf(0, opts.outHeight)
+            } catch (_: Throwable) {}
+
+            writeBigEndianInt(picStream, width)
+            writeBigEndianInt(picStream, height)
+            writeBigEndianInt(picStream, 24) // Bits per pixel
+            writeBigEndianInt(picStream, 0)  // Number of indexed colors
+            writeBigEndianInt(picStream, artworkBytes.size)
+            picStream.write(artworkBytes)
+            picStream.toByteArray()
+        } catch (e: Throwable) {
+            Log.w(TAG_WRITER, "Failed building FLAC picture block: ${e.message}", e)
+            null
+        }
     }
 
     // =========================================================================

@@ -37,7 +37,9 @@ object ArtworkEmbeddingHelper {
 
         val ext = audioFile.extension.lowercase()
         return@withContext when (ext) {
-            "mp3" -> embedApicIntoMp3(audioFile, artworkBytes, mimeType)
+            "mp3" -> com.example.storage.FileLockManager.withFileLock(audioFile.absolutePath) {
+                embedApicIntoMp3(audioFile, artworkBytes, mimeType)
+            }
             else -> {
                 Log.d(TAG, "Embedding artwork is currently optimized for MP3 container. Other formats preserved safely.")
                 false
@@ -165,20 +167,21 @@ object ArtworkEmbeddingHelper {
             fos.close()
             audioInputStream.close()
 
+            // Safe replacement: Original file is NEVER deleted before replacement is verified
             if (tempFile.length() > (fileLength / 2)) {
-                if (file.delete()) {
-                    val renamed = tempFile.renameTo(file)
-                    if (renamed) {
-                        Log.d(TAG, "Successfully embedded APIC cover art (${artworkBytes.size} bytes) into ${file.name}")
-                        return true
-                    }
+                val replaced = com.example.storage.AudioTagWriter.replaceOriginalFile(file, tempFile)
+                if (replaced) {
+                    Log.d(TAG, "Successfully embedded APIC cover art (${artworkBytes.size} bytes) into ${file.name}")
+                    return true
+                } else {
+                    Log.w(TAG, "Failed replacing original file safely for ${file.name}; original remains intact.")
                 }
             }
-            tempFile.delete()
+            com.example.storage.FileDeletionGuard.deleteTempFile(tempFile, "ArtworkEmbeddingHelper")
             return false
         } catch (e: Exception) {
             Log.e(TAG, "Failed embedding artwork into ${file.name}: ${e.message}", e)
-            tempFile?.delete()
+            com.example.storage.FileDeletionGuard.deleteTempFile(tempFile, "ArtworkEmbeddingHelper")
             return false
         }
     }

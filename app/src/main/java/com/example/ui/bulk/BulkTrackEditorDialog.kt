@@ -690,10 +690,11 @@ fun BulkTrackEditorDialog(
                         showDeleteFilesConfirm = false
                         coroutineScope.launch(Dispatchers.IO) {
                             selectedTracks.forEach { track ->
-                                try {
-                                    val f = File(track.filePath)
-                                    if (f.exists()) f.delete()
-                                } catch (_: Exception) {}
+                                com.example.storage.FileDeletionGuard.deleteAudioFile(
+                                    file = File(track.filePath),
+                                    reason = com.example.storage.DeletionReason.EXPLICIT_USER_ACTION,
+                                    caller = "BulkTrackEditorDialog"
+                                )
                             }
                             trackDao.deleteTracksByIds(selectedTracks.map { it.id })
                             withContext(Dispatchers.Main) {

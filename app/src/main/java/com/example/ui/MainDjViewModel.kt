@@ -1617,13 +1617,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 val path: String = t.filePath
                 if (path.startsWith("demo://")) continue
 
-                // CRITICAL: NEVER delete tracks from external USB or SD card storage when unmounted/disconnected!
+                // Stage 8: If file is currently locked by a write/analysis operation, do not treat as missing!
+                if (com.example.storage.FileLockManager.isFileLocked(path)) {
+                    continue
+                }
+
+                // Stage 10: NEVER delete tracks from external USB or SD card storage when unmounted/disconnected!
                 val track = t.toTrack()
                 if (com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(track)) {
                     continue
                 }
 
                 var exists = false
+                var parentAccessible = true
                 if (path.startsWith("content://")) {
                     try {
                         val fd = app.contentResolver.openFileDescriptor(Uri.parse(path), "r")
@@ -1633,10 +1639,17 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                         }
                     } catch (ignored: Exception) {}
                 } else {
-                    exists = File(path).exists()
+                    val f = File(path)
+                    val parent = f.parentFile
+                    // If parent folder itself does not exist or cannot be read, storage volume may be unmounted
+                    if (parent != null && (!parent.exists() || !parent.canRead())) {
+                        parentAccessible = false
+                    }
+                    exists = f.exists()
                 }
 
-                if (!exists && !path.contains("/Music/Tech House/")) {
+                // Only clean if parent storage is accessible and file is genuinely missing (not demo)
+                if (!exists && parentAccessible && !path.contains("/Music/Tech House/")) {
                     trackDao.deleteTrackById(t.id)
                     missingCount++
                 }

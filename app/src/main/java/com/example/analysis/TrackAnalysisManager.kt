@@ -463,7 +463,7 @@ class TrackAnalysisManager private constructor(
                     val res = metadataResolver.resolveTrackMetadata(
                         track = updatedTrack,
                         forceRefresh = false,
-                        embedArtworkToFile = true
+                        embedArtworkToFile = false // Safe non-destructive background scan (Stage 9)
                     )
                     updatedTrack = res.updatedTrack
                 } catch (e: Exception) {
@@ -482,11 +482,16 @@ class TrackAnalysisManager private constructor(
 
             trackDao.updateTrack(TrackEntity.fromTrack(finalTrack))
 
-            // Authoritative persistence: physically write analyzed BPM & Key into audio file
+            // Non-Destructive Scanning (Stage 9):
+            // Analyzed BPM, Key, Waveform are persisted in Room DB.
+            // Only enqueue physical audio file write if explicitly permitted and approval is not required.
             try {
-                MetadataFileWriteQueue.getInstance(context).enqueue(finalTrack)
+                val metaSettings = com.example.metadata.MetadataSettingsStore(context).load()
+                if (metaSettings.writeToFileEnabled && !metaSettings.writeMetadataOnlyAfterApproval) {
+                    MetadataFileWriteQueue.getInstance(context).enqueue(finalTrack)
+                }
             } catch (queueEx: Exception) {
-                Log.w(TAG, "Failed to enqueue file write after analysis: ${queueEx.message}")
+                Log.w(TAG, "Failed to check or enqueue file write after analysis: ${queueEx.message}")
             }
 
             true
