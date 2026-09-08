@@ -133,7 +133,6 @@ object StorageWritePermissionHelper {
             if (mediaId != null && mediaId > 0L) {
                 val mediaUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, mediaId)
                 if (isMediaStoreUriValid(context, mediaUri)) {
-                    persistCanonicalPath(trackDao, track.id, mediaUri.toString())
                     val writable = hasUriWritePermission(context, mediaUri)
                     return CanonicalStorageInfo(uri = mediaUri, isDirectFile = false, isWritable = writable)
                 }
@@ -144,7 +143,6 @@ object StorageWritePermissionHelper {
         if (path.isNotBlank()) {
             val mediaStoreUri = AudioTagWriter.getMediaStoreUriForPath(context, path)
             if (mediaStoreUri != null && isMediaStoreUriValid(context, mediaStoreUri)) {
-                persistCanonicalPath(trackDao, track.id, mediaStoreUri.toString())
                 val writable = hasUriWritePermission(context, mediaStoreUri)
                 return CanonicalStorageInfo(uri = mediaStoreUri, isDirectFile = false, isWritable = writable)
             }
@@ -155,7 +153,6 @@ object StorageWritePermissionHelper {
         if (fileName.isNotBlank()) {
             val uriByName = queryMediaStoreByDisplayName(context, fileName, track.durationSeconds, rawFile?.parent)
             if (uriByName != null && isMediaStoreUriValid(context, uriByName)) {
-                persistCanonicalPath(trackDao, track.id, uriByName.toString())
                 val writable = hasUriWritePermission(context, uriByName)
                 return CanonicalStorageInfo(uri = uriByName, isDirectFile = false, isWritable = writable)
             }
@@ -164,7 +161,6 @@ object StorageWritePermissionHelper {
         // Tier 6: Persisted SAF Directory Trees
         val safDoc = SafStorageManager.findDocumentForTrack(context, track)
         if (safDoc != null && safDoc.exists()) {
-            persistCanonicalPath(trackDao, track.id, safDoc.uri.toString())
             val writable = safDoc.canWrite() || hasUriWritePermission(context, safDoc.uri)
             return CanonicalStorageInfo(uri = safDoc.uri, isDirectFile = false, isWritable = writable)
         }

@@ -379,20 +379,47 @@ object AudioTagWriter {
     }
 
     /**
-     * Multi-tiered file replacement ensuring writes succeed on Android FAT/FUSE emulated storage:
-     * Tier 1: Java NIO Files.move (ATOMIC_MOVE)
-     * Tier 2: Java NIO Files.move (REPLACE_EXISTING)
-     * Tier 3: Direct File.renameTo
-     * Tier 4: Original File.delete followed by renameTo
-     * Tier 5: In-place FileOutputStream overwrite with sync() (essential fallback on Android FUSE)
+     * Replaces the contents of [originalFile] with the contents of [tempFile].
+     *
+     * CRITICAL FOR ANDROID STORAGE & MEDIASTORE STABILITY:
+     * We prioritize IN-PLACE TRUNCATE & OVERWRITE (Tier 1) so that the file's inode,
+     * MediaStore identity, and SAF URI permissions remain completely intact.
+     * Deleting/renaming causes Android's FUSE daemon to assign a new inode,
+     * invalidating MediaStore URIs and causing false "external storage disconnected" errors.
      */
     fun replaceOriginalFile(originalFile: File, tempFile: File): Boolean {
         if (!tempFile.exists() || tempFile.length() == 0L) {
-            Log.e(TAG, "replaceOriginalFile: Temp staging file is missing or empty")
+            Log.e(TAG, "[AudioTagWriter] replaceOriginalFile: Staging file is missing or empty for ${originalFile.absolutePath}")
             return false
         }
 
-        // Tier 1: Atomic move via NIO
+        val originalPath = originalFile.absolutePath
+        val stagingSize = tempFile.length()
+        val originalSizeBefore = if (originalFile.exists()) originalFile.length() else 0L
+
+        Log.d(TAG, "[AudioTagWriter] Starting file replacement for '$originalPath' (before=${originalSizeBefore}B, new=${stagingSize}B)")
+
+        // Tier 1 (PREFERRED): In-place content stream overwrite with fsync
+        // Preserves existing filesystem inode, MediaStore ID, and SAF permissions.
+        try {
+            if (originalFile.exists() && originalFile.canWrite()) {
+                tempFile.inputStream().buffered(64 * 1024).use { src ->
+                    FileOutputStream(originalFile, false).use { dst ->
+                        src.copyTo(dst, 64 * 1024)
+                        dst.flush()
+                        dst.fd.sync()
+                    }
+                }
+                tempFile.delete()
+                val finalSize = originalFile.length()
+                Log.i(TAG, "[AudioTagWriter] In-place write SUCCESS: '$originalPath' ($finalSize bytes written, inode preserved)")
+                return true
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "[AudioTagWriter] In-place overwrite failed for '$originalPath', trying fallback tiers: ${e.message}")
+        }
+
+        // Tier 2: Atomic move via NIO
         try {
             Files.move(
                 tempFile.toPath(),
@@ -400,45 +427,51 @@ object AudioTagWriter {
                 StandardCopyOption.REPLACE_EXISTING,
                 StandardCopyOption.ATOMIC_MOVE
             )
+            Log.i(TAG, "[AudioTagWriter] Replacement via NIO ATOMIC_MOVE succeeded for '$originalPath'")
             return true
         } catch (_: Throwable) {}
 
-        // Tier 2: Replace existing via NIO
+        // Tier 3: Replace existing via NIO
         try {
             Files.move(
                 tempFile.toPath(),
                 originalFile.toPath(),
                 StandardCopyOption.REPLACE_EXISTING
             )
+            Log.i(TAG, "[AudioTagWriter] Replacement via NIO REPLACE_EXISTING succeeded for '$originalPath'")
             return true
         } catch (_: Throwable) {}
 
-        // Tier 3: Direct renameTo
+        // Tier 4: Direct renameTo
         try {
             if (tempFile.renameTo(originalFile)) {
+                Log.i(TAG, "[AudioTagWriter] Replacement via renameTo succeeded for '$originalPath'")
                 return true
             }
         } catch (_: Throwable) {}
 
-        // Tier 4: Delete original and rename
+        // Tier 5: Delete original and rename
         try {
             if (originalFile.delete() && tempFile.renameTo(originalFile)) {
+                Log.i(TAG, "[AudioTagWriter] Replacement via delete + renameTo succeeded for '$originalPath'")
                 return true
             }
         } catch (_: Throwable) {}
 
-        // Tier 5: In-place content stream overwrite
+        // Tier 6: Final fallback stream copy
         return try {
             tempFile.inputStream().buffered().use { src ->
                 FileOutputStream(originalFile, false).use { dst ->
                     src.copyTo(dst, 64 * 1024)
+                    dst.flush()
                     dst.fd.sync()
                 }
             }
             tempFile.delete()
+            Log.i(TAG, "[AudioTagWriter] Final stream fallback succeeded for '$originalPath'")
             true
         } catch (e: Throwable) {
-            Log.e(TAG, "replaceOriginalFile: All replacement tiers failed for ${originalFile.name}: ${e.message}", e)
+            Log.e(TAG, "[AudioTagWriter] ALL replacement tiers failed for '$originalPath': ${e.message}", e)
             false
         }
     }

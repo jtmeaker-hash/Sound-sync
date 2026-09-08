@@ -1057,8 +1057,27 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
         audioEngine.onTrackUnavailableCallback = { unplayableTrack ->
             viewModelScope.launch(Dispatchers.Main) {
-                showSnackbar("Skipping '${unplayableTrack.title}' (storage is disconnected)...")
-                nextTrack()
+                Log.w("MainDjViewModel", "Engine reported track unavailable: '${unplayableTrack.title}' (${unplayableTrack.filePath}). Attempting self-healing...")
+                val healed = withContext(Dispatchers.IO) {
+                    com.example.storage.TrackSelfHealingResolver.healTrack(getApplication(), unplayableTrack, trackDao)
+                }
+                if (healed != null) {
+                    Log.i("MainDjViewModel", "Self-healing recovered track reference: ${unplayableTrack.filePath} -> ${healed.filePath}. Resuming playback.")
+                    updateTrackInPlaybackQueue(healed)
+                    audioEngine.loadTrack(healed, autoPlay = true)
+                } else {
+                    val isGenuinelyDisconnected = com.example.storage.StorageAvailabilityHelper.isRootGenuinelyDisconnected(getApplication(), unplayableTrack)
+                    if (isGenuinelyDisconnected) {
+                        val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(unplayableTrack)
+                        val source = if (isUsb) "USB drive" else "external storage"
+                        showSnackbar("Skipping '${unplayableTrack.title}': $source is disconnected.")
+                    } else {
+                        val isContent = unplayableTrack.filePath.startsWith("content://")
+                        val reason = if (isContent) "media reference expired" else "audio file inaccessible"
+                        showSnackbar("Skipping '${unplayableTrack.title}': $reason.")
+                    }
+                    nextTrack()
+                }
             }
         }
     }
@@ -1207,17 +1226,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private fun isTrackAvailableForQueue(track: Track): Boolean {
         if (track.filePath.startsWith("demo://")) return true
         if (track.platforms.any { it != MusicPlatform.LOCAL }) return true
-        return try {
-            if (track.filePath.startsWith("content://") || track.filePath.startsWith("file://")) {
-                getApplication<Application>().contentResolver
-                    .openAssetFileDescriptor(Uri.parse(track.filePath), "r")?.use { true } ?: false
-            } else {
-                val file = File(track.filePath)
-                file.exists() && file.canRead()
-            }
-        } catch (_: Exception) {
-            false
+        if (com.example.storage.StorageAvailabilityHelper.isTrackPathAvailable(getApplication(), track.filePath)) {
+            return true
         }
+        return com.example.storage.TrackSelfHealingResolver.resolveAnyPlayablePath(getApplication(), track) != null
     }
 
     private fun observeGoogleDriveState() {
@@ -2299,24 +2311,58 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         playOrPreviewTrack(list[prevIndex], preserveQueue = playbackQueue.value.isNotEmpty())
     }
 
+    fun updateTrackInPlaybackQueue(updatedTrack: Track) {
+        val currentQueue = playbackQueue.value
+        if (currentQueue.any { it.id == updatedTrack.id }) {
+            playbackQueue.value = currentQueue.map { if (it.id == updatedTrack.id) updatedTrack else it }
+        }
+    }
+
     fun playOrPreviewTrack(track: Track, preserveQueue: Boolean = false) {
-        if (!track.isAvailable || !com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), track)) {
-            val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(track)
-            val sourceLabel = if (isUsb) "USB drive" else "external storage"
-            showSnackbar("Cannot play '${track.title}': $sourceLabel is disconnected. Reconnect device to play.")
-            return
-        }
-        if (!preserveQueue && playbackQueue.value.isNotEmpty()) {
-            playbackQueue.value = emptyList()
-            queueIndex.value = 0
-        }
-        if (audioEngine.currentTrack.value?.id == track.id) {
-            audioEngine.togglePlayPause()
-        } else {
-            audioEngine.loadTrack(track, autoPlay = true)
-            inspectTrackSpectrogram(track)
-            resolveBpmAndKeyForTrack(track)
-            lyricsManager.loadForTrack(track)
+        viewModelScope.launch(Dispatchers.Main) {
+            var effectiveTrack = track
+
+            val isAvailable = effectiveTrack.isAvailable && com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), effectiveTrack)
+            if (!isAvailable) {
+                val isGenuinelyDisconnected = com.example.storage.StorageAvailabilityHelper.isRootGenuinelyDisconnected(getApplication(), effectiveTrack)
+                if (isGenuinelyDisconnected) {
+                    val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(effectiveTrack)
+                    val sourceLabel = if (isUsb) "USB drive" else "external storage"
+                    Log.w("MainDjViewModel", "Cannot play '${effectiveTrack.title}': $sourceLabel is disconnected (${effectiveTrack.filePath})")
+                    showSnackbar("Cannot play '${effectiveTrack.title}': $sourceLabel is disconnected. Reconnect device to play.")
+                    return@launch
+                }
+
+                Log.i("MainDjViewModel", "Track '${effectiveTrack.title}' unplayable at '${effectiveTrack.filePath}'. Attempting self-healing...")
+                val healed = withContext(Dispatchers.IO) {
+                    com.example.storage.TrackSelfHealingResolver.healTrack(getApplication(), effectiveTrack, trackDao)
+                }
+
+                if (healed != null) {
+                    Log.i("MainDjViewModel", "Self-healing SUCCESS for '${healed.title}': new path='${healed.filePath}'")
+                    effectiveTrack = healed
+                    updateTrackInPlaybackQueue(healed)
+                } else {
+                    val isContent = effectiveTrack.filePath.startsWith("content://")
+                    val errorReason = if (isContent) "media reference expired" else "audio file not found or inaccessible"
+                    Log.e("MainDjViewModel", "Playback failed for '${effectiveTrack.title}': $errorReason (${effectiveTrack.filePath})")
+                    showSnackbar("Cannot play '${effectiveTrack.title}': $errorReason.")
+                    return@launch
+                }
+            }
+
+            if (!preserveQueue && playbackQueue.value.isNotEmpty()) {
+                playbackQueue.value = emptyList()
+                queueIndex.value = 0
+            }
+            if (audioEngine.currentTrack.value?.id == effectiveTrack.id) {
+                audioEngine.togglePlayPause()
+            } else {
+                audioEngine.loadTrack(effectiveTrack, autoPlay = true)
+                inspectTrackSpectrogram(effectiveTrack)
+                resolveBpmAndKeyForTrack(effectiveTrack)
+                lyricsManager.loadForTrack(effectiveTrack)
+            }
         }
     }
 
@@ -2361,42 +2407,70 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             trackDao.updateTrack(TrackEntity.fromTrack(updated))
-            if (audioEngine.currentTrack.value?.id == track.id) {
-                withContext(Dispatchers.Main) {
+            withContext(Dispatchers.Main) {
+                updateTrackInPlaybackQueue(updated)
+                if (audioEngine.currentTrack.value?.id == track.id) {
                     audioEngine.updateCurrentTrackMetadata(updated)
                 }
-            }
-            if (_inspectingTrackForProperties.value?.id == track.id) {
-                _inspectingTrackForProperties.value = updated
+                if (_inspectingTrackForProperties.value?.id == track.id) {
+                    _inspectingTrackForProperties.value = updated
+                }
             }
         }
     }
 
     fun playTrack(track: Track) {
-        if (!track.isAvailable || !com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), track)) {
-            val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(track)
-            val sourceLabel = if (isUsb) "USB drive" else "external storage"
-            showSnackbar("Cannot play '${track.title}': $sourceLabel is disconnected. Reconnect device to play.")
-            return
+        viewModelScope.launch(Dispatchers.Main) {
+            var effectiveTrack = track
+
+            val isAvailable = effectiveTrack.isAvailable && com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), effectiveTrack)
+            if (!isAvailable) {
+                val isGenuinelyDisconnected = com.example.storage.StorageAvailabilityHelper.isRootGenuinelyDisconnected(getApplication(), effectiveTrack)
+                if (isGenuinelyDisconnected) {
+                    val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(effectiveTrack)
+                    val sourceLabel = if (isUsb) "USB drive" else "external storage"
+                    Log.w("MainDjViewModel", "Cannot play '${effectiveTrack.title}': $sourceLabel is disconnected (${effectiveTrack.filePath})")
+                    showSnackbar("Cannot play '${effectiveTrack.title}': $sourceLabel is disconnected. Reconnect device to play.")
+                    return@launch
+                }
+
+                Log.i("MainDjViewModel", "Track '${effectiveTrack.title}' unplayable at '${effectiveTrack.filePath}'. Attempting self-healing...")
+                val healed = withContext(Dispatchers.IO) {
+                    com.example.storage.TrackSelfHealingResolver.healTrack(getApplication(), effectiveTrack, trackDao)
+                }
+
+                if (healed != null) {
+                    Log.i("MainDjViewModel", "Self-healing SUCCESS for '${healed.title}': new path='${healed.filePath}'")
+                    effectiveTrack = healed
+                    updateTrackInPlaybackQueue(healed)
+                } else {
+                    val isContent = effectiveTrack.filePath.startsWith("content://")
+                    val errorReason = if (isContent) "media reference expired" else "audio file not found or inaccessible"
+                    Log.e("MainDjViewModel", "Playback failed for '${effectiveTrack.title}': $errorReason (${effectiveTrack.filePath})")
+                    showSnackbar("Cannot play '${effectiveTrack.title}': $errorReason.")
+                    return@launch
+                }
+            }
+
+            val sourceTracks = when {
+                selectedFolder.value != null -> selectedFolder.value?.tracks.orEmpty()
+                selectedAlbum.value != null -> selectedAlbum.value?.tracks.orEmpty()
+                selectedArtist.value != null -> selectedArtist.value?.songs.orEmpty()
+                selectedPlaylist.value != null -> selectedPlaylist.value?.tracks.orEmpty()
+                else -> filteredTracks.value.ifEmpty { allTracks.value }
+            }
+            val targetList = if (sourceTracks.any { it.id == effectiveTrack.id }) {
+                sourceTracks.map { if (it.id == effectiveTrack.id) effectiveTrack else it }
+            } else {
+                val fallback = allTracks.value
+                if (fallback.any { it.id == effectiveTrack.id }) fallback.map { if (it.id == effectiveTrack.id) effectiveTrack else it } else listOf(effectiveTrack)
+            }
+            val index = targetList.indexOfFirst { it.id == effectiveTrack.id }
+            playbackQueue.value = targetList
+            queueIndex.value = if (index >= 0) index else 0
+            nextTrackForCrossfade = null
+            playOrPreviewTrack(effectiveTrack, preserveQueue = true)
         }
-        val sourceTracks = when {
-            selectedFolder.value != null -> selectedFolder.value?.tracks.orEmpty()
-            selectedAlbum.value != null -> selectedAlbum.value?.tracks.orEmpty()
-            selectedArtist.value != null -> selectedArtist.value?.songs.orEmpty()
-            selectedPlaylist.value != null -> selectedPlaylist.value?.tracks.orEmpty()
-            else -> filteredTracks.value.ifEmpty { allTracks.value }
-        }
-        val targetList = if (sourceTracks.any { it.id == track.id }) {
-            sourceTracks
-        } else {
-            val fallback = allTracks.value
-            if (fallback.any { it.id == track.id }) fallback else listOf(track)
-        }
-        val index = targetList.indexOfFirst { it.id == track.id }
-        playbackQueue.value = targetList
-        queueIndex.value = if (index >= 0) index else 0
-        nextTrackForCrossfade = null
-        playOrPreviewTrack(track, preserveQueue = true)
     }
 
     fun openTrackProperties(track: Track) {

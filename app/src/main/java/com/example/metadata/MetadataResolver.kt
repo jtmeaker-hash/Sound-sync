@@ -540,7 +540,13 @@ class MetadataResolver(
             if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] DEFERRED: awaiting user confirmation; preserved in database")
         }
 
+        val latestDb = if (dao != null && intermediateTrack.id.isNotBlank()) {
+            try { dao.getTrackById(intermediateTrack.id) } catch (_: Exception) { null }
+        } else null
+        val reconciledFilePath = latestDb?.filePath?.takeIf { it.isNotBlank() } ?: intermediateTrack.filePath
+
         val finalTrack = intermediateTrack.copy(
+            filePath = reconciledFilePath,
             artworkUrl = finalArtworkUrl,
             artworkSource = artworkSource,
             artworkCachePath = artworkCachePath,

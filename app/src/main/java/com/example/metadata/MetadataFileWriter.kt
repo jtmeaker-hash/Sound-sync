@@ -11,8 +11,10 @@ import com.example.model.MetadataWriteState
 import com.example.model.Track
 import com.example.storage.AudioTagWriter
 import com.example.storage.CompleteTagPayload
+import com.example.storage.StorageAvailabilityHelper
 import com.example.storage.StorageWritePermissionHelper
 import com.example.storage.TagWriteResult
+import com.example.storage.TrackSelfHealingResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -496,6 +498,26 @@ class MetadataFileWriter(
         }
 
         updateDbState(track.id, result.writeState)
+
+        // Post-write verification of media reference accessibility & reconciliation
+        try {
+            val isCurrentPathAvailable = StorageAvailabilityHelper.isTrackPathAvailable(context, track.filePath)
+            if (!isCurrentPathAvailable) {
+                Log.w(TAG, "[MetadataFileWriter] Stored path '${track.filePath}' is inaccessible after write for '${track.title}'. Reconciling reference...")
+                val healed = TrackSelfHealingResolver.healTrack(context, track, trackDao)
+                if (healed != null) {
+                    Log.i(TAG, "[MetadataFileWriter] Post-write reconciliation SUCCESS: new path='${healed.filePath}'")
+                } else if (targetWritePath.isNotBlank() && StorageAvailabilityHelper.isTrackPathAvailable(context, targetWritePath)) {
+                    Log.i(TAG, "[MetadataFileWriter] Post-write fallback: Reconciling to verified targetWritePath: '$targetWritePath'")
+                    trackDao?.updateFilePath(track.id, targetWritePath)
+                }
+            } else {
+                Log.d(TAG, "[MetadataFileWriter] Verified track '${track.title}' media reference remains accessible at '${track.filePath}'")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "[MetadataFileWriter] Post-write reconciliation check failed: ${e.message}")
+        }
+
         result
     }
 

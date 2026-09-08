@@ -491,15 +491,30 @@ class DjAudioEngine(private val context: Context) {
         try { com.example.service.MediaPlaybackService.startService(context) } catch (_: Exception) {}
 
         if (!track.isAvailable) {
-            Log.w(TAG, "Cannot play track '${track.title}': storage device is disconnected (${track.filePath})")
-            _isPlaying.value = false
-            decoderShouldPause = true
-            stopPlaybackImmediately()
-            onTrackUnavailableCallback?.invoke(track)
-        } else if (track.filePath.startsWith("demo://") || !isUriAccessible(track.filePath)) {
+            val healedPath = com.example.storage.TrackSelfHealingResolver.resolveAnyPlayablePath(context, track)
+            if (healedPath != null && isUriAccessible(healedPath)) {
+                _currentTrack.value = track.copy(filePath = healedPath, isAvailable = true)
+                startStreamingPlayback(session)
+            } else {
+                Log.w(TAG, "Cannot play track '${track.title}': reference inaccessible (${track.filePath})")
+                _isPlaying.value = false
+                decoderShouldPause = true
+                stopPlaybackImmediately()
+                onTrackUnavailableCallback?.invoke(track)
+            }
+        } else if (track.filePath.startsWith("demo://")) {
             startAudioSynthesis(session)
-        } else {
+        } else if (isUriAccessible(track.filePath)) {
             startStreamingPlayback(session)
+        } else {
+            val healedPath = com.example.storage.TrackSelfHealingResolver.resolveAnyPlayablePath(context, track)
+            if (healedPath != null && isUriAccessible(healedPath)) {
+                Log.i(TAG, "Self-healed track path for engine playback: ${track.filePath} -> $healedPath")
+                _currentTrack.value = track.copy(filePath = healedPath, isAvailable = true)
+                startStreamingPlayback(session)
+            } else {
+                startAudioSynthesis(session)
+            }
         }
     }
 
@@ -1418,7 +1433,10 @@ class DjAudioEngine(private val context: Context) {
         return try {
             if (uriOrPath.startsWith("content://")) {
                 val uri = Uri.parse(uriOrPath)
-                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
+                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true }
+                    ?: context.contentResolver.openFileDescriptor(uri, "r")?.use { true }
+                    ?: context.contentResolver.openInputStream(uri)?.use { true }
+                    ?: false
             } else if (uriOrPath.startsWith("file://")) {
                 val file = File(Uri.parse(uriOrPath).path ?: "")
                 file.exists() && file.canRead()
@@ -1439,13 +1457,25 @@ class DjAudioEngine(private val context: Context) {
                     extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
                     return
                 }
+            } catch (_: Exception) {}
+            try {
+                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    extractor.setDataSource(pfd.fileDescriptor)
+                    return
+                }
+            } catch (_: Exception) {}
+            try {
                 extractor.setDataSource(context, uri, null)
-            } catch (_: Exception) {
-                extractor.setDataSource(context, uri, null)
-            }
-        } else {
-            extractor.setDataSource(uriOrPath)
+                return
+            } catch (_: Exception) {}
         }
+        val cleanPath = uriOrPath.removePrefix("file://")
+        val file = File(cleanPath)
+        if (file.exists() && file.canRead()) {
+            extractor.setDataSource(cleanPath)
+            return
+        }
+        extractor.setDataSource(uriOrPath)
     }
 
     // ── Release ────────────────────────────────────────────────────────────

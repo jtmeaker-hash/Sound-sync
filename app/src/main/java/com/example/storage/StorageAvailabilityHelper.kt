@@ -127,13 +127,62 @@ object StorageAvailabilityHelper {
     }
 
     /**
-     * Checks whether a specific file path is currently accessible on device storage.
+     * Determines whether a track is genuinely stored on an external removable storage medium
+     * (such as a USB OTG drive or SD card) whose root volume is currently unmounted or disconnected.
+     *
+     * Files on internal or emulated storage (/storage/emulated/0, content://) NEVER return true here.
+     * This prevents false "storage is disconnected" alerts when a file reference is simply stale or modified.
+     */
+    fun isRootGenuinelyDisconnected(context: Context, track: Track): Boolean {
+        val path = track.filePath
+        if (path.isBlank() || path.startsWith("demo://") || path.startsWith("http")) return false
+
+        // Internal / emulated storage tracks are never physically disconnected external devices
+        if (path.startsWith("/storage/emulated/") || path.startsWith("file:///storage/emulated/")) return false
+
+        if (path.startsWith("content://")) {
+            // Check if the content URI points to an explicit removable external volume
+            val uri = Uri.parse(path)
+            val segments = uri.pathSegments
+            val volumeId = segments.firstOrNull { it.matches(Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")) }
+            if (volumeId != null) {
+                val volDir = File("/storage/$volumeId")
+                return !volDir.exists() || !volDir.canRead()
+            }
+            return false
+        }
+
+        // Direct file paths on external storage
+        if (isExternalStorageTrack(track)) {
+            val root = getStorageRoot(path.removePrefix("file://"))
+            if (root != null && !root.contains("emulated")) {
+                val rootDir = File(root)
+                return !rootDir.exists() || !rootDir.canRead()
+            }
+            // Check UUID volume format /storage/XXXX-XXXX
+            val cleanPath = path.removePrefix("file://")
+            val volumeMatch = Regex(".*/storage/([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})(/.*)?").find(cleanPath)
+            if (volumeMatch != null) {
+                val vol = volumeMatch.groupValues[1]
+                val volDir = File("/storage/$vol")
+                return !volDir.exists() || !volDir.canRead()
+            }
+        }
+        return false
+    }
+
+    /**
+     * Checks whether a specific file path or content URI is currently accessible on device storage.
      */
     fun isTrackPathAvailable(context: Context, filePath: String): Boolean {
         if (filePath.startsWith("demo://")) return true
         if (filePath.startsWith("content://")) {
             return try {
-                context.contentResolver.openFileDescriptor(Uri.parse(filePath), "r")?.use { true } ?: false
+                val uri = Uri.parse(filePath)
+                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true }
+                    ?: context.contentResolver.openFileDescriptor(uri, "r")?.use { true }
+                    ?: context.contentResolver.openInputStream(uri)?.use { true }
+                    ?: false
             } catch (_: Exception) {
                 false
             }
