@@ -80,7 +80,16 @@ class DatabaseIntegrityChecker(
         val seenPaths = mutableMapOf<String, String>() // normalized path -> trackId
         for (track in allTracks) {
             val normPath = track.filePath.trim()
-            val exists = fileExists(normPath)
+            var exists = fileExists(normPath)
+
+            if (!exists) {
+                // Try quick canonical or self-healing resolution before declaring missing
+                val playable = com.example.storage.CanonicalStorageHelper.resolvePlayableReference(context, normPath)
+                if (playable != null) {
+                    trackDao.updateFilePath(track.id, playable)
+                    exists = true
+                }
+            }
 
             if (!exists) {
                 missingFiles++
@@ -91,7 +100,7 @@ class DatabaseIntegrityChecker(
                         trackId = track.id,
                         title = "File Missing: ${track.title}",
                         description = "Physical file cannot be accessed at path: ${track.filePath}",
-                        isAutoRepairable = false // User review to avoid deleting tracks whose SD card is temporarily detached
+                        isAutoRepairable = true // Can attempt self-healing relinking
                     )
                 )
             } else {
@@ -277,6 +286,17 @@ class DatabaseIntegrityChecker(
                             }
                         }
                     }
+                    IntegrityIssueType.ORPHANED_TRACK -> {
+                        issue.trackId?.let { tid ->
+                            val trackEntity = trackDao.getTrackById(tid)
+                            if (trackEntity != null) {
+                                val healed = com.example.storage.TrackSelfHealingResolver.healTrack(context, trackEntity.toTrack(), trackDao)
+                                if (healed != null) {
+                                    repairedCount++
+                                }
+                            }
+                        }
+                    }
                     else -> {}
                 }
             } catch (e: Exception) {
@@ -290,19 +310,6 @@ class DatabaseIntegrityChecker(
     }
 
     private fun fileExists(pathOrUri: String): Boolean {
-        return try {
-            if (pathOrUri.isBlank()) return false
-            if (pathOrUri.startsWith("content://")) {
-                val uri = Uri.parse(pathOrUri)
-                context.contentResolver.openInputStream(uri)?.use { true } ?: false
-            } else {
-                val cleanPath = if (pathOrUri.startsWith("file://")) {
-                    Uri.parse(pathOrUri).path ?: pathOrUri.removePrefix("file://")
-                } else pathOrUri
-                File(cleanPath).exists()
-            }
-        } catch (e: Exception) {
-            false
-        }
+        return com.example.storage.CanonicalStorageHelper.isReferenceReadable(context, pathOrUri)
     }
 }

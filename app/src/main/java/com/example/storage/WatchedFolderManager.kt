@@ -101,22 +101,22 @@ class WatchedFolderManager(
                 continue // Already indexed at this exact path
             }
 
-            // Generate quick fingerprint to check if this is a moved or renamed file
-            val fingerprint = if (folder.autoFingerprint) {
-                AudioFingerprintUtil.generateFingerprint(context, file.absolutePath, file.length(), 0)
-            } else ""
+            // Generate fingerprint to check if this is a moved or renamed file
+            val fingerprint = AudioFingerprintUtil.generateFingerprint(context, file.absolutePath, file.length(), 0)
 
             val movedMatch: TrackEntity? = if (fingerprint.isNotBlank()) existingFingerprintMap[fingerprint] else null
 
             if (movedMatch != null) {
-                // Moved file detected! Update filePath while preserving track ID and data!
+                // Moved file detected! Update filePath while preserving track ID and all analysis/cues!
                 Log.i(TAG, "Detected moved file: ${movedMatch.filePath} -> ${file.absolutePath}")
-                trackDao.updateTrack(
-                    movedMatch.copy(
-                        filePath = file.absolutePath,
-                        fileModifiedTimestamp = file.lastModified()
-                    )
+                val relinked = TrackIdentityReconciler.relinkTrackEntity(
+                    existing = movedMatch,
+                    newPathOrUri = file.absolutePath,
+                    newDirectoryPath = file.parent ?: "",
+                    newFingerprint = fingerprint,
+                    newModifiedTimestamp = file.lastModified()
                 )
+                trackDao.updateTrack(relinked)
             } else if (folder.autoScanNewFiles) {
                 // New file found! Extract metadata and insert
                 val meta = AudioEmbeddedMetadataReader.read(context, file.absolutePath)

@@ -1517,29 +1517,49 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             _isScanning.value = true
             _scanProgressMessage.value = "Importing ${uris.size} audio files..."
 
-            val existingFingerprints = trackDao.getAllFingerprints().toMutableSet()
-            val existingFilePaths = trackDao.getAllFilePaths().toMutableSet()
+            val allExisting = trackDao.getAllTracksSync()
+            val reconcilerIndexes = com.example.storage.TrackIdentityReconciler.buildIndexes(app, allExisting)
 
             val imported = mutableListOf<Track>()
+            var relinkedCount = 0
             var skippedCount = 0
             var failedCount = 0
 
             for ((index, uri) in uris.withIndex()) {
                 _scanProgressMessage.value = "Processing file (${index + 1}/${uris.size})..."
                 val uriStr = uri.toString()
-                if (existingFilePaths.contains(uriStr)) {
-                    skippedCount++
-                    continue
-                }
 
                 val track = MediaScannerHelper.extractTrackFromUri(app, uri)
                 if (track != null) {
-                    if (track.contentFingerprint.isNotBlank() && existingFingerprints.contains(track.contentFingerprint)) {
+                    val candidateSizeBytes = try {
+                        app.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: 0L
+                    } catch (_: Exception) { 0L }
+
+                    val reconciliation = com.example.storage.TrackIdentityReconciler.reconcileCandidate(
+                        candidatePathOrUri = uriStr,
+                        candidateFingerprint = track.contentFingerprint,
+                        candidateSizeBytes = candidateSizeBytes,
+                        candidateDurationSec = track.durationSeconds,
+                        candidateTitle = track.title,
+                        candidateArtist = track.artist,
+                        candidateAlbum = track.album,
+                        candidateIsrc = track.isrc,
+                        candidateModified = System.currentTimeMillis(),
+                        context = app,
+                        indexes = reconcilerIndexes
+                    )
+
+                    if (reconciliation.isRelinked && reconciliation.relinkedTrack != null) {
+                        trackDao.updateTrack(reconciliation.relinkedTrack)
+                        relinkedCount++
+                    } else if (reconciliation.matchedTrack != null) {
                         skippedCount++
                     } else {
                         imported.add(track)
-                        if (track.contentFingerprint.isNotBlank()) existingFingerprints.add(track.contentFingerprint)
-                        existingFilePaths.add(track.filePath)
+                        com.example.storage.TrackIdentityReconciler.registerTrackInIndices(
+                            TrackEntity.fromTrack(track),
+                            reconcilerIndexes
+                        )
                     }
                 } else {
                     failedCount++
@@ -1656,6 +1676,14 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                         parentAccessible = false
                     }
                     exists = f.exists()
+                }
+
+                if (!exists) {
+                    // Attempt self-healing / relinking before considering track missing
+                    val healed = com.example.storage.TrackSelfHealingResolver.healTrack(app, track, trackDao)
+                    if (healed != null) {
+                        exists = true
+                    }
                 }
 
                 // Only clean if parent storage is accessible and file is genuinely missing (not demo)

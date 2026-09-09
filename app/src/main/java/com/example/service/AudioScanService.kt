@@ -152,10 +152,11 @@ class AudioScanService : Service() {
             val trackBatch = mutableListOf<TrackEntity>()
             val BATCH_SIZE = 200
             var lastProgressEmitTime = 0L
+            var totalRelinked = 0
 
             try {
-                val seenFingerprints = database.trackDao().getAllFingerprints().toMutableSet()
-                val seenPaths = database.trackDao().getAllFilePaths().toMutableSet()
+                val existingTracks = database.trackDao().getAllTracksSync()
+                val reconcilerIndexes = com.example.storage.TrackIdentityReconciler.buildIndexes(applicationContext, existingTracks)
 
                 val rootDoc = DocumentFile.fromTreeUri(applicationContext, treeUri)
                 if (rootDoc == null || !rootDoc.exists() || !rootDoc.canRead()) {
@@ -223,36 +224,58 @@ class AudioScanService : Service() {
                         try {
                             val track = extractTrackMetadata(audioFile, currentPath, sourceId)
                             if (track != null) {
-                                val fingerprint = track.contentFingerprint
-                                val path = track.filePath
+                                val reconciliation = com.example.storage.TrackIdentityReconciler.reconcileCandidate(
+                                    candidatePathOrUri = track.filePath,
+                                    candidateFingerprint = track.contentFingerprint,
+                                    candidateSizeBytes = fileSize,
+                                    candidateDurationSec = track.durationSeconds,
+                                    candidateTitle = track.title,
+                                    candidateArtist = track.artist,
+                                    candidateAlbum = track.album,
+                                    candidateIsrc = track.isrc,
+                                    candidateModified = audioFile.lastModified(),
+                                    context = applicationContext,
+                                    indexes = reconcilerIndexes
+                                )
 
-                                // Duplicate protection check
-                                if (seenFingerprints.contains(fingerprint) || seenPaths.contains(path)) {
+                                if (reconciliation.isRelinked && reconciliation.relinkedTrack != null) {
+                                    // Detected moved, renamed, or canonical-mismatched file!
+                                    // Update existing database record in-place to preserve all DJ analysis & metadata
+                                    database.trackDao().updateTrack(reconciliation.relinkedTrack)
+                                    totalRelinked++
+                                    totalIndexed++
+                                    _scanState.value = _scanState.value.copy(
+                                        filesIndexed = totalIndexed,
+                                        currentFile = "Reconnected: $fileName"
+                                    )
+                                } else if (reconciliation.matchedTrack != null) {
+                                    // Track already indexed and active at this exact location
                                     totalSkipped++
                                     _scanState.value = _scanState.value.copy(
                                         filesSkipped = totalSkipped,
                                         currentFile = "Skipped duplicate: $fileName"
                                     )
                                     continue
+                                } else {
+                                    // Brand new track
+                                    val entity = TrackEntity.fromTrack(track)
+                                    trackBatch.add(entity)
+                                    totalIndexed++
+                                    com.example.storage.TrackIdentityReconciler.registerTrackInIndices(entity, reconcilerIndexes)
+
+                                    // Flush batch if full
+                                    if (trackBatch.size >= BATCH_SIZE) {
+                                        database.trackDao().insertTracks(trackBatch.toList())
+                                        trackBatch.clear()
+                                    }
                                 }
-
-                                seenFingerprints.add(fingerprint)
-                                seenPaths.add(path)
-
-                                val entity = TrackEntity.fromTrack(track)
-                                trackBatch.add(entity)
-                                totalIndexed++
 
                                 val now = System.currentTimeMillis()
                                 val elapsed = (now - startTime).coerceAtLeast(1)
                                 val speed = (totalIndexed.toDouble() / (elapsed / 1000.0))
 
-                                // Flush batch if full
-                                if (trackBatch.size >= BATCH_SIZE) {
-                                    database.trackDao().insertTracks(trackBatch.toList())
-                                    trackBatch.clear()
+                                if (now - lastProgressEmitTime >= 250L) {
                                     lastProgressEmitTime = now
-
                                     _scanState.value = _scanState.value.copy(
                                         currentFile = fileName,
                                         filesIndexed = totalIndexed,
@@ -271,18 +294,6 @@ class AudioScanService : Service() {
                                         current = totalIndexed + totalSkipped + totalFailed,
                                         max = totalDiscovered.coerceAtLeast(totalIndexed + totalSkipped),
                                         isPaused = false
-                                    )
-                                } else if (now - lastProgressEmitTime >= 250L) {
-                                    lastProgressEmitTime = now
-                                    _scanState.value = _scanState.value.copy(
-                                        currentFile = fileName,
-                                        filesIndexed = totalIndexed,
-                                        filesSkipped = totalSkipped,
-                                        filesFailed = totalFailed,
-                                        currentFormat = track.format,
-                                        currentBitrate = track.bitrateKbps,
-                                        scanSpeedFilesPerSec = String.format(Locale.US, "%.1f", speed).toDoubleOrNull() ?: speed,
-                                        elapsedTimeMs = elapsed
                                     )
                                 }
                             } else {
@@ -332,6 +343,7 @@ class AudioScanService : Service() {
                     database.sourceFolderDao().insertSourceFolder(sourceFolder)
 
                     val totalElapsed = System.currentTimeMillis() - startTime
+                    val newlyImported = (totalIndexed - totalRelinked).coerceAtLeast(0)
                     val summaryMessage = if (totalIndexed == 0 && totalSkipped > 0) {
                         if (totalFailed > 0) {
                             "All $totalSkipped tracks are already in your library and were skipped ($totalFailed unreadable)."
@@ -340,9 +352,14 @@ class AudioScanService : Service() {
                         }
                     } else {
                         val parts = mutableListOf<String>()
-                        parts.add("$totalIndexed ${if (totalIndexed == 1) "track" else "tracks"} imported")
+                        if (totalRelinked > 0) {
+                            parts.add("$totalRelinked ${if (totalRelinked == 1) "track" else "tracks"} reconnected/updated")
+                        }
+                        if (newlyImported > 0) {
+                            parts.add("$newlyImported new ${if (newlyImported == 1) "track" else "tracks"} imported")
+                        }
                         if (totalSkipped > 0) {
-                            parts.add("$totalSkipped ${if (totalSkipped == 1) "track" else "tracks"} already in library and skipped")
+                            parts.add("$totalSkipped already in library and skipped")
                         }
                         if (totalFailed > 0) {
                             parts.add("$totalFailed ${if (totalFailed == 1) "file" else "files"} could not be read")

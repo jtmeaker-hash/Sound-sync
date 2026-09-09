@@ -68,6 +68,13 @@ object TrackSelfHealingResolver {
             return@withContext applyHealedPath(track, fromCrossReference, trackDao)
         }
 
+        // Strategy 2b: Canonical Storage Resolution (SAF URI <-> /storage/emulated/0/...)
+        val fromCanonical = CanonicalStorageHelper.resolvePlayableReference(context, originalPath)
+        if (fromCanonical != null && fromCanonical != originalPath && StorageAvailabilityHelper.isTrackPathAvailable(context, fromCanonical)) {
+            Log.i(TAG, "[TrackSelfHealing] SUCCESS via CanonicalStorageHelper: healed '$originalPath' -> '$fromCanonical'")
+            return@withContext applyHealedPath(track, fromCanonical, trackDao)
+        }
+
         // Strategy 3: Persisted SAF DocumentFile / tree URI
         val fromSaf = resolveFromSaf(context, track)
         if (fromSaf != null && StorageAvailabilityHelper.isTrackPathAvailable(context, fromSaf)) {
@@ -343,6 +350,28 @@ object TrackSelfHealingResolver {
             }
         }
 
+        // 5b. Renamed file discovery: Match by content fingerprint in candidate directories
+        if (track.contentFingerprint.isNotBlank() && track.contentFingerprint.startsWith("fp_")) {
+            for (dir in candidateDirs) {
+                if (!dir.exists() || !dir.isDirectory) continue
+                val audioFiles = dir.listFiles { f ->
+                    f.isFile && f.canRead() && listOf("mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "aiff").contains(f.extension.lowercase(Locale.ROOT))
+                } ?: continue
+
+                for (audioFile in audioFiles) {
+                    // Fast filter by file size
+                    val sizeDiff = kotlin.math.abs((audioFile.length() / (1024.0 * 1024.0)) - track.fileSizeMb)
+                    if (track.fileSizeMb <= 0 || sizeDiff < 0.2) {
+                        val fp = AudioFingerprintUtil.generateFingerprint(context, audioFile.absolutePath, audioFile.length(), track.durationSeconds)
+                        if (fp == track.contentFingerprint) {
+                            Log.i(TAG, "[TrackSelfHealing] Recovered renamed file via fingerprint: '${audioFile.absolutePath}'")
+                            return audioFile.absolutePath
+                        }
+                    }
+                }
+            }
+        }
+
         return null
     }
 
@@ -353,10 +382,32 @@ object TrackSelfHealingResolver {
         newPath: String,
         trackDao: TrackDao?
     ): Track {
-        val healed = track.copy(filePath = newPath, isAvailable = true)
+        val relPath = CanonicalStorageHelper.toStorageRelativePath(newPath)
+        val dirPath = if (newPath.startsWith("content://")) {
+            if (relPath.contains('/')) relPath.substringBeforeLast('/') else ""
+        } else {
+            File(newPath).parent ?: ""
+        }
+
+        val healed = track.copy(
+            filePath = newPath,
+            storageRelativePath = relPath,
+            directoryPath = dirPath,
+            isAvailable = true
+        )
         if (trackDao != null && track.id.isNotBlank()) {
             try {
-                trackDao.updateFilePath(track.id, newPath)
+                val entity = trackDao.getTrackById(track.id)
+                if (entity != null) {
+                    trackDao.updateTrack(
+                        entity.copy(
+                            filePath = newPath,
+                            storageRelativePath = relPath
+                        )
+                    )
+                } else {
+                    trackDao.updateFilePath(track.id, newPath)
+                }
                 Log.d(TAG, "[TrackSelfHealing] Persisted healed path to database for track ${track.id}: '$newPath'")
             } catch (e: Exception) {
                 Log.w(TAG, "[TrackSelfHealing] Failed persisting healed path to database: ${e.message}")
