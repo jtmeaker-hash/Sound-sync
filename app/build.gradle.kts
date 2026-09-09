@@ -172,3 +172,16 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
 }
+
+tasks.matching { it.name.startsWith("parse") && it.name.endsWith("LocalResources") }.configureEach {
+  doFirst {
+    inputs.files.forEach { file ->
+      if (!file.name.endsWith(".txt") && !file.name.endsWith(".xml") && !file.exists()) {
+        file.mkdirs()
+      }
+    }
+  }
+}
+
+
+

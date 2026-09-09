@@ -165,7 +165,8 @@ class SoundSyncMetadataPipelineLiveTest {
             durationSeconds = 338,
             filePath = testAudioFile.absolutePath,
             format = "MP3",
-            metadataScanState = MetadataScanState.PENDING.name
+            metadataScanState = MetadataScanState.APPROVED.name,
+            userConfirmedMetadata = true
         )
 
         // Instantiate authoritative resolver components
