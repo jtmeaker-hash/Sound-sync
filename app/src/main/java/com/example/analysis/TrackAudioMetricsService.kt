@@ -170,7 +170,7 @@ object TrackAudioMetricsService {
             crestFactorDb = crestFactorDb,
             dynamicRangeDescription = description,
             totalSamplesAnalyzed = totalSamples,
-            durationSeconds = (totalSamples / sampleRate).coerceAtLeast(1)
+            durationSeconds = if (sampleRate > 0 && totalSamples > 0) (totalSamples / sampleRate) else 0L
         )
 
         cache[trackId] = result

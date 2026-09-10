@@ -504,6 +504,11 @@ object AudioEmbeddedMetadataReader {
         var id3Meta: EmbeddedAudioMetadata? = null
         var nameText: String? = null
         var authText: String? = null
+        var numChannels = 0
+        var numSampleFrames = 0L
+        var sampleSize = 0
+        var sampleRate = 0
+        var aiffDurationSec = 0
 
         val chunkHdr = ByteArray(8)
         while (true) {
@@ -523,6 +528,30 @@ object AudioEmbeddedMetadataReader {
             val pad = if (chunkSize % 2 != 0) 1 else 0
 
             when {
+                chunkId == "COMM" -> {
+                    val commBuf = ByteArray(minOf(chunkSize, 64))
+                    var readTotal = 0
+                    while (readTotal < commBuf.size) {
+                        val c = stream.read(commBuf, readTotal, commBuf.size - readTotal)
+                        if (c <= 0) break
+                        readTotal += c
+                    }
+                    val skipRemaining = chunkSize - readTotal + pad
+                    if (skipRemaining > 0) safeSkipStream(stream, skipRemaining.toLong())
+
+                    if (readTotal >= 18) {
+                        numChannels = ((commBuf[0].toInt() and 0xFF) shl 8) or (commBuf[1].toInt() and 0xFF)
+                        numSampleFrames = ((commBuf[2].toLong() and 0xFFL) shl 24) or
+                                ((commBuf[3].toLong() and 0xFFL) shl 16) or
+                                ((commBuf[4].toLong() and 0xFFL) shl 8) or
+                                (commBuf[5].toLong() and 0xFFL)
+                        sampleSize = ((commBuf[6].toInt() and 0xFF) shl 8) or (commBuf[7].toInt() and 0xFF)
+                        sampleRate = readIeeeExtendedFloat(commBuf, 8).toInt()
+                        if (sampleRate > 0 && numSampleFrames > 0L) {
+                            aiffDurationSec = (numSampleFrames / sampleRate.toDouble()).toInt()
+                        }
+                    }
+                }
                 chunkId.equals("id3 ", ignoreCase = true) -> {
                     val id3Buf = ByteArray(minOf(chunkSize, MAX_TAG_HEADER_READ))
                     var readTotal = 0
@@ -532,7 +561,7 @@ object AudioEmbeddedMetadataReader {
                         readTotal += c
                     }
                     val skipRemaining = chunkSize - readTotal + pad
-                    if (skipRemaining > 0) stream.skip(skipRemaining.toLong())
+                    if (skipRemaining > 0) safeSkipStream(stream, skipRemaining.toLong())
 
                     if (id3Buf.size >= 10 && id3Buf[0] == 'I'.code.toByte() && id3Buf[1] == 'D'.code.toByte() && id3Buf[2] == '3'.code.toByte()) {
                         id3Meta = parseId3Tags(id3Buf.copyOfRange(0, 10), ByteArrayInputStream(id3Buf, 10, id3Buf.size - 10))
@@ -547,7 +576,7 @@ object AudioEmbeddedMetadataReader {
                         readTotal += c
                     }
                     val skipRemaining = chunkSize - readTotal + pad
-                    if (skipRemaining > 0) stream.skip(skipRemaining.toLong())
+                    if (skipRemaining > 0) safeSkipStream(stream, skipRemaining.toLong())
                     nameText = String(buf, StandardCharsets.ISO_8859_1).trim { it <= ' ' || it == '\u0000' }
                 }
                 chunkId == "AUTH" -> {
@@ -559,28 +588,33 @@ object AudioEmbeddedMetadataReader {
                         readTotal += c
                     }
                     val skipRemaining = chunkSize - readTotal + pad
-                    if (skipRemaining > 0) stream.skip(skipRemaining.toLong())
+                    if (skipRemaining > 0) safeSkipStream(stream, skipRemaining.toLong())
                     authText = String(buf, StandardCharsets.ISO_8859_1).trim { it <= ' ' || it == '\u0000' }
                 }
                 else -> {
-                    var toSkip = chunkSize.toLong() + pad
-                    while (toSkip > 0) {
-                        val skipped = stream.skip(toSkip)
-                        if (skipped <= 0) {
-                            if (stream.read() == -1) break
-                            toSkip--
-                        } else {
-                            toSkip -= skipped
-                        }
-                    }
+                    safeSkipStream(stream, chunkSize.toLong() + pad)
                 }
             }
         }
 
         val base = id3Meta ?: EmbeddedAudioMetadata()
+        val finalDur = when {
+            aiffDurationSec > 1 -> aiffDurationSec
+            base.durationSeconds > 1 -> base.durationSeconds
+            aiffDurationSec > 0 -> aiffDurationSec
+            else -> 0
+        }
+        val computedBitrate = if (sampleRate > 0 && numChannels > 0 && sampleSize > 0) {
+            ((sampleRate.toLong() * numChannels.toLong() * sampleSize.toLong()) / 1000L).toInt()
+        } else if (base.bitrateKbps > 0) base.bitrateKbps else 1411
+
         return base.copy(
             title = base.title ?: nameText?.takeIf(String::isNotBlank),
-            artist = base.artist ?: authText?.takeIf(String::isNotBlank)
+            artist = base.artist ?: authText?.takeIf(String::isNotBlank),
+            durationSeconds = finalDur,
+            bitrateKbps = computedBitrate,
+            sampleRate = if (sampleRate > 0) sampleRate else base.sampleRate,
+            bitDepth = if (sampleSize > 0) sampleSize else base.bitDepth
         )
     }
 
@@ -1031,6 +1065,11 @@ object AudioEmbeddedMetadataReader {
         var hasFlacPicture = false
         var flacPictureSize = 0
         var flacPictureBytes: ByteArray? = null
+        var flacDurationSec = 0
+        var flacSampleRate = 0
+        var flacChannels = 0
+        var flacBitsPerSample = 0
+        var flacTotalSamples = 0L
 
         while (!isLast) {
             val blockHeader = ByteArray(4)
@@ -1043,7 +1082,36 @@ object AudioEmbeddedMetadataReader {
                     ((blockHeader[2].toInt() and 0xFF) shl 8) or
                     (blockHeader[3].toInt() and 0xFF)
 
-            if (blockType == 4) { // VORBIS_COMMENT
+            if (blockType == 0) { // STREAMINFO (34 bytes)
+                val infoBytes = ByteArray(blockLength)
+                var total = 0
+                while (total < infoBytes.size) {
+                    val r = stream.read(infoBytes, total, infoBytes.size - total)
+                    if (r <= 0) break
+                    total += r
+                }
+                if (total >= 18) {
+                    val b10 = infoBytes[10].toLong() and 0xFFL
+                    val b11 = infoBytes[11].toLong() and 0xFFL
+                    val b12 = infoBytes[12].toLong() and 0xFFL
+                    val b13 = infoBytes[13].toLong() and 0xFFL
+                    val b14 = infoBytes[14].toLong() and 0xFFL
+                    val b15 = infoBytes[15].toLong() and 0xFFL
+                    val b16 = infoBytes[16].toLong() and 0xFFL
+                    val b17 = infoBytes[17].toLong() and 0xFFL
+
+                    flacSampleRate = ((b10 shl 12) or (b11 shl 4) or (b12 shr 4)).toInt()
+                    flacChannels = (((b12 shr 1) and 0x07) + 1).toInt()
+                    flacBitsPerSample = ((((b12 and 0x01) shl 4) or (b13 shr 4)) + 1).toInt()
+                    flacTotalSamples = ((b13 and 0x0FL) shl 32) or (b14 shl 24) or (b15 shl 16) or (b16 shl 8) or b17
+
+                    if (flacSampleRate > 0 && flacTotalSamples > 0L) {
+                        flacDurationSec = (flacTotalSamples / flacSampleRate.toDouble()).toInt()
+                    }
+                }
+                val skipRemaining = blockLength - total
+                if (skipRemaining > 0) safeSkipStream(stream, skipRemaining.toLong())
+            } else if (blockType == 4) { // VORBIS_COMMENT
                 val commentBytes = ByteArray(min(blockLength, MAX_TAG_HEADER_READ))
                 var total = 0
                 while (total < commentBytes.size) {
@@ -1052,7 +1120,7 @@ object AudioEmbeddedMetadataReader {
                     total += r
                 }
                 val skipRemaining = blockLength - total
-                if (skipRemaining > 0) stream.skip(skipRemaining.toLong())
+                if (skipRemaining > 0) safeSkipStream(stream, skipRemaining.toLong())
 
                 parsedMetadata = parseVorbisCommentBytes(commentBytes, total)
             } else if (blockType == 6) { // PICTURE
@@ -1068,18 +1136,51 @@ object AudioEmbeddedMetadataReader {
                     }
                     flacPictureBytes = extractFlacPictureBytes(picBuf)
                 } else {
-                    stream.skip(blockLength.toLong())
+                    safeSkipStream(stream, blockLength.toLong())
                 }
             } else {
-                stream.skip(blockLength.toLong())
+                safeSkipStream(stream, blockLength.toLong())
             }
         }
         val base = parsedMetadata ?: EmbeddedAudioMetadata()
+        val finalDur = when {
+            flacDurationSec > 1 -> flacDurationSec
+            base.durationSeconds > 1 -> base.durationSeconds
+            flacDurationSec > 0 -> flacDurationSec
+            else -> 0
+        }
+        val computedBitrate = if (flacSampleRate > 0 && flacChannels > 0 && flacBitsPerSample > 0) {
+            ((flacSampleRate.toLong() * flacChannels.toLong() * flacBitsPerSample.toLong()) / 1000L).toInt()
+        } else if (base.bitrateKbps > 0) base.bitrateKbps else 1411
+
         return base.copy(
             hasEmbeddedArtwork = hasFlacPicture || base.hasEmbeddedArtwork,
             embeddedArtworkSize = if (flacPictureSize > 0) flacPictureSize else base.embeddedArtworkSize,
-            embeddedArtworkBytes = flacPictureBytes ?: base.embeddedArtworkBytes
+            embeddedArtworkBytes = flacPictureBytes ?: base.embeddedArtworkBytes,
+            durationSeconds = finalDur,
+            bitrateKbps = computedBitrate,
+            sampleRate = if (flacSampleRate > 0) flacSampleRate else base.sampleRate,
+            bitDepth = if (flacBitsPerSample > 0) flacBitsPerSample else base.bitDepth
         )
+    }
+
+    private fun readIeeeExtendedFloat(bytes: ByteArray, offset: Int): Double {
+        if (offset + 10 > bytes.size) return 44100.0
+        val expon = ((bytes[offset].toInt() and 0xFF) shl 8) or (bytes[offset + 1].toInt() and 0xFF)
+        val hiMant = ((bytes[offset + 2].toLong() and 0xFFL) shl 24) or
+                ((bytes[offset + 3].toLong() and 0xFFL) shl 16) or
+                ((bytes[offset + 4].toLong() and 0xFFL) shl 8) or
+                (bytes[offset + 5].toLong() and 0xFFL)
+        val loMant = ((bytes[offset + 6].toLong() and 0xFFL) shl 24) or
+                ((bytes[offset + 7].toLong() and 0xFFL) shl 16) or
+                ((bytes[offset + 8].toLong() and 0xFFL) shl 8) or
+                (bytes[offset + 9].toLong() and 0xFFL)
+
+        if (expon == 0 && hiMant == 0L && loMant == 0L) return 0.0
+        if (expon == 0x7FFF) return Double.MAX_VALUE
+
+        val mantissa = (hiMant.toDouble() * 4294967296.0) + (loMant.toDouble().let { if (it < 0) it + 4294967296.0 else it })
+        return mantissa * Math.pow(2.0, (expon - 16383 - 63).toDouble())
     }
 
     private fun extractFlacPictureBytes(buf: ByteArray): ByteArray? {

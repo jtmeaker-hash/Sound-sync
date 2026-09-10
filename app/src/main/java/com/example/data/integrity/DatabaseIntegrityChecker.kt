@@ -126,7 +126,8 @@ class DatabaseIntegrityChecker(
             val hasBlankTitle = track.title.isBlank()
             val hasBlankArtist = track.artist.isBlank()
             val hasInvalidBpm = track.bpm < 0.0 || track.bpm > 500.0
-            if (hasBlankTitle || hasBlankArtist || hasInvalidBpm) {
+            val hasInvalidDuration = track.durationSeconds <= 1
+            if (hasBlankTitle || hasBlankArtist || hasInvalidBpm || hasInvalidDuration) {
                 brokenMetadata++
                 issues.add(
                     IntegrityIssue(
@@ -138,6 +139,7 @@ class DatabaseIntegrityChecker(
                             if (hasBlankTitle) append("Title is empty. ")
                             if (hasBlankArtist) append("Artist is empty. ")
                             if (hasInvalidBpm) append("BPM (${track.bpm}) out of realistic range. ")
+                            if (hasInvalidDuration) append("Invalid duration (${track.durationSeconds}s). ")
                         },
                         isAutoRepairable = true
                     )
@@ -280,6 +282,14 @@ class DatabaseIntegrityChecker(
                                 }
                                 if (fixed.bpm < 0.0 || fixed.bpm > 500.0) {
                                     fixed = fixed.copy(bpm = 0.0, bpmConfidence = 0.0)
+                                }
+                                if (fixed.durationSeconds <= 1) {
+                                    try {
+                                        val meta = com.example.metadata.AudioEmbeddedMetadataReader.read(context, fixed.filePath)
+                                        if (meta.durationSeconds > 1) {
+                                            fixed = fixed.copy(durationSeconds = meta.durationSeconds)
+                                        }
+                                    } catch (_: Exception) {}
                                 }
                                 trackDao.updateTrack(fixed)
                                 repairedCount++

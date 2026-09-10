@@ -398,6 +398,10 @@ class TrackAnalysisManager private constructor(
                         t = t.copy(isrc = embedded.isrc)
                         modified = true
                     }
+                    if (t.durationSeconds <= 1 && embedded.durationSeconds > 1) {
+                        t = t.copy(durationSeconds = embedded.durationSeconds)
+                        modified = true
+                    }
                     if (modified) {
                         updatedTrack = t
                     }
@@ -471,8 +475,16 @@ class TrackAnalysisManager private constructor(
                 }
             }
 
+            // Defensive duration preservation: Never overwrite a known-valid duration (> 1) with an invalid duration (<= 1)
+            val preservedDurationSec = when {
+                updatedTrack.durationSeconds > 1 -> updatedTrack.durationSeconds
+                track.durationSeconds > 1 -> track.durationSeconds
+                else -> updatedTrack.durationSeconds
+            }
+
             // Save completed track back to Room DB
             val finalTrack = updatedTrack.copy(
+                durationSeconds = preservedDurationSec,
                 analysisState = AnalysisState.COMPLETE,
                 analysisVersion = CURRENT_ANALYSIS_VERSION,
                 lastAnalysedAt = System.currentTimeMillis(),

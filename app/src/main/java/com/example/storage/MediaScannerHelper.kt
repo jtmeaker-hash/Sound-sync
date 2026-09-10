@@ -142,7 +142,13 @@ object MediaScannerHelper {
 
                         // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 / RIFF chunks) if present
                         val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, targetPath)
-                        val finalDurationSec = if (rawDurationSec > 1) rawDurationSec else if (embedded.durationSeconds > 0) embedded.durationSeconds else rawDurationSec
+                        val finalDurationSec = when {
+                            embedded.durationSeconds > 1 -> embedded.durationSeconds
+                            rawDurationSec > 1 -> rawDurationSec
+                            embedded.durationSeconds > 0 -> embedded.durationSeconds
+                            rawDurationSec > 0 -> rawDurationSec
+                            else -> 0
+                        }
 
                         // Generate stable content fingerprint
                         val fingerprint = AudioFingerprintUtil.generateFingerprint(

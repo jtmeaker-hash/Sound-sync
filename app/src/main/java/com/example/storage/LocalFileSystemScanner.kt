@@ -291,11 +291,12 @@ object LocalFileSystemScanner {
             retriever.release()
         } catch (_: Exception) {}
 
-        if (durationSec <= 0 && embedded.durationSeconds > 0) {
-            durationSec = embedded.durationSeconds
-        }
-        if (durationSec <= 0) {
-            durationSec = 210
+        durationSec = when {
+            embedded.durationSeconds > 1 -> embedded.durationSeconds
+            durationSec > 1 -> durationSec
+            embedded.durationSeconds > 0 -> embedded.durationSeconds
+            durationSec > 0 -> durationSec
+            else -> 0
         }
 
         val parsed = com.example.metadata.parser.TrackIdentityParser.parse(
