@@ -34,6 +34,8 @@ object MediaScannerHelper {
         context: Context,
         existingFingerprints: Set<String> = emptySet(),
         existingFilePaths: Set<String> = emptySet(),
+        reconcilerIndexes: TrackIdentityReconciler.Indexes? = null,
+        onRelinked: (suspend (com.example.data.TrackEntity) -> Unit)? = null,
         batchSize: Int = 200,
         onBatch: suspend (List<Track>) -> Unit,
         onProgress: (current: Int, total: Int, currentTitle: String) -> Unit = { _, _, _ -> }
@@ -104,6 +106,7 @@ object MediaScannerHelper {
                 val mimeCol = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
                 val sizeCol = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
                 val dateAddedCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_ADDED)
+                val dateModifiedCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
                 val trackCol = cursor.getColumnIndex(MediaStore.Audio.Media.TRACK)
 
                 val total = cursor.count
@@ -123,6 +126,7 @@ object MediaScannerHelper {
                         val mimeType = if (mimeCol != -1) cursor.getString(mimeCol) ?: "audio/mpeg" else "audio/mpeg"
                         val sizeBytes = if (sizeCol != -1) cursor.getLong(sizeCol) else 0L
                         val dateAddedSec = if (dateAddedCol != -1) cursor.getLong(dateAddedCol) else 0L
+                        val dateModifiedSec = if (dateModifiedCol != -1) cursor.getLong(dateModifiedCol) else 0L
                         val rawTrackNum = if (trackCol != -1) cursor.getInt(trackCol) else 0
 
                         val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
@@ -158,10 +162,37 @@ object MediaScannerHelper {
                             durationSeconds = finalDurationSec
                         )
 
-                        // Check duplicate protection
-                        if (seenFingerprints.contains(fingerprint) || seenPaths.contains(targetPath)) {
-                            totalSkipped++
-                            continue
+                        // Check reconciliation if indexes are provided
+                        if (reconcilerIndexes != null) {
+                            val reconciliation = TrackIdentityReconciler.reconcileCandidate(
+                                candidatePathOrUri = targetPath,
+                                candidateFingerprint = fingerprint,
+                                candidateSizeBytes = sizeBytes,
+                                candidateDurationSec = finalDurationSec,
+                                candidateTitle = title,
+                                candidateArtist = rawArtist.orEmpty(),
+                                candidateAlbum = rawAlbum.orEmpty(),
+                                candidateIsrc = embedded?.isrc,
+                                candidateModified = if (dateModifiedSec > 0) dateModifiedSec * 1000L else dateAddedSec * 1000L,
+                                candidateMediaId = id,
+                                context = context,
+                                indexes = reconcilerIndexes
+                            )
+
+                            if (reconciliation.isRelinked && reconciliation.relinkedTrack != null) {
+                                onRelinked?.invoke(reconciliation.relinkedTrack)
+                                totalImported++
+                                continue
+                            } else if (reconciliation.matchedTrack != null) {
+                                totalSkipped++
+                                continue
+                            }
+                        } else {
+                            // Check duplicate protection fallback
+                            if (seenFingerprints.contains(fingerprint) || seenPaths.contains(targetPath)) {
+                                totalSkipped++
+                                continue
+                            }
                         }
 
                         // Parse track and disc number
@@ -264,6 +295,9 @@ object MediaScannerHelper {
 
                         seenFingerprints.add(fingerprint)
                         seenPaths.add(targetPath)
+                        if (reconcilerIndexes != null) {
+                            TrackIdentityReconciler.registerTrackInIndices(com.example.data.TrackEntity.fromTrack(track), reconcilerIndexes)
+                        }
                         currentBatch.add(track)
                         totalImported++
 

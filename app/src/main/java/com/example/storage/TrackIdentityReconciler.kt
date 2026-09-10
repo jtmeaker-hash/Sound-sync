@@ -1,8 +1,10 @@
 package com.example.storage
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import com.example.data.TrackEntity
+import java.io.File
 import java.util.Locale
 import kotlin.math.abs
 
@@ -10,7 +12,7 @@ import kotlin.math.abs
  * Intelligent Track Identity & Reconciliation Engine.
  *
  * Resolves the disconnect between physical file changes (renamed files, moved folders,
- * SAF vs filesystem representation) and SoundSync's internal track database identity.
+ * SAF vs filesystem representation, MediaStore URI updates) and SoundSync's internal track database identity.
  *
  * Guarantees that:
  *  1. Renamed files (e.g. "song.mp3" -> "Artist - Song.mp3") preserve their existing database record,
@@ -20,6 +22,8 @@ import kotlin.math.abs
  *     are recognized as canonically identical.
  *  4. Stale database records pointing to old file locations are relinked to newly discovered locations
  *     without destructive database operations or loss of user metadata.
+ *  5. Completed metadata scan states (COMPLETE, VERIFIED, USER_CONFIRMED, RESTORED, etc.) are strictly
+ *     preserved across path refreshes and relocations.
  */
 object TrackIdentityReconciler {
 
@@ -30,15 +34,36 @@ object TrackIdentityReconciler {
         val isRelinked: Boolean,
         val relinkedTrack: TrackEntity?,
         val matchReason: MatchReason,
-        val confidence: Float
+        val confidence: Float,
+        val isModified: Boolean = false
     )
 
     enum class MatchReason {
         EXACT_PATH_MATCH,
         CANONICAL_PATH_MATCH,
+        MEDIA_STORE_ID_MATCH,
         CONTENT_FINGERPRINT_MATCH,
+        AUDIO_FINGERPRINT_MATCH,
+        FILE_NAME_SIZE_DURATION_MATCH,
         STALE_TRACK_SIZE_DURATION_METADATA_MATCH,
         NO_MATCH
+    }
+
+    /**
+     * Determines whether a track's metadata scan status is completed or confirmed,
+     * protecting it from automatic rescanning during normal library refreshes.
+     */
+    fun isMetadataScanComplete(state: String?): Boolean {
+        if (state.isNullOrBlank()) return false
+        val s = state.trim().uppercase(Locale.ROOT)
+        return s == "COMPLETE" ||
+               s == "VERIFIED" ||
+               s == "REVIEW_REQUIRED" ||
+               s == "USER_CONFIRMED" ||
+               s == "RESTORED" ||
+               s == "APPROVED" ||
+               s == "APPLIED" ||
+               s == "IDENTIFIED"
     }
 
     /**
@@ -51,6 +76,8 @@ object TrackIdentityReconciler {
         val byFingerprint = mutableMapOf<String, TrackEntity>()
         val byCanonicalPath = mutableMapOf<String, TrackEntity>()
         val byRawPath = mutableMapOf<String, TrackEntity>()
+        val byMediaId = mutableMapOf<Long, TrackEntity>()
+        val byFileNameAndSize = mutableMapOf<String, TrackEntity>()
         val staleTracks = mutableListOf<TrackEntity>()
 
         for (track in allTracks) {
@@ -61,11 +88,29 @@ object TrackIdentityReconciler {
                 if (canonical.isNotBlank()) {
                     byCanonicalPath[canonical] = track
                 }
+
+                // Index by filename + size for quick moved-file lookup
+                val fileName = extractFileNameFromPath(path)
+                if (fileName.isNotBlank() && track.fileSizeMb > 0) {
+                    val key = "${fileName.lowercase(Locale.ROOT)}_${(track.fileSizeMb * 100).toInt()}_${track.durationSeconds}"
+                    byFileNameAndSize[key] = track
+                }
             }
 
+            // Index MediaStore ID
+            extractMediaId(track)?.let { mediaId ->
+                byMediaId[mediaId] = track
+            }
+
+            // Index Content Fingerprints
             val fp = track.contentFingerprint.trim()
-            if (fp.isNotBlank() && fp.startsWith("fp_")) {
+            if (fp.isNotBlank()) {
                 byFingerprint[fp] = track
+                if (fp.startsWith("fp_")) {
+                    byFingerprint[fp.removePrefix("fp_")] = track
+                } else {
+                    byFingerprint["fp_$fp"] = track
+                }
             }
 
             // Mark as candidate stale track if its stored path cannot currently be read
@@ -79,6 +124,8 @@ object TrackIdentityReconciler {
             byFingerprint = byFingerprint,
             byCanonicalPath = byCanonicalPath,
             byRawPath = byRawPath,
+            byMediaId = byMediaId,
+            byFileNameAndSize = byFileNameAndSize,
             staleTracks = staleTracks
         )
     }
@@ -87,6 +134,8 @@ object TrackIdentityReconciler {
         val byFingerprint: MutableMap<String, TrackEntity>,
         val byCanonicalPath: MutableMap<String, TrackEntity>,
         val byRawPath: MutableMap<String, TrackEntity>,
+        val byMediaId: MutableMap<Long, TrackEntity>,
+        val byFileNameAndSize: MutableMap<String, TrackEntity>,
         val staleTracks: MutableList<TrackEntity>
     )
 
@@ -103,6 +152,7 @@ object TrackIdentityReconciler {
         candidateAlbum: String,
         candidateIsrc: String? = null,
         candidateModified: Long = 0L,
+        candidateMediaId: Long? = null,
         context: Context,
         indexes: Indexes
     ): ReconciliationResult {
@@ -112,8 +162,32 @@ object TrackIdentityReconciler {
         // 1. Exact raw path match
         val exactMatch = indexes.byRawPath[cleanCandidatePath]
         if (exactMatch != null) {
-            // Already indexed at this exact path.
-            // If fingerprint was missing or outdated, update it in place
+            // Check if file content changed at this exact path
+            val candSizeMb = candidateSizeBytes.toDouble() / (1024.0 * 1024.0)
+            val isModified = exactMatch.fileModifiedTimestamp > 0 &&
+                    candidateModified > 0 &&
+                    abs(candidateModified - exactMatch.fileModifiedTimestamp) > 3000L &&
+                    (candidateSizeBytes > 0 && abs(candidateSizeBytes - (exactMatch.fileSizeMb * 1024 * 1024).toLong()) > 4096)
+
+            if (isModified) {
+                val updated = exactMatch.copy(
+                    fileModifiedTimestamp = candidateModified,
+                    fileSizeMb = candSizeMb,
+                    durationSeconds = if (candidateDurationSec > 0) candidateDurationSec else exactMatch.durationSeconds,
+                    contentFingerprint = if (candidateFingerprint.isNotBlank()) candidateFingerprint else exactMatch.contentFingerprint
+                )
+                indexes.byRawPath[cleanCandidatePath] = updated
+                return ReconciliationResult(
+                    matchedTrack = exactMatch,
+                    isRelinked = true,
+                    relinkedTrack = updated,
+                    matchReason = MatchReason.EXACT_PATH_MATCH,
+                    confidence = 1.0f,
+                    isModified = true
+                )
+            }
+
+            // If fingerprint was missing or outdated, update it in place without resetting scan states
             if (candidateFingerprint.isNotBlank() && exactMatch.contentFingerprint.isBlank()) {
                 val updated = exactMatch.copy(contentFingerprint = candidateFingerprint)
                 indexes.byFingerprint[candidateFingerprint] = updated
@@ -138,9 +212,6 @@ object TrackIdentityReconciler {
         // 2. Canonical path match (e.g. SAF URI vs direct filesystem path)
         val canonicalMatch = indexes.byCanonicalPath[candidateCanonical]
         if (canonicalMatch != null) {
-            // Same physical file, but accessed via a different representation (e.g. SAF document URI vs /storage/emulated/0/...)
-            val isOldReadable = CanonicalStorageHelper.isReferenceReadable(context, canonicalMatch.filePath)
-            // If candidate is a direct working URI (e.g. SAF tree document), relink the track to the working URI
             val relinked = relinkTrackEntity(
                 existing = canonicalMatch,
                 newPathOrUri = cleanCandidatePath,
@@ -162,10 +233,41 @@ object TrackIdentityReconciler {
             )
         }
 
-        // 3. Content fingerprint match (The ultimate audio file identity check)
-        // This handles RENAMED files (song.mp3 -> Artist - Song.mp3) and MOVED files (Download -> Music)
-        if (candidateFingerprint.isNotBlank() && candidateFingerprint.startsWith("fp_")) {
+        // 3. MediaStore ID match (Relocated file with same MediaStore ID)
+        val effectiveMediaId = candidateMediaId ?: extractMediaIdFromPathOrUri(cleanCandidatePath)
+        if (effectiveMediaId != null) {
+            val mediaIdMatch = indexes.byMediaId[effectiveMediaId]
+            if (mediaIdMatch != null) {
+                Log.i(TAG, "Reconciled relocated file by MediaStore ID: '${mediaIdMatch.filePath}' -> '$cleanCandidatePath'")
+                val relinked = relinkTrackEntity(
+                    existing = mediaIdMatch,
+                    newPathOrUri = cleanCandidatePath,
+                    newDirectoryPath = extractParentDirectory(cleanCandidatePath),
+                    newFingerprint = candidateFingerprint,
+                    newModifiedTimestamp = candidateModified,
+                    newTitle = candidateTitle,
+                    newArtist = candidateArtist,
+                    newAlbum = candidateAlbum,
+                    context = context
+                )
+                updateIndexes(indexes, mediaIdMatch, relinked)
+                return ReconciliationResult(
+                    matchedTrack = mediaIdMatch,
+                    isRelinked = true,
+                    relinkedTrack = relinked,
+                    matchReason = MatchReason.MEDIA_STORE_ID_MATCH,
+                    confidence = 1.0f
+                )
+            }
+        }
+
+        // 4. Content fingerprint match (The authoritative audio file identity check)
+        // Handles RENAMED files (song.mp3 -> Artist - Song.mp3) and MOVED files (Downloads -> DJ)
+        if (candidateFingerprint.isNotBlank()) {
             val fpMatch = indexes.byFingerprint[candidateFingerprint]
+                ?: indexes.byFingerprint[candidateFingerprint.removePrefix("fp_")]
+                ?: indexes.byFingerprint["fp_$candidateFingerprint"]
+
             if (fpMatch != null) {
                 val isSameLocation = CanonicalStorageHelper.isSamePhysicalFile(fpMatch.filePath, cleanCandidatePath)
                 val isOldPathAccessible = CanonicalStorageHelper.isReferenceReadable(context, fpMatch.filePath)
@@ -203,7 +305,40 @@ object TrackIdentityReconciler {
             }
         }
 
-        // 4. Stale Track Matching (Fallback for tracks where stored fingerprint was missing or used legacy format)
+        // 5. Fast Filename + Size + Duration match for moved files
+        val candFileName = extractFileNameFromPath(cleanCandidatePath)
+        val candSizeMb = candidateSizeBytes.toDouble() / (1024.0 * 1024.0)
+        if (candFileName.isNotBlank() && candSizeMb > 0) {
+            val key = "${candFileName.lowercase(Locale.ROOT)}_${(candSizeMb * 100).toInt()}_${candidateDurationSec}"
+            val nameSizeMatch = indexes.byFileNameAndSize[key]
+            if (nameSizeMatch != null) {
+                val isOldPathAccessible = CanonicalStorageHelper.isReferenceReadable(context, nameSizeMatch.filePath)
+                if (!isOldPathAccessible || nameSizeMatch.filePath != cleanCandidatePath) {
+                    Log.i(TAG, "Reconciled moved file by name+size+duration: '${nameSizeMatch.filePath}' -> '$cleanCandidatePath'")
+                    val relinked = relinkTrackEntity(
+                        existing = nameSizeMatch,
+                        newPathOrUri = cleanCandidatePath,
+                        newDirectoryPath = extractParentDirectory(cleanCandidatePath),
+                        newFingerprint = candidateFingerprint,
+                        newModifiedTimestamp = candidateModified,
+                        newTitle = candidateTitle,
+                        newArtist = candidateArtist,
+                        newAlbum = candidateAlbum,
+                        context = context
+                    )
+                    updateIndexes(indexes, nameSizeMatch, relinked)
+                    return ReconciliationResult(
+                        matchedTrack = nameSizeMatch,
+                        isRelinked = true,
+                        relinkedTrack = relinked,
+                        matchReason = MatchReason.FILE_NAME_SIZE_DURATION_MATCH,
+                        confidence = 0.98f
+                    )
+                }
+            }
+        }
+
+        // 6. Stale Track Matching (Fallback for tracks where stored fingerprint was missing or used legacy format)
         val staleMatch = findStaleTrackMatch(
             candidateSizeBytes = candidateSizeBytes,
             candidateDurationSec = candidateDurationSec,
@@ -238,7 +373,7 @@ object TrackIdentityReconciler {
             )
         }
 
-        // 5. No match -> Truly a brand new track
+        // 7. No match -> Truly a brand new track
         return ReconciliationResult(
             matchedTrack = null,
             isRelinked = false,
@@ -250,7 +385,8 @@ object TrackIdentityReconciler {
 
     /**
      * Relinks an existing database record to a new file path or URI,
-     * preserving all existing metadata, DJ cue points, analysis, playlists, and history.
+     * strictly preserving all existing metadata scan status, analysis state,
+     * BPM, keys, waveforms, cue points, ratings, and tags.
      */
     fun relinkTrackEntity(
         existing: TrackEntity,
@@ -293,7 +429,7 @@ object TrackIdentityReconciler {
         var finalArtworkSource = existing.artworkSource
 
         if (!finalArtworkCachePath.isNullOrBlank()) {
-            val f = java.io.File(finalArtworkCachePath)
+            val f = File(finalArtworkCachePath)
             if (!f.exists() || f.length() == 0L) {
                 finalArtworkCachePath = null
             }
@@ -316,6 +452,7 @@ object TrackIdentityReconciler {
             }
         }
 
+        // Explicitly preserve all metadata status, analysis state, BPM, Key, Cues, and User flags
         return existing.copy(
             filePath = newPathOrUri,
             storageRelativePath = if (relPath.isNotBlank()) relPath else existing.storageRelativePath,
@@ -328,7 +465,34 @@ object TrackIdentityReconciler {
             album = finalAlbum,
             artworkCachePath = finalArtworkCachePath,
             artworkUrl = finalArtworkUrl,
-            artworkSource = finalArtworkSource
+            artworkSource = finalArtworkSource,
+            metadataScanState = existing.metadataScanState,
+            metadataScanTimestamp = existing.metadataScanTimestamp,
+            userConfirmedMetadata = existing.userConfirmedMetadata,
+            metadataWriteState = existing.metadataWriteState,
+            analysisState = existing.analysisState,
+            analysisVersion = existing.analysisVersion,
+            lastAnalysedAt = existing.lastAnalysedAt,
+            analysisFailureReason = existing.analysisFailureReason,
+            analysisRetryCount = existing.analysisRetryCount,
+            bpm = existing.bpm,
+            bpmConfidence = existing.bpmConfidence,
+            bpmAnalysisVersion = existing.bpmAnalysisVersion,
+            bpmLastAnalyzed = existing.bpmLastAnalyzed,
+            musicalKey = existing.musicalKey,
+            camelotKey = existing.camelotKey,
+            keyConfidence = existing.keyConfidence,
+            keyAnalysisVersion = existing.keyAnalysisVersion,
+            keyLastAnalyzed = existing.keyLastAnalyzed,
+            isManualBpm = existing.isManualBpm,
+            isManualKey = existing.isManualKey,
+            rating = existing.rating,
+            customTags = existing.customTags,
+            notes = existing.notes,
+            composer = existing.composer,
+            hotCuesString = existing.hotCuesString,
+            energyRating = existing.energyRating,
+            isOfflineReady = true
         )
     }
 
@@ -346,14 +510,55 @@ object TrackIdentityReconciler {
             if (can.isNotBlank()) {
                 indexes.byCanonicalPath[can] = track
             }
+            val fileName = extractFileNameFromPath(path)
+            if (fileName.isNotBlank() && track.fileSizeMb > 0) {
+                val key = "${fileName.lowercase(Locale.ROOT)}_${(track.fileSizeMb * 100).toInt()}_${track.durationSeconds}"
+                indexes.byFileNameAndSize[key] = track
+            }
         }
         val fp = track.contentFingerprint.trim()
-        if (fp.isNotBlank() && fp.startsWith("fp_")) {
+        if (fp.isNotBlank()) {
             indexes.byFingerprint[fp] = track
+            if (fp.startsWith("fp_")) {
+                indexes.byFingerprint[fp.removePrefix("fp_")] = track
+            } else {
+                indexes.byFingerprint["fp_$fp"] = track
+            }
+        }
+        extractMediaId(track)?.let { mediaId ->
+            indexes.byMediaId[mediaId] = track
         }
     }
 
     // ── Private Matching Helpers ────────────────────────────────────────────
+
+    private fun extractMediaId(track: TrackEntity): Long? {
+        if (track.id.startsWith("media_")) {
+            return track.id.removePrefix("media_").toLongOrNull()
+        }
+        return extractMediaIdFromPathOrUri(track.filePath)
+    }
+
+    private fun extractMediaIdFromPathOrUri(pathOrUri: String): Long? {
+        if (pathOrUri.startsWith("content://media/")) {
+            return try {
+                val uri = Uri.parse(pathOrUri)
+                uri.lastPathSegment?.toLongOrNull()
+            } catch (_: Exception) {
+                null
+            }
+        }
+        return null
+    }
+
+    private fun extractFileNameFromPath(pathOrUri: String): String {
+        return if (pathOrUri.startsWith("content://")) {
+            val seg = pathOrUri.substringAfterLast('/')
+            if (seg.contains('.')) seg else ""
+        } else {
+            File(pathOrUri).name
+        }
+    }
 
     private fun findStaleTrackMatch(
         candidateSizeBytes: Long,
@@ -437,11 +642,25 @@ object TrackIdentityReconciler {
             if (newCan.isNotBlank()) {
                 indexes.byCanonicalPath[newCan] = newTrack
             }
+            val fileName = extractFileNameFromPath(newPath)
+            if (fileName.isNotBlank() && newTrack.fileSizeMb > 0) {
+                val key = "${fileName.lowercase(Locale.ROOT)}_${(newTrack.fileSizeMb * 100).toInt()}_${newTrack.durationSeconds}"
+                indexes.byFileNameAndSize[key] = newTrack
+            }
         }
 
         val fp = newTrack.contentFingerprint.trim()
-        if (fp.isNotBlank() && fp.startsWith("fp_")) {
+        if (fp.isNotBlank()) {
             indexes.byFingerprint[fp] = newTrack
+            if (fp.startsWith("fp_")) {
+                indexes.byFingerprint[fp.removePrefix("fp_")] = newTrack
+            } else {
+                indexes.byFingerprint["fp_$fp"] = newTrack
+            }
+        }
+
+        extractMediaId(newTrack)?.let { mediaId ->
+            indexes.byMediaId[mediaId] = newTrack
         }
     }
 
@@ -450,7 +669,7 @@ object TrackIdentityReconciler {
             val docId = CanonicalStorageHelper.toStorageRelativePath(pathOrUri)
             if (docId.contains('/')) docId.substringBeforeLast('/') else ""
         } else {
-            val f = java.io.File(pathOrUri)
+            val f = File(pathOrUri)
             f.parent ?: ""
         }
     }
@@ -462,3 +681,4 @@ object TrackIdentityReconciler {
             .trim()
     }
 }
+

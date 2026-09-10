@@ -84,24 +84,17 @@ object AudioDecoder {
 
         try {
             // 1. Configure Extractor
-            if (filePathOrUri.startsWith("content://") || filePathOrUri.startsWith("file://")) {
+            if (filePathOrUri.startsWith("content://")) {
                 val uri = Uri.parse(filePathOrUri)
-                try {
-                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
-                        extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                    } ?: run {
-                        extractor.setDataSource(context, uri, null)
-                    }
-                } catch (e: Exception) {
-                    extractor.setDataSource(context, uri, null)
-                }
+                extractor.setDataSource(context, uri, null)
             } else {
-                val file = File(filePathOrUri)
+                val cleanPath = filePathOrUri.removePrefix("file://")
+                val file = File(cleanPath)
                 if (!file.exists() || !file.canRead()) {
                     Log.w(TAG, "File not accessible on filesystem: $filePathOrUri")
                     return@withContext null
                 }
-                extractor.setDataSource(filePathOrUri)
+                extractor.setDataSource(cleanPath)
             }
 
             // 2. Select audio track
@@ -391,24 +384,17 @@ object AudioDecoder {
         var codec: MediaCodec? = null
 
         try {
-            if (filePathOrUri.startsWith("content://") || filePathOrUri.startsWith("file://")) {
+            if (filePathOrUri.startsWith("content://")) {
                 val uri = Uri.parse(filePathOrUri)
-                try {
-                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
-                        extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                    } ?: run {
-                        extractor.setDataSource(context, uri, null)
-                    }
-                } catch (e: Exception) {
-                    extractor.setDataSource(context, uri, null)
-                }
+                extractor.setDataSource(context, uri, null)
             } else {
-                val file = File(filePathOrUri)
+                val cleanPath = filePathOrUri.removePrefix("file://")
+                val file = File(cleanPath)
                 if (!file.exists() || !file.canRead()) {
                     Log.w(TAG, "File not accessible on filesystem: $filePathOrUri")
                     return@withContext null
                 }
-                extractor.setDataSource(filePathOrUri)
+                extractor.setDataSource(cleanPath)
             }
 
             var audioTrackIndex = -1

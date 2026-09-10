@@ -761,6 +761,23 @@ fun MainDjScreen(
                     onDismiss = { showNowPlayingSettings = false }
                 )
             }
+
+            val playbackIssueTrack by viewModel.showPlaybackIssueSheet.collectAsState()
+            playbackIssueTrack?.let { brokenTrack ->
+                com.example.ui.components.PlaybackIssueBottomSheet(
+                    track = brokenTrack,
+                    viewModel = viewModel,
+                    onDismiss = { viewModel.closePlaybackIssueSheet() }
+                )
+            }
+
+            val showPlaybackIssuesManager by viewModel.showPlaybackIssuesManagerDialog.collectAsState()
+            if (showPlaybackIssuesManager) {
+                com.example.ui.library.PlaybackIssuesManagerDialog(
+                    viewModel = viewModel,
+                    onDismiss = { viewModel.closePlaybackIssuesManager() }
+                )
+            }
         }
     }
 }

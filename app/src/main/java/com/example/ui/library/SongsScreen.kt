@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudOff
@@ -48,6 +49,7 @@ import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -58,6 +60,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -137,7 +140,10 @@ fun SongsScreen(
     onMixWithThis: ((Track) -> Unit)? = null,
     onInspectQuality: ((Track) -> Unit)? = null,
     onOpenLyrics: ((Track) -> Unit)? = null,
-    onOpenTrackIntelligence: ((Track) -> Unit)? = null
+    onOpenTrackIntelligence: ((Track) -> Unit)? = null,
+    onOpenPlaybackIssueSheet: ((Track) -> Unit)? = null,
+    onOpenPlaybackIssuesManager: (() -> Unit)? = null,
+    playbackIssuesCount: Int = 0
 ) {
     val theme = SoundSyncTheme.current
     var searchQuery by remember { mutableStateOf("") }
@@ -396,6 +402,57 @@ fun SongsScreen(
             }
         }
 
+        // Playback Issues Alert Banner
+        if (playbackIssuesCount > 0) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(theme.cornerSmall)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "$playbackIssuesCount track(s) cannot be played",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+
+                    TextButton(
+                        onClick = { onOpenPlaybackIssuesManager?.invoke() },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "Review & Repair",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
+
         // Track List / Empty State
         if (filteredTracks.isEmpty()) {
             Box(
@@ -486,7 +543,8 @@ fun SongsScreen(
                         onMixWithThis = onMixWithThis?.let { fn -> { fn(track) } },
                         onInspectQuality = onInspectQuality?.let { fn -> { fn(track) } },
                         onOpenLyrics = onOpenLyrics?.let { fn -> { fn(track) } },
-                        onOpenTrackIntelligence = onOpenTrackIntelligence?.let { fn -> { fn(track) } }
+                        onOpenTrackIntelligence = onOpenTrackIntelligence?.let { fn -> { fn(track) } },
+                        onOpenPlaybackIssueSheet = onOpenPlaybackIssueSheet
                     )
                 }
             }
@@ -512,7 +570,8 @@ fun SongTrackRow(
     onMixWithThis: (() -> Unit)? = null,
     onInspectQuality: (() -> Unit)? = null,
     onOpenLyrics: (() -> Unit)? = null,
-    onOpenTrackIntelligence: (() -> Unit)? = null
+    onOpenTrackIntelligence: (() -> Unit)? = null,
+    onOpenPlaybackIssueSheet: ((Track) -> Unit)? = null
 ) {
     if (SoundSyncTheme.isPro) {
         ProSongTrackRow(
@@ -531,7 +590,8 @@ fun SongTrackRow(
             onMixWithThis = onMixWithThis,
             onInspectQuality = onInspectQuality,
             onOpenLyrics = onOpenLyrics,
-            onOpenTrackIntelligence = onOpenTrackIntelligence
+            onOpenTrackIntelligence = onOpenTrackIntelligence,
+            onOpenPlaybackIssueSheet = onOpenPlaybackIssueSheet
         )
         return
     }
@@ -775,6 +835,34 @@ fun SongTrackRow(
                         }
                     }
 
+                    if (track.hasPlaybackIssue) {
+                        Surface(
+                            shape = RoundedCornerShape(theme.cornerSmall),
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.error)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(9.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = track.playability.displayName,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+
                     MetadataProvenanceBadge(track = track, compact = true)
                 }
             }
@@ -880,6 +968,16 @@ fun SongTrackRow(
                                 onClick = {
                                     showMenu = false
                                     onOpenTrackIntelligence()
+                                }
+                            )
+                        }
+                        if (track.hasPlaybackIssue) {
+                            DropdownMenuItem(
+                                text = { Text("Diagnose & Repair", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold) },
+                                leadingIcon = { Icon(Icons.Default.Build, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    showMenu = false
+                                    onOpenPlaybackIssueSheet?.invoke(track)
                                 }
                             )
                         }
@@ -1093,7 +1191,8 @@ private fun ProSongTrackRow(
     onMixWithThis: (() -> Unit)? = null,
     onInspectQuality: (() -> Unit)? = null,
     onOpenLyrics: (() -> Unit)? = null,
-    onOpenTrackIntelligence: (() -> Unit)? = null
+    onOpenTrackIntelligence: (() -> Unit)? = null,
+    onOpenPlaybackIssueSheet: ((Track) -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val theme = SoundSyncTheme.current
@@ -1387,6 +1486,16 @@ private fun ProSongTrackRow(
                                 onClick = {
                                     showMenu = false
                                     onOpenTrackIntelligence()
+                                }
+                            )
+                        }
+                        if (track.hasPlaybackIssue) {
+                            DropdownMenuItem(
+                                text = { Text("Diagnose & Repair", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold) },
+                                leadingIcon = { Icon(Icons.Default.Build, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    showMenu = false
+                                    onOpenPlaybackIssueSheet?.invoke(track)
                                 }
                             )
                         }

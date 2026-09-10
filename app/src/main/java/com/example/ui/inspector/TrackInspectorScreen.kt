@@ -453,7 +453,37 @@ fun TrackInspectorScreen(
                 }
             )
 
-            // ── 11. FILE INFORMATION ───────────────────────────────────────────────
+            // ── 11. PLAYBACK HEALTH & INTEGRITY ────────────────────────────────────
+            InspectorPlayabilityHealthCard(
+                track = currentTrack,
+                onRevalidate = {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val report = com.example.analysis.TrackPlaybackHealthManager.validateSingleTrack(context, currentTrack, trackDao)
+                        val updated = currentTrack.copy(
+                            playabilityStatus = report.status.name,
+                            playbackErrorCode = report.errorCode,
+                            playbackErrorMessage = report.errorMessage,
+                            lastPlaybackValidation = report.validationTimestamp,
+                            resolvedUri = report.resolvedPath,
+                            validationFileSize = report.fileSizeBytes,
+                            validationModifiedTimestamp = report.fileModifiedTimestamp
+                        )
+                        withContext(Dispatchers.Main) {
+                            currentTrack = updated
+                            Toast.makeText(
+                                context,
+                                if (report.status.isPlayable) "Track is verified playable!" else "Validation failed: ${report.problemDescription}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                },
+                onOpenRepair = {
+                    viewModel.openPlaybackIssueSheet(currentTrack)
+                }
+            )
+
+            // ── 12. FILE INFORMATION ───────────────────────────────────────────────
             InspectorFileInfoCard(
                 track = currentTrack,
                 onOpenFileLocation = {
@@ -1723,6 +1753,96 @@ private fun InfoMetricItem(
             overflow = TextOverflow.Ellipsis,
             fontFamily = if (isPro) FontFamily.Monospace else FontFamily.Default
         )
+    }
+}
+
+@Composable
+private fun InspectorPlayabilityHealthCard(
+    track: Track,
+    onRevalidate: () -> Unit,
+    onOpenRepair: () -> Unit
+) {
+    val status = track.playability
+    val isPlayable = track.isActuallyPlayable
+    val statusColor = when (status) {
+        com.example.model.PlayabilityStatus.PLAYABLE, com.example.model.PlayabilityStatus.REPAIRED -> NeonGreen
+        com.example.model.PlayabilityStatus.MISSING_FILE, com.example.model.PlayabilityStatus.STALE_URI, com.example.model.PlayabilityStatus.MEDIASTORE_MISMATCH -> NeonRed
+        com.example.model.PlayabilityStatus.PERMISSION_DENIED -> NeonAmber
+        com.example.model.PlayabilityStatus.UNSUPPORTED_FORMAT -> DeckBPink
+        com.example.model.PlayabilityStatus.DECODER_ERROR, com.example.model.PlayabilityStatus.CORRUPTED_FILE, com.example.model.PlayabilityStatus.INVALID_CONTAINER, com.example.model.PlayabilityStatus.READ_ERROR -> NeonRed
+        else -> NeonAmber
+    }
+
+    SectionCard(
+        title = "PLAYBACK INTEGRITY & DECODE HEALTH",
+        icon = if (isPlayable) Icons.Default.CheckCircle else Icons.Default.Warning
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = status.displayName,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = statusColor
+                    )
+                    Text(
+                        text = if (isPlayable) "Decodes cleanly via audio engine pipeline" else (track.playbackErrorMessage ?: "Playback issue detected with file/decoder"),
+                        fontSize = 11.sp,
+                        color = TextSecondary,
+                        lineHeight = 15.sp
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = statusColor.copy(alpha = 0.15f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, statusColor.copy(alpha = 0.5f))
+                ) {
+                    Text(
+                        text = if (isPlayable) "READY" else "ACTION NEEDED",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = statusColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onRevalidate,
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Re-Check", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+
+                if (!isPlayable) {
+                    Button(
+                        onClick = onOpenRepair,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonRed, contentColor = Color.White)
+                    ) {
+                        Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Diagnose & Fix", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -83,8 +83,8 @@ class MetadataResolver(
         }
 
         // 2. Check if already complete or restored and file has not changed (Section 15, 16)
-        if (!forceRefresh && (track.metadataScanState == MetadataScanState.COMPLETE.name || track.metadataScanState == MetadataScanState.RESTORED.name) && !track.filePath.isBlank()) {
-            Log.d(TAG, "Track already COMPLETE or RESTORED; skipping redundant lookup.")
+        if (!forceRefresh && com.example.storage.TrackIdentityReconciler.isMetadataScanComplete(track.metadataScanState) && !track.filePath.isBlank()) {
+            Log.d(TAG, "Track metadata scan already complete (${track.metadataScanState}); skipping redundant lookup.")
             return@withContext MetadataResolutionResult(
                 updatedTrack = track,
                 scanState = if (track.metadataScanState == MetadataScanState.RESTORED.name) MetadataScanState.RESTORED else MetadataScanState.COMPLETE,

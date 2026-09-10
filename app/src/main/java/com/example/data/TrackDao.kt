@@ -129,4 +129,43 @@ interface TrackDao {
 
     @Query("UPDATE tracks SET filePath = :newPath WHERE id = :id")
     suspend fun updateFilePath(id: String, newPath: String)
+
+    @Query("SELECT * FROM tracks WHERE playabilityStatus NOT IN ('PLAYABLE', 'REPAIRED', 'UNKNOWN')")
+    fun observeTracksWithPlaybackIssues(): Flow<List<TrackEntity>>
+
+    @Query("SELECT * FROM tracks WHERE playabilityStatus NOT IN ('PLAYABLE', 'REPAIRED', 'UNKNOWN')")
+    suspend fun getTracksWithPlaybackIssues(): List<TrackEntity>
+
+    @Query("SELECT COUNT(*) FROM tracks WHERE playabilityStatus NOT IN ('PLAYABLE', 'REPAIRED', 'UNKNOWN')")
+    fun observePlaybackIssuesCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM tracks WHERE playabilityStatus NOT IN ('PLAYABLE', 'REPAIRED', 'UNKNOWN')")
+    suspend fun getPlaybackIssuesCount(): Int
+
+    @Query("SELECT * FROM tracks WHERE playabilityStatus = 'UNKNOWN' OR lastPlaybackValidation IS NULL ORDER BY dateAdded DESC")
+    suspend fun getTracksNeedingPlayabilityValidation(): List<TrackEntity>
+
+    @Query("UPDATE tracks SET playabilityStatus = :status, playbackErrorCode = :errorCode, playbackErrorMessage = :errorMessage, lastPlaybackValidation = :timestamp, resolvedUri = :resolvedUri, validationFileSize = :fileSize, validationModifiedTimestamp = :fileModified WHERE id = :id")
+    suspend fun updatePlayabilityStatus(
+        id: String,
+        status: String,
+        errorCode: String?,
+        errorMessage: String?,
+        timestamp: Long,
+        resolvedUri: String?,
+        fileSize: Long,
+        fileModified: Long
+    )
+
+    @Query("UPDATE tracks SET playabilityStatus = :status, lastRepairAttempt = :timestamp, resolvedUri = :resolvedUri, filePath = CASE WHEN :newFilePath IS NOT NULL AND :newFilePath != '' THEN :newFilePath ELSE filePath END WHERE id = :id")
+    suspend fun updateRepairedTrack(
+        id: String,
+        status: String,
+        timestamp: Long,
+        resolvedUri: String?,
+        newFilePath: String?
+    )
+
+    @Query("UPDATE tracks SET playabilityStatus = 'UNKNOWN', lastPlaybackValidation = NULL")
+    suspend fun resetAllPlayabilityStatus()
 }

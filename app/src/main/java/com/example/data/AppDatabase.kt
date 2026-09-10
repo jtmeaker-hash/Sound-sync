@@ -23,7 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LyricsEntity::class,
         MetadataBackupEntity::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -561,6 +561,30 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val newColumns = listOf(
+                    "playabilityStatus TEXT NOT NULL DEFAULT 'UNKNOWN'",
+                    "playbackErrorCode TEXT DEFAULT NULL",
+                    "playbackErrorMessage TEXT DEFAULT NULL",
+                    "lastPlaybackValidation INTEGER DEFAULT NULL",
+                    "lastRepairAttempt INTEGER DEFAULT NULL",
+                    "resolvedUri TEXT DEFAULT NULL",
+                    "validationFileSize INTEGER NOT NULL DEFAULT 0",
+                    "validationModifiedTimestamp INTEGER NOT NULL DEFAULT 0"
+                )
+                newColumns.forEach { definition ->
+                    val colName = definition.substringBefore(' ')
+                    try {
+                        db.execSQL("ALTER TABLE `tracks` ADD COLUMN $colName $definition")
+                    } catch (_: Exception) {}
+                }
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_playabilityStatus` ON `tracks` (`playabilityStatus`)")
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -582,7 +606,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_11_12,
                     MIGRATION_12_13,
                     MIGRATION_13_14,
-                    MIGRATION_14_15
+                    MIGRATION_14_15,
+                    MIGRATION_15_16
                 )
                 .fallbackToDestructiveMigration()
                 .build()

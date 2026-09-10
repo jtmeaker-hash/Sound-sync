@@ -100,6 +100,7 @@ fun LocalLibraryScreen(
     val currentLyrics by viewModel.lyricsManager.currentTrackLyrics.collectAsState()
     val isLoadingLyrics by viewModel.lyricsManager.isLoadingLyrics.collectAsState()
     val playbackPositionMs by viewModel.audioEngine.currentPositionMs.collectAsState()
+    val unplayableTracks by viewModel.unplayableTracks.collectAsState()
 
     // Add to Playlist bottom sheet
     if (showAddToPlaylistSheet != null) {
@@ -355,7 +356,10 @@ fun LocalLibraryScreen(
                             onMixWithThis = { track -> viewModel.openMixWithThis(track) },
                             onInspectQuality = { track -> viewModel.openAudioQualityInspector(track) },
                             onOpenLyrics = { track -> viewModel.openLyricsEditor(track) },
-                            onOpenTrackIntelligence = { track -> viewModel.openTrackIntelligence(track) }
+                            onOpenTrackIntelligence = { track -> viewModel.openTrackIntelligence(track) },
+                            onOpenPlaybackIssueSheet = { track -> viewModel.openPlaybackIssueDiagnosis(track) },
+                            onOpenPlaybackIssuesManager = { viewModel.openPlaybackIssuesManager() },
+                            playbackIssuesCount = unplayableTracks.size
                         )
                     }
                     LocalCategory.ALBUMS -> {

@@ -74,6 +74,7 @@ class DjAudioEngine(private val context: Context) {
     var onNextTrackProvider: (() -> Track?)? = null
     var onTrackStartedCallback: ((Track) -> Unit)? = null
     var onTrackUnavailableCallback: ((Track) -> Unit)? = null
+    var onTrackPlaybackErrorCallback: ((Track, String) -> Unit)? = null
 
     @Volatile
     private var completionInFlight = false
@@ -501,6 +502,7 @@ class DjAudioEngine(private val context: Context) {
                 decoderShouldPause = true
                 stopPlaybackImmediately()
                 onTrackUnavailableCallback?.invoke(track)
+                onTrackPlaybackErrorCallback?.invoke(track, "File is missing or storage is unavailable.")
             }
         } else if (track.filePath.startsWith("demo://")) {
             startAudioSynthesis(session)
@@ -513,7 +515,12 @@ class DjAudioEngine(private val context: Context) {
                 _currentTrack.value = track.copy(filePath = healedPath, isAvailable = true)
                 startStreamingPlayback(session)
             } else {
-                startAudioSynthesis(session)
+                Log.w(TAG, "Cannot access audio stream for track '${track.title}': ${track.filePath}")
+                _isPlaying.value = false
+                decoderShouldPause = true
+                stopPlaybackImmediately()
+                onTrackUnavailableCallback?.invoke(track)
+                onTrackPlaybackErrorCallback?.invoke(track, "Audio file could not be opened or decoded.")
             }
         }
     }
@@ -1450,29 +1457,18 @@ class DjAudioEngine(private val context: Context) {
     }
 
     private fun setExtractorDataSource(extractor: MediaExtractor, uriOrPath: String) {
-        if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
-            val uri = Uri.parse(uriOrPath)
-            try {
-                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
-                    extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                    return
-                }
-            } catch (_: Exception) {}
-            try {
-                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                    extractor.setDataSource(pfd.fileDescriptor)
-                    return
-                }
-            } catch (_: Exception) {}
-            try {
-                extractor.setDataSource(context, uri, null)
-                return
-            } catch (_: Exception) {}
+        if (uriOrPath.startsWith("content://")) {
+            extractor.setDataSource(context, Uri.parse(uriOrPath), null)
+            return
         }
         val cleanPath = uriOrPath.removePrefix("file://")
         val file = File(cleanPath)
         if (file.exists() && file.canRead()) {
             extractor.setDataSource(cleanPath)
+            return
+        }
+        if (uriOrPath.startsWith("file://")) {
+            extractor.setDataSource(context, Uri.parse(uriOrPath), null)
             return
         }
         extractor.setDataSource(uriOrPath)
@@ -1523,19 +1519,18 @@ class DjAudioEngine(private val context: Context) {
         private var frameBuffer = ShortArray(0)
 
         init {
-            if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
-                val uri = Uri.parse(uriOrPath)
-                try {
-                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
-                        extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                    } ?: run {
-                        extractor.setDataSource(context, uri, null)
-                    }
-                } catch (_: Exception) {
-                    extractor.setDataSource(context, uri, null)
-                }
+            if (uriOrPath.startsWith("content://")) {
+                extractor.setDataSource(context, Uri.parse(uriOrPath), null)
             } else {
-                extractor.setDataSource(uriOrPath)
+                val clean = uriOrPath.removePrefix("file://")
+                val f = File(clean)
+                if (f.exists() && f.canRead()) {
+                    extractor.setDataSource(clean)
+                } else if (uriOrPath.startsWith("file://")) {
+                    extractor.setDataSource(context, Uri.parse(uriOrPath), null)
+                } else {
+                    extractor.setDataSource(uriOrPath)
+                }
             }
             var audioIndex = -1
             var format: MediaFormat? = null

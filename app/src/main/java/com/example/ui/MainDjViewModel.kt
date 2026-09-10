@@ -11,6 +11,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.analysis.AiAutoTagger
 import com.example.analysis.DuplicateDetector
+import com.example.analysis.TrackPlaybackHealthManager
+import com.example.model.PlayabilityStatus
+import com.example.model.PlayabilityDiagnosticReport
 import com.example.audio.DjAudioEngine
 import com.example.audio.SpectrogramEngine
 import com.example.audio.WaveformData
@@ -380,6 +383,125 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val showLibraryInsightsDialog = _showLibraryInsightsDialog.asStateFlow()
     fun openLibraryInsights() { _showLibraryInsightsDialog.value = true }
     fun closeLibraryInsights() { _showLibraryInsightsDialog.value = false }
+
+    // Playback Health & Unplayable Track Management State
+    val tracksWithPlaybackIssues: StateFlow<List<Track>> = trackDao.observeTracksWithPlaybackIssues()
+        .map { it.map { entity -> entity.toTrack() } }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    val unplayableTracks: StateFlow<List<Track>> = tracksWithPlaybackIssues
+
+    val playbackIssuesCount: StateFlow<Int> = trackDao.observePlaybackIssuesCount()
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.Lazily, 0)
+
+    val isPlayabilityValidating: StateFlow<Boolean> = TrackPlaybackHealthManager.isValidating
+    val playabilityValidationProgress: StateFlow<Float> = TrackPlaybackHealthManager.validationProgress
+
+    private val _showPlaybackIssueSheet = MutableStateFlow<Track?>(null)
+    val showPlaybackIssueSheet = _showPlaybackIssueSheet.asStateFlow()
+
+    private val _showPlaybackIssuesManagerDialog = MutableStateFlow(false)
+    val showPlaybackIssuesManagerDialog = _showPlaybackIssuesManagerDialog.asStateFlow()
+
+    private val _activeDiagnosticReport = MutableStateFlow<com.example.model.PlayabilityDiagnosticReport?>(null)
+    val activeDiagnosticReport = _activeDiagnosticReport.asStateFlow()
+
+    private val _isDiagnosing = MutableStateFlow(false)
+    val isDiagnosing = _isDiagnosing.asStateFlow()
+
+    fun openPlaybackIssueSheet(track: Track) {
+        _showPlaybackIssueSheet.value = track
+        diagnoseTrack(track)
+    }
+
+    fun openPlaybackIssueDiagnosis(track: Track) = openPlaybackIssueSheet(track)
+
+    fun closePlaybackIssueSheet() {
+        _showPlaybackIssueSheet.value = null
+        _activeDiagnosticReport.value = null
+    }
+
+    fun openPlaybackIssuesManager() {
+        _showPlaybackIssuesManagerDialog.value = true
+    }
+
+    fun closePlaybackIssuesManager() {
+        _showPlaybackIssuesManagerDialog.value = false
+    }
+
+    fun diagnoseTrack(track: Track, forceFresh: Boolean = false) {
+        viewModelScope.launch {
+            _isDiagnosing.value = true
+            try {
+                val report = TrackPlaybackHealthManager.getOrProbeReport(getApplication(), track, forceFresh = forceFresh)
+                _activeDiagnosticReport.value = report
+            } catch (e: Exception) {
+                Log.w("MainDjViewModel", "Error diagnosing track '${track.title}': ${e.message}")
+            } finally {
+                _isDiagnosing.value = false
+            }
+        }
+    }
+
+    fun autoRepairTrack(track: Track, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            val result = com.example.storage.TrackPlaybackRepairEngine.autoRepairTrack(getApplication(), track, trackDao)
+            _activeDiagnosticReport.value = result.diagnosticReport
+            if (result.success) {
+                showSnackbar("Repaired '${track.title}': ${result.message}")
+                updateTrackInPlaybackQueue(result.track)
+            } else {
+                showSnackbar("Could not auto-repair '${track.title}'. Try 'Locate File'.")
+            }
+            onComplete?.invoke(result.success)
+        }
+    }
+
+    fun manualLocateFileForTrack(track: Track, newUriOrPath: String, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            val result = com.example.storage.TrackPlaybackRepairEngine.manualLocateFile(getApplication(), track, newUriOrPath, trackDao)
+            _activeDiagnosticReport.value = result.diagnosticReport
+            if (result.success) {
+                showSnackbar("Reconnected '${track.title}' to audio file!")
+                updateTrackInPlaybackQueue(result.track)
+            } else {
+                showSnackbar(result.message)
+            }
+            onComplete?.invoke(result.success)
+        }
+    }
+
+    fun autoRepairAllUnplayableTracks() {
+        viewModelScope.launch {
+            val issues = trackDao.getTracksWithPlaybackIssues().map { it.toTrack() }
+            if (issues.isEmpty()) {
+                showSnackbar("No tracks currently have playback issues.")
+                return@launch
+            }
+            showSnackbar("Starting automatic repair for ${issues.size} broken track(s)...")
+            val summary = com.example.storage.TrackPlaybackRepairEngine.autoRepairAll(getApplication(), issues, trackDao)
+            if (summary.totalRepaired > 0) {
+                showSnackbar("Repaired ${summary.totalRepaired} track(s)! (${summary.totalFailed} unresolved)")
+            } else {
+                showSnackbar("Could not resolve tracks automatically. Try manually locating missing files.")
+            }
+        }
+    }
+
+    fun runFullLibraryPlaybackValidation() {
+        showSnackbar("Starting deep playback validation for all library tracks in background...")
+        TrackPlaybackHealthManager.enqueueBackgroundValidation(getApplication(), trackDao, onlyUnvalidated = false)
+    }
+
+    fun removeUnplayableTrackFromLibrary(track: Track) {
+        viewModelScope.launch {
+            trackDao.deleteTrackById(track.id)
+            closePlaybackIssueSheet()
+            showSnackbar("Removed '${track.title}' from SoundSync library.")
+        }
+    }
 
     fun saveUserEditedLyrics(trackId: String, lines: List<com.example.lyrics.LyricLine>, plainText: String, offsetMs: Long) {
         viewModelScope.launch {
@@ -1093,6 +1215,24 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
+        audioEngine.onTrackPlaybackErrorCallback = { brokenTrack, reason ->
+            viewModelScope.launch(Dispatchers.Main) {
+                Log.w("MainDjViewModel", "Playback error on '${brokenTrack.title}': $reason")
+                withContext(Dispatchers.IO) {
+                    trackDao.updatePlayabilityStatus(
+                        id = brokenTrack.id,
+                        status = PlayabilityStatus.DECODER_ERROR.name,
+                        errorCode = "PLAYBACK_DECODE_FAILED",
+                        errorMessage = reason,
+                        timestamp = System.currentTimeMillis(),
+                        resolvedUri = null,
+                        fileSize = 0L,
+                        fileModified = 0L
+                    )
+                }
+                showSnackbar("Playback error on '${brokenTrack.title}': $reason")
+            }
+        }
     }
 
     private fun provideNextTrackForEngine(): Track? {
@@ -1412,14 +1552,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         var isFirstBatch = true
 
         try {
-            val existingFingerprints = trackDao.getAllFingerprints().toSet()
-            val existingFilePaths = trackDao.getAllFilePaths().toSet()
+            val allExisting = trackDao.getAllTracksSync()
+            val reconcilerIndexes = com.example.storage.TrackIdentityReconciler.buildIndexes(app, allExisting)
 
             val scanResult = MediaScannerHelper.scanDeviceAudioStreaming(
                 context = app,
                 batchSize = 200,
-                existingFingerprints = existingFingerprints,
-                existingFilePaths = existingFilePaths,
+                reconcilerIndexes = reconcilerIndexes,
+                onRelinked = { relinkedTrack ->
+                    trackDao.updateTrack(relinkedTrack)
+                },
                 onBatch = { batch ->
                     val entities = batch.map { TrackEntity.fromTrack(it) }
                     trackDao.insertTracks(entities)

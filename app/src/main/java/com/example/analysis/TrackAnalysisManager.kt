@@ -117,16 +117,27 @@ class TrackAnalysisManager private constructor(
 
     /**
      * Enqueues newly discovered tracks for background analysis.
+     * Skips tracks that have already completed analysis and metadata scanning.
      */
     fun enqueueDiscoveredTracks(trackIds: List<String>) {
         if (trackIds.isEmpty()) return
         scope.launch {
             try {
-                trackDao.queueTracksByIds(trackIds)
+                val tracks = trackDao.getTracksByIds(trackIds)
+                val needingAnalysis = tracks.filter { entity ->
+                    entity.analysisState != AnalysisState.COMPLETE.name ||
+                    !com.example.storage.TrackIdentityReconciler.isMetadataScanComplete(entity.metadataScanState) ||
+                    entity.bpm <= 0.0 ||
+                    entity.musicalKey.isBlank()
+                }.map { it.id }
+
+                if (needingAnalysis.isNotEmpty()) {
+                    trackDao.queueTracksByIds(needingAnalysis)
+                    triggerQueueProcessing()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error queueing tracks for analysis: ${e.message}")
             }
-            triggerQueueProcessing()
         }
     }
 

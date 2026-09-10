@@ -15,7 +15,8 @@ import com.example.model.Track
         Index(value = ["filePath"]),
         Index(value = ["crateId"]),
         Index(value = ["dateAdded"]),
-        Index(value = ["analysisState"])
+        Index(value = ["analysisState"]),
+        Index(value = ["playabilityStatus"])
     ]
 )
 data class TrackEntity(
@@ -88,7 +89,15 @@ data class TrackEntity(
     val metadataConfidence: Double = 0.0,
     val fingerprintAlgorithm: String? = null,
     val fingerprintTimestamp: Long? = null,
-    val metadataWriteState: String = "NOT_ANALYSED"
+    val metadataWriteState: String = "NOT_ANALYSED",
+    val playabilityStatus: String = "UNKNOWN",
+    val playbackErrorCode: String? = null,
+    val playbackErrorMessage: String? = null,
+    val lastPlaybackValidation: Long? = null,
+    val lastRepairAttempt: Long? = null,
+    val resolvedUri: String? = null,
+    val validationFileSize: Long = 0L,
+    val validationModifiedTimestamp: Long = 0L
 ) {
     fun toTrack(): Track {
         val syncEnum = try { SyncState.valueOf(syncState) } catch (e: Exception) { SyncState.LOCAL_ONLY }
@@ -186,7 +195,15 @@ data class TrackEntity(
             metadataConfidence = metadataConfidence,
             fingerprintAlgorithm = fingerprintAlgorithm,
             fingerprintTimestamp = fingerprintTimestamp,
-            metadataWriteState = metadataWriteState
+            metadataWriteState = metadataWriteState,
+            playabilityStatus = playabilityStatus,
+            playbackErrorCode = playbackErrorCode,
+            playbackErrorMessage = playbackErrorMessage,
+            lastPlaybackValidation = lastPlaybackValidation,
+            lastRepairAttempt = lastRepairAttempt,
+            resolvedUri = resolvedUri,
+            validationFileSize = validationFileSize,
+            validationModifiedTimestamp = validationModifiedTimestamp
         )
     }
 
@@ -261,7 +278,15 @@ data class TrackEntity(
                 metadataConfidence = track.metadataConfidence,
                 fingerprintAlgorithm = track.fingerprintAlgorithm,
                 fingerprintTimestamp = track.fingerprintTimestamp,
-                metadataWriteState = track.metadataWriteState
+                metadataWriteState = track.metadataWriteState,
+                playabilityStatus = track.playabilityStatus,
+                playbackErrorCode = track.playbackErrorCode,
+                playbackErrorMessage = track.playbackErrorMessage,
+                lastPlaybackValidation = track.lastPlaybackValidation,
+                lastRepairAttempt = track.lastRepairAttempt,
+                resolvedUri = track.resolvedUri,
+                validationFileSize = track.validationFileSize,
+                validationModifiedTimestamp = track.validationModifiedTimestamp
             )
         }
     }

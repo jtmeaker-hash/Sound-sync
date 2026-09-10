@@ -231,8 +231,28 @@ data class Track(
     val metadataConfidence: Double = 0.0,
     val fingerprintAlgorithm: String? = null,
     val fingerprintTimestamp: Long? = null,
-    val metadataWriteState: String = MetadataWriteState.NOT_ANALYSED.name
+    val metadataWriteState: String = MetadataWriteState.NOT_ANALYSED.name,
+    val playabilityStatus: String = "UNKNOWN",
+    val playbackErrorCode: String? = null,
+    val playbackErrorMessage: String? = null,
+    val lastPlaybackValidation: Long? = null,
+    val lastRepairAttempt: Long? = null,
+    val resolvedUri: String? = null,
+    val validationFileSize: Long = 0L,
+    val validationModifiedTimestamp: Long = 0L
 ) {
+    val playability: PlayabilityStatus
+        get() = try { PlayabilityStatus.valueOf(playabilityStatus) } catch (_: Exception) { PlayabilityStatus.UNKNOWN }
+
+    val isActuallyPlayable: Boolean
+        get() = playability == PlayabilityStatus.PLAYABLE || playability == PlayabilityStatus.REPAIRED || playability == PlayabilityStatus.UNKNOWN
+
+    val hasPlaybackIssue: Boolean
+        get() = playability.isProblem
+
+    val playabilityBadgeText: String
+        get() = playability.shortBadge
+
     val writeState: MetadataWriteState
         get() = try { MetadataWriteState.valueOf(metadataWriteState) } catch (_: Exception) { MetadataWriteState.NOT_ANALYSED }
 
