@@ -17,7 +17,7 @@ import com.example.storage.TagWriteResult
 import com.example.storage.TrackSelfHealingResolver
 import com.example.audio.DjAudioEngine
 import com.example.analysis.PlayabilityValidator
-import com.example.analysis.PlayabilityStatus
+import com.example.model.PlayabilityStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext

@@ -54,6 +54,15 @@ sealed interface TagWriteResult {
     data class Failed(val message: String, val cause: Throwable? = null) : TagWriteResult
     data class Unsupported(val message: String) : TagWriteResult
     data class LibraryOnly(val reason: String) : TagWriteResult
+
+    val errorMessage: String?
+        get() = when (this) {
+            is Failed -> message
+            is Unsupported -> message
+            is LibraryOnly -> reason
+            is PermissionRequired -> cause?.message
+            else -> null
+        }
 }
 
 /**
