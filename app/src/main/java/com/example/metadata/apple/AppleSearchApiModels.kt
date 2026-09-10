@@ -148,3 +148,67 @@ data class AppleTrackResult(
         }
     }
 }
+
+data class AppleAlbumResult(
+    val collectionId: Long,
+    val collectionName: String,
+    val artistId: Long? = null,
+    val artistName: String,
+    val artworkUrl100: String? = null,
+    val releaseDate: String? = null,
+    val primaryGenreName: String? = null,
+    val trackCount: Int? = null,
+    val country: String? = null
+) {
+    val releaseYear: Int?
+        get() = releaseDate?.take(4)?.toIntOrNull()
+
+    val artworkUrl1200: String?
+        get() = artworkUrl100
+            ?.replace("100x100bb.jpg", "1200x1200bb.jpg")
+            ?.replace("60x60bb.jpg", "1200x1200bb.jpg")
+
+    companion object {
+        fun fromJson(json: JSONObject): AppleAlbumResult {
+            return AppleAlbumResult(
+                collectionId = json.optLong("collectionId", 0L),
+                collectionName = json.optString("collectionName", ""),
+                artistId = json.optLong("artistId").takeIf { it > 0 },
+                artistName = json.optString("artistName", ""),
+                artworkUrl100 = json.optString("artworkUrl100").takeIf(String::isNotBlank),
+                releaseDate = json.optString("releaseDate").takeIf(String::isNotBlank),
+                primaryGenreName = json.optString("primaryGenreName").takeIf(String::isNotBlank),
+                trackCount = json.optInt("trackCount").takeIf { it > 0 },
+                country = json.optString("country").takeIf(String::isNotBlank)
+            )
+        }
+    }
+}
+
+data class AppleAlbumSearchResponse(
+    val resultCount: Int,
+    val results: List<AppleAlbumResult>
+) {
+    companion object {
+        fun fromJson(jsonStr: String): AppleAlbumSearchResponse {
+            val root = JSONObject(jsonStr)
+            val count = root.optInt("resultCount", 0)
+            val array = root.optJSONArray("results") ?: JSONArray()
+            val list = ArrayList<AppleAlbumResult>(array.length())
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val wrapperType = item.optString("wrapperType")
+                val collectionType = item.optString("collectionType")
+                if (wrapperType.equals("collection", ignoreCase = true) ||
+                    collectionType.equals("Album", ignoreCase = true) ||
+                    collectionType.equals("Single", ignoreCase = true) ||
+                    collectionType.equals("EP", ignoreCase = true)
+                ) {
+                    list.add(AppleAlbumResult.fromJson(item))
+                }
+            }
+            return AppleAlbumSearchResponse(resultCount = count, results = list)
+        }
+    }
+}
+

@@ -114,7 +114,8 @@ class WatchedFolderManager(
                     newPathOrUri = file.absolutePath,
                     newDirectoryPath = file.parent ?: "",
                     newFingerprint = fingerprint,
-                    newModifiedTimestamp = file.lastModified()
+                    newModifiedTimestamp = file.lastModified(),
+                    context = context
                 )
                 trackDao.updateTrack(relinked)
             } else if (folder.autoScanNewFiles) {

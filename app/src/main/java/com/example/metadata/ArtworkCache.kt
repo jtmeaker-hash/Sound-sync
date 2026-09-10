@@ -143,7 +143,69 @@ class ArtworkCache(private val context: Context) {
         )
     }
 
+    fun getCachedArtworkFileForTrack(trackId: String): File? {
+        val safeKey = "track_${trackId.replace(Regex("[^a-zA-Z0-9_-]"), "_")}"
+        val imageFile = File(cacheDir, "$safeKey.jpg")
+        return if (imageFile.exists() && imageFile.length() > 0) imageFile else null
+    }
+
+    fun saveArtworkBytes(
+        key: String,
+        bytes: ByteArray,
+        mimeType: String = "image/jpeg",
+        sourceProvider: String = "Local",
+        sourceUrl: String = "",
+        artist: String = "",
+        album: String? = null
+    ): File {
+        val ext = if (mimeType.contains("png", ignoreCase = true)) "png" else "jpg"
+        val imageFile = File(cacheDir, "$key.$ext")
+        val metaFile = File(cacheDir, "$key.json")
+
+        val tempFile = File(cacheDir, "$key.tmp")
+        tempFile.writeBytes(bytes)
+        if (imageFile.exists()) {
+            imageFile.delete()
+        }
+        tempFile.renameTo(imageFile)
+
+        val meta = JSONObject().apply {
+            put("sourceProvider", sourceProvider)
+            put("sourceUrl", sourceUrl)
+            put("downloadTimestamp", System.currentTimeMillis())
+            put("artist", artist)
+            put("album", album.orEmpty())
+        }
+        metaFile.writeText(meta.toString(2), StandardCharsets.UTF_8)
+        return imageFile
+    }
+
+    fun saveArtworkForTrack(
+        trackId: String,
+        bytes: ByteArray,
+        mimeType: String = "image/jpeg",
+        sourceProvider: String = "Manual Selection"
+    ): File {
+        val safeKey = "track_${trackId.replace(Regex("[^a-zA-Z0-9_-]"), "_")}"
+        return saveArtworkBytes(safeKey, bytes, mimeType, sourceProvider)
+    }
+
+    fun getCacheSizeBytes(): Long {
+        return cacheDir.listFiles()?.sumOf { it.length() } ?: 0L
+    }
+
+    fun getCacheCount(): Int {
+        return cacheDir.listFiles { _, name -> name.endsWith(".jpg") || name.endsWith(".png") }?.size ?: 0
+    }
+
+    fun clearCache(): Long {
+        val freed = getCacheSizeBytes()
+        clear()
+        return freed
+    }
+
     fun clear() {
         cacheDir.listFiles()?.forEach { it.delete() }
     }
 }
+

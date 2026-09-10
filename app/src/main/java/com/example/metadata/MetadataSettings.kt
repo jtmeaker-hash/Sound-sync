@@ -16,6 +16,9 @@ data class MetadataSettings(
     // External Catalog & Analysis Settings
     val appleSearchEnabled: Boolean = true,
     val theAudioDbEnabled: Boolean = true,
+    val autoFindArtwork: Boolean = true,
+    val backgroundArtworkScanning: Boolean = true,
+    val artworkFallbackEnabled: Boolean = true,
     val storefrontCountry: String = "AU",
     val bpmAnalysisEnabled: Boolean = true,
     val keyAnalysisEnabled: Boolean = true,
@@ -25,6 +28,7 @@ data class MetadataSettings(
     val bpmMin: Int = 60,
     val bpmMax: Int = 300
 ) {
+
     init {
         require(bpmMin in BPM_HARD_MIN..BPM_HARD_MAX)
         require(bpmMax in BPM_HARD_MIN..BPM_HARD_MAX)
@@ -66,6 +70,9 @@ class MetadataSettingsStore(private val context: Context) {
             keepOriginalMetadataBackup = prefs.getBoolean(KEY_KEEP_BACKUP, true),
             appleSearchEnabled = prefs.getBoolean(KEY_APPLE_SEARCH, true),
             theAudioDbEnabled = prefs.getBoolean(KEY_THEAUDIODB, true),
+            autoFindArtwork = prefs.getBoolean(KEY_AUTO_FIND_ARTWORK, true),
+            backgroundArtworkScanning = prefs.getBoolean(KEY_BG_ARTWORK_SCAN, true),
+            artworkFallbackEnabled = prefs.getBoolean(KEY_ARTWORK_FALLBACK, true),
             storefrontCountry = prefs.getString(KEY_STOREFRONT, "AU") ?: "AU",
             bpmAnalysisEnabled = prefs.getBoolean(KEY_BPM, true),
             keyAnalysisEnabled = prefs.getBoolean(KEY_KEY, true),
@@ -91,6 +98,9 @@ class MetadataSettingsStore(private val context: Context) {
             .putBoolean(KEY_KEEP_BACKUP, settings.keepOriginalMetadataBackup)
             .putBoolean(KEY_APPLE_SEARCH, settings.appleSearchEnabled)
             .putBoolean(KEY_THEAUDIODB, settings.theAudioDbEnabled)
+            .putBoolean(KEY_AUTO_FIND_ARTWORK, settings.autoFindArtwork)
+            .putBoolean(KEY_BG_ARTWORK_SCAN, settings.backgroundArtworkScanning)
+            .putBoolean(KEY_ARTWORK_FALLBACK, settings.artworkFallbackEnabled)
             .putString(KEY_STOREFRONT, settings.storefrontCountry)
             .putBoolean(KEY_BPM, settings.bpmAnalysisEnabled)
             .putBoolean(KEY_KEY, settings.keyAnalysisEnabled)
@@ -115,7 +125,11 @@ class MetadataSettingsStore(private val context: Context) {
         const val KEY_KEEP_BACKUP = "keep_original_metadata_backup"
         const val KEY_APPLE_SEARCH = "apple_search_enabled"
         const val KEY_THEAUDIODB = "theaudiodb_enabled"
+        const val KEY_AUTO_FIND_ARTWORK = "auto_find_artwork"
+        const val KEY_BG_ARTWORK_SCAN = "background_artwork_scanning"
+        const val KEY_ARTWORK_FALLBACK = "artwork_fallback_enabled"
         const val KEY_STOREFRONT = "apple_storefront_country"
+
         const val KEY_BPM = "bpm_analysis_enabled"
         const val KEY_KEY = "key_analysis_enabled"
         const val KEY_WRITE_TO_FILE = "write_to_file_enabled"

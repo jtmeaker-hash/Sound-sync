@@ -45,7 +45,43 @@ object AlbumArtHelper {
             }
         }
 
-        // 2. Try extracting embedded picture via MediaMetadataRetriever
+        // 1b. Check ArtworkCache by track ID or artist + album
+        try {
+            val artworkCache = com.example.metadata.ArtworkCache(context)
+            val cachedFile = artworkCache.getCachedArtworkFileForTrack(track.id)
+                ?: if (track.artist.isNotBlank() && !track.album.isNullOrBlank()) {
+                    artworkCache.getCachedArtworkFile(track.artist, track.album)
+                } else null
+
+            if (cachedFile != null && cachedFile.exists() && cachedFile.length() > 0) {
+                val decoded = decodeFileToBitmap(cachedFile, sizePx)
+                if (decoded != null) {
+                    synchronized(memoryCache) {
+                        if (memoryCache.size > 50) memoryCache.clear()
+                        memoryCache[cacheKey] = decoded
+                    }
+                    return@withContext decoded
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 2. Try LocalArtworkFinder (checks embedded picture + folder artwork cover.jpg/folder.jpg)
+        try {
+            val localFinder = com.example.metadata.artwork.LocalArtworkFinder(context)
+            val localResult = localFinder.findLocalArtwork(track)
+            if (localResult != null && localResult.file.exists() && localResult.file.length() > 0) {
+                val decoded = decodeFileToBitmap(localResult.file, sizePx)
+                if (decoded != null) {
+                    synchronized(memoryCache) {
+                        if (memoryCache.size > 50) memoryCache.clear()
+                        memoryCache[cacheKey] = decoded
+                    }
+                    return@withContext decoded
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 2b. Direct embedded picture extraction as safety fallback
         val embeddedBitmap = extractEmbeddedPicture(context, track.filePath, sizePx)
         if (embeddedBitmap != null) {
             synchronized(memoryCache) {
@@ -54,6 +90,7 @@ object AlbumArtHelper {
             }
             return@withContext embeddedBitmap
         }
+
 
         // 3. Fallback: Generate a crisp, vibrant DJ vinyl record artwork Bitmap
         val generated = generateFallbackArtwork(track, sizePx)

@@ -115,7 +115,7 @@ open class TheAudioDbArtworkProvider(
         candidates
     }
 
-    private suspend fun searchAlbumDirect(artist: String, album: String): List<ArtworkCandidate> {
+    open suspend fun searchAlbumDirect(artist: String, album: String): List<ArtworkCandidate> {
         val encodedArtist = URLEncoder.encode(artist, StandardCharsets.UTF_8.name())
         val encodedAlbum = URLEncoder.encode(album, StandardCharsets.UTF_8.name())
         val url = "$BASE_URL/$apiKey/searchalbum.php?s=$encodedArtist&a=$encodedAlbum"
@@ -125,7 +125,7 @@ open class TheAudioDbArtworkProvider(
         return extractCandidatesFromAlbums(parsed.albums, artist, album)
     }
 
-    private suspend fun searchArtistAlbums(artist: String): List<ArtworkCandidate> {
+    open suspend fun searchArtistAlbums(artist: String): List<ArtworkCandidate> {
         val encodedArtist = URLEncoder.encode(artist, StandardCharsets.UTF_8.name())
         val url = "$BASE_URL/$apiKey/searchalbum.php?s=$encodedArtist"
 
@@ -134,7 +134,7 @@ open class TheAudioDbArtworkProvider(
         return extractCandidatesFromAlbums(parsed.albums, artist, null)
     }
 
-    private suspend fun searchTrackDirect(artist: String, track: String): List<ArtworkCandidate> {
+    open suspend fun searchTrackDirect(artist: String, track: String): List<ArtworkCandidate> {
         val encodedArtist = URLEncoder.encode(artist, StandardCharsets.UTF_8.name())
         val encodedTrack = URLEncoder.encode(track, StandardCharsets.UTF_8.name())
         val url = "$BASE_URL/$apiKey/searchtrack.php?s=$encodedArtist&t=$encodedTrack"
@@ -143,21 +143,27 @@ open class TheAudioDbArtworkProvider(
         val parsed = TheAudioDbTrackResponse.fromJson(json)
         val results = mutableListOf<ArtworkCandidate>()
         for (item in parsed.tracks) {
-            val thumb = item.strTrackThumb?.takeIf(String::isNotBlank) ?: continue
-            results.add(
-                ArtworkCandidate(
-                    artworkUrl = thumb,
-                    provider = "TheAudioDB",
-                    artist = item.strArtist.ifBlank { artist },
-                    album = null,
-                    track = item.strTrack,
-                    isHighQuality = false,
-                    description = "TheAudioDB Track Thumb"
+            val thumb = item.strTrackThumb?.takeIf(String::isNotBlank)
+            if (thumb != null) {
+                results.add(
+                    ArtworkCandidate(
+                        artworkUrl = thumb,
+                        provider = "TheAudioDB",
+                        artist = item.strArtist.ifBlank { artist },
+                        album = item.strAlbum,
+                        track = item.strTrack,
+                        isHighQuality = false,
+                        description = "TheAudioDB Track Thumb"
+                    )
                 )
-            )
+            } else if (!item.strAlbum.isNullOrBlank()) {
+                val albumCandidates = searchAlbumDirect(item.strArtist.ifBlank { artist }, item.strAlbum)
+                results.addAll(albumCandidates)
+            }
         }
         return results
     }
+
 
     private fun extractCandidatesFromAlbums(
         albums: List<TheAudioDbAlbumItem>,

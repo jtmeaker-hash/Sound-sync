@@ -58,42 +58,42 @@ object TrackSelfHealingResolver {
         val fromMediaStoreId = resolveFromMediaStoreId(context, track)
         if (fromMediaStoreId != null && StorageAvailabilityHelper.isTrackPathAvailable(context, fromMediaStoreId)) {
             Log.i(TAG, "[TrackSelfHealing] SUCCESS via MediaStore ID: healed '$originalPath' -> '$fromMediaStoreId'")
-            return@withContext applyHealedPath(track, fromMediaStoreId, trackDao)
+            return@withContext applyHealedPath(context, track, fromMediaStoreId, trackDao)
         }
 
         // Strategy 2: Cross-reference conversion (content:// <-> file path)
         val fromCrossReference = resolveFromCrossReference(context, track)
         if (fromCrossReference != null && StorageAvailabilityHelper.isTrackPathAvailable(context, fromCrossReference)) {
             Log.i(TAG, "[TrackSelfHealing] SUCCESS via cross-reference: healed '$originalPath' -> '$fromCrossReference'")
-            return@withContext applyHealedPath(track, fromCrossReference, trackDao)
+            return@withContext applyHealedPath(context, track, fromCrossReference, trackDao)
         }
 
         // Strategy 2b: Canonical Storage Resolution (SAF URI <-> /storage/emulated/0/...)
         val fromCanonical = CanonicalStorageHelper.resolvePlayableReference(context, originalPath)
         if (fromCanonical != null && fromCanonical != originalPath && StorageAvailabilityHelper.isTrackPathAvailable(context, fromCanonical)) {
             Log.i(TAG, "[TrackSelfHealing] SUCCESS via CanonicalStorageHelper: healed '$originalPath' -> '$fromCanonical'")
-            return@withContext applyHealedPath(track, fromCanonical, trackDao)
+            return@withContext applyHealedPath(context, track, fromCanonical, trackDao)
         }
 
         // Strategy 3: Persisted SAF DocumentFile / tree URI
         val fromSaf = resolveFromSaf(context, track)
         if (fromSaf != null && StorageAvailabilityHelper.isTrackPathAvailable(context, fromSaf)) {
             Log.i(TAG, "[TrackSelfHealing] SUCCESS via SAF document: healed '$originalPath' -> '$fromSaf'")
-            return@withContext applyHealedPath(track, fromSaf, trackDao)
+            return@withContext applyHealedPath(context, track, fromSaf, trackDao)
         }
 
         // Strategy 4: MediaStore query by title, artist, duration, filename
         val fromMediaStoreQuery = resolveFromMediaStoreQuery(context, track)
         if (fromMediaStoreQuery != null && StorageAvailabilityHelper.isTrackPathAvailable(context, fromMediaStoreQuery)) {
             Log.i(TAG, "[TrackSelfHealing] SUCCESS via MediaStore query: healed '$originalPath' -> '$fromMediaStoreQuery'")
-            return@withContext applyHealedPath(track, fromMediaStoreQuery, trackDao)
+            return@withContext applyHealedPath(context, track, fromMediaStoreQuery, trackDao)
         }
 
         // Strategy 5: Filesystem search in standard directories & fingerprint matching
         val fromFilesystem = resolveFromFilesystem(context, track)
         if (fromFilesystem != null && StorageAvailabilityHelper.isTrackPathAvailable(context, fromFilesystem)) {
             Log.i(TAG, "[TrackSelfHealing] SUCCESS via filesystem search: healed '$originalPath' -> '$fromFilesystem'")
-            return@withContext applyHealedPath(track, fromFilesystem, trackDao)
+            return@withContext applyHealedPath(context, track, fromFilesystem, trackDao)
         }
 
         Log.w(TAG, "[TrackSelfHealing] FAILED to heal reference for '${track.title}' (id=${track.id}). Path remains inaccessible: '$originalPath'")
@@ -378,6 +378,7 @@ object TrackSelfHealingResolver {
     // ── Persistence & Helpers ──────────────────────────────────────────────
 
     private suspend fun applyHealedPath(
+        context: Context,
         track: Track,
         newPath: String,
         trackDao: TrackDao?
@@ -389,11 +390,39 @@ object TrackSelfHealingResolver {
             File(newPath).parent ?: ""
         }
 
+        // Artwork verification on self-healing:
+        var validArtPath = track.artworkCachePath
+        var validArtUrl = track.artworkUrl
+        var validArtSource = track.artworkSource
+
+        if (!validArtPath.isNullOrBlank()) {
+            val f = File(validArtPath)
+            if (!f.exists() || f.length() == 0L) {
+                validArtPath = null
+            }
+        }
+
+        if (validArtPath == null) {
+            val artCache = com.example.metadata.ArtworkCache(context)
+            val cached = artCache.getCachedArtworkFileForTrack(track.id)
+                ?: if (track.artist.isNotBlank() && track.album.isNotBlank()) {
+                    artCache.getCachedArtworkFile(track.artist, track.album)
+                } else null
+            if (cached != null && cached.exists() && cached.length() > 0) {
+                validArtPath = cached.absolutePath
+                if (validArtUrl.isNullOrBlank()) validArtUrl = cached.absolutePath
+                if (validArtSource.isNullOrBlank()) validArtSource = "Artwork Cache"
+            }
+        }
+
         val healed = track.copy(
             filePath = newPath,
             storageRelativePath = relPath,
             directoryPath = dirPath,
-            isAvailable = true
+            isAvailable = true,
+            artworkCachePath = validArtPath,
+            artworkUrl = validArtUrl,
+            artworkSource = validArtSource
         )
         if (trackDao != null && track.id.isNotBlank()) {
             try {
@@ -402,7 +431,10 @@ object TrackSelfHealingResolver {
                     trackDao.updateTrack(
                         entity.copy(
                             filePath = newPath,
-                            storageRelativePath = relPath
+                            storageRelativePath = relPath,
+                            artworkCachePath = validArtPath,
+                            artworkUrl = validArtUrl,
+                            artworkSource = validArtSource
                         )
                     )
                 } else {

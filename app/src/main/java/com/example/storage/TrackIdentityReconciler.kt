@@ -149,7 +149,8 @@ object TrackIdentityReconciler {
                 newModifiedTimestamp = candidateModified,
                 newTitle = candidateTitle,
                 newArtist = candidateArtist,
-                newAlbum = candidateAlbum
+                newAlbum = candidateAlbum,
+                context = context
             )
             updateIndexes(indexes, canonicalMatch, relinked)
             return ReconciliationResult(
@@ -179,7 +180,8 @@ object TrackIdentityReconciler {
                         newModifiedTimestamp = candidateModified,
                         newTitle = candidateTitle,
                         newArtist = candidateArtist,
-                        newAlbum = candidateAlbum
+                        newAlbum = candidateAlbum,
+                        context = context
                     )
                     updateIndexes(indexes, fpMatch, relinked)
                     return ReconciliationResult(
@@ -223,7 +225,8 @@ object TrackIdentityReconciler {
                 newModifiedTimestamp = candidateModified,
                 newTitle = candidateTitle,
                 newArtist = candidateArtist,
-                newAlbum = candidateAlbum
+                newAlbum = candidateAlbum,
+                context = context
             )
             updateIndexes(indexes, staleTrack, relinked)
             return ReconciliationResult(
@@ -257,7 +260,8 @@ object TrackIdentityReconciler {
         newModifiedTimestamp: Long,
         newTitle: String? = null,
         newArtist: String? = null,
-        newAlbum: String? = null
+        newAlbum: String? = null,
+        context: Context? = null
     ): TrackEntity {
         val relPath = CanonicalStorageHelper.toStorageRelativePath(newPathOrUri)
 
@@ -283,6 +287,35 @@ object TrackIdentityReconciler {
             else -> existing.album
         }
 
+        // Artwork Cache reconciliation
+        var finalArtworkCachePath = existing.artworkCachePath
+        var finalArtworkUrl = existing.artworkUrl
+        var finalArtworkSource = existing.artworkSource
+
+        if (!finalArtworkCachePath.isNullOrBlank()) {
+            val f = java.io.File(finalArtworkCachePath)
+            if (!f.exists() || f.length() == 0L) {
+                finalArtworkCachePath = null
+            }
+        }
+
+        if (finalArtworkCachePath == null && context != null) {
+            val cache = com.example.metadata.ArtworkCache(context)
+            val cachedFile = cache.getCachedArtworkFileForTrack(existing.id)
+                ?: if (finalArtist.isNotBlank() && finalAlbum.isNotBlank()) {
+                    cache.getCachedArtworkFile(finalArtist, finalAlbum)
+                } else null
+            if (cachedFile != null && cachedFile.exists() && cachedFile.length() > 0) {
+                finalArtworkCachePath = cachedFile.absolutePath
+                if (finalArtworkUrl.isNullOrBlank()) {
+                    finalArtworkUrl = cachedFile.absolutePath
+                }
+                if (finalArtworkSource.isNullOrBlank()) {
+                    finalArtworkSource = "Artwork Cache"
+                }
+            }
+        }
+
         return existing.copy(
             filePath = newPathOrUri,
             storageRelativePath = if (relPath.isNotBlank()) relPath else existing.storageRelativePath,
@@ -292,7 +325,10 @@ object TrackIdentityReconciler {
             fileModifiedTimestamp = if (newModifiedTimestamp > 0) newModifiedTimestamp else existing.fileModifiedTimestamp,
             title = finalTitle,
             artist = finalArtist,
-            album = finalAlbum
+            album = finalAlbum,
+            artworkCachePath = finalArtworkCachePath,
+            artworkUrl = finalArtworkUrl,
+            artworkSource = finalArtworkSource
         )
     }
 

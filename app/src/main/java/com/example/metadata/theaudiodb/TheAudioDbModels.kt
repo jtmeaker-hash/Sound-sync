@@ -98,6 +98,7 @@ data class TheAudioDbTrackItem(
     val idArtist: String?,
     val strTrack: String,
     val strArtist: String,
+    val strAlbum: String? = null,
     val strTrackThumb: String?
 ) {
     companion object {
@@ -108,6 +109,7 @@ data class TheAudioDbTrackItem(
                 idArtist = json.optString("idArtist").takeIf(String::isNotBlank),
                 strTrack = json.optString("strTrack"),
                 strArtist = json.optString("strArtist"),
+                strAlbum = json.optString("strAlbum").takeIf(String::isNotBlank),
                 strTrackThumb = json.optString("strTrackThumb").takeIf(String::isNotBlank)
             )
         }

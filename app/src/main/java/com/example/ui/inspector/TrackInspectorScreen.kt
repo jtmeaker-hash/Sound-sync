@@ -99,6 +99,7 @@ fun TrackInspectorScreen(
 
     // Dialog controls
     var showEditMetadataDialog by remember { mutableStateOf(false) }
+    var showFindCoverDialog by remember { mutableStateOf(false) }
     var showEditBpmDialog by remember { mutableStateOf(false) }
     var showEditKeyDialog by remember { mutableStateOf(false) }
     var showAddTagDialog by remember { mutableStateOf(false) }
@@ -246,6 +247,7 @@ fun TrackInspectorScreen(
                         trackDao.updateTrack(TrackEntity.fromTrack(updated))
                     }
                 },
+                onFindCover = { showFindCoverDialog = true },
                 onEmbedInFile = {
                     Toast.makeText(context, "Embedding metadata into audio file...", Toast.LENGTH_SHORT).show()
                     currentTrack = currentTrack.copy(metadataWriteState = com.example.model.MetadataWriteState.WRITING_TO_FILE.name)
@@ -644,17 +646,55 @@ fun TrackInspectorScreen(
             }
         )
     }
+
+    if (showFindCoverDialog) {
+        val resolver = remember { com.example.metadata.artwork.MultiStageArtworkResolver(context) }
+        com.example.ui.components.FindCoverDialog(
+            track = currentTrack,
+            onDismiss = { showFindCoverDialog = false },
+            onSearchCandidates = { query ->
+                resolver.searchCandidates(currentTrack, query)
+            },
+            onApplyCandidate = { candidate ->
+                val result = resolver.applyCandidate(currentTrack, candidate)
+                if (result.artworkCachePath != null) {
+                    val updated = currentTrack.copy(
+                        artworkCachePath = result.artworkCachePath,
+                        artworkUrl = result.artworkUrl ?: result.artworkCachePath,
+                        artworkSource = result.artworkSource,
+                        userConfirmedMetadata = true
+                    )
+                    withContext(Dispatchers.Main) {
+                        currentTrack = updated
+                    }
+                    coroutineScope.launch(Dispatchers.IO) {
+                        trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+        )
+    }
 }
+
 
 // ── Header Card ─────────────────────────────────────────────────────────────
 @Composable
 private fun InspectorHeaderCard(
     track: Track,
     onRatingChanged: (Int) -> Unit,
+    onFindCover: (() -> Unit)? = null,
     onEmbedInFile: (() -> Unit)? = null
 ) {
     val isPro = SoundSyncTheme.isPro
     val theme = SoundSyncTheme.current
+
+    val artworkModel = remember(track.artworkCachePath, track.artworkUrl) {
+        track.artworkCachePath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0 }
+            ?: track.artworkUrl
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -669,24 +709,46 @@ private fun InspectorHeaderCard(
             horizontalArrangement = Arrangement.spacedBy(if (isPro) 12.dp else 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Artwork
+            // Artwork (Interactive: click to find/replace cover)
             Box(
                 modifier = Modifier
                     .size(if (isPro) 80.dp else 90.dp)
                     .clip(RoundedCornerShape(if (isPro) 2.dp else 8.dp))
                     .background(if (isPro) theme.surfaceSunken else DjSurfaceCard)
-                    .border(if (isPro) 0.5.dp else 1.dp, if (isPro) theme.divider else DjSurfaceBorder, RoundedCornerShape(if (isPro) 2.dp else 8.dp)),
+                    .border(if (isPro) 0.5.dp else 1.dp, if (isPro) theme.divider else DjSurfaceBorder, RoundedCornerShape(if (isPro) 2.dp else 8.dp))
+                    .clickable(enabled = onFindCover != null) { onFindCover?.invoke() },
                 contentAlignment = Alignment.Center
             ) {
-                if (track.artworkUrl != null) {
+                if (artworkModel != null) {
                     AsyncImage(
-                        model = track.artworkUrl,
+                        model = artworkModel,
                         contentDescription = "Cover Art",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
                 } else {
                     Icon(Icons.Default.MusicNote, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(36.dp))
+                }
+
+                // Small edit badge overlay in bottom-right corner
+                if (onFindCover != null) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(4.dp)
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(DjObsidian.copy(alpha = 0.85f))
+                            .border(0.5.dp, DjSurfaceBorder, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "Find Cover",
+                            tint = DeckACyan,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
                 }
             }
 
@@ -761,7 +823,7 @@ private fun InspectorHeaderCard(
                     )
                 }
 
-                // File Tag Persistence Status Badge
+                // File Tag Persistence & Artwork Source Row
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -772,26 +834,59 @@ private fun InspectorHeaderCard(
                         compact = true,
                         onClick = onEmbedInFile
                     )
+
+                    if (!track.artworkSource.isNullOrBlank()) {
+                        Surface(
+                            color = DjSurfaceCard,
+                            shape = RoundedCornerShape(4.dp),
+                            border = androidx.compose.foundation.BorderStroke(0.5.dp, DjSurfaceBorder)
+                        ) {
+                            Text(
+                                text = track.artworkSource ?: "",
+                                fontSize = 9.sp,
+                                color = TextSecondary,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
 
-                // Interactive 5-star rating
+                // Interactive 5-star rating & Find Cover Quick Action
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier.padding(top = 2.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
                 ) {
-                    for (star in 1..5) {
-                        val isFilled = star <= track.rating
-                        Icon(
-                            imageVector = if (isFilled) Icons.Default.Star else Icons.Default.StarBorder,
-                            contentDescription = "Rating $star",
-                            tint = if (isFilled) NeonAmber else TextMuted,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        for (star in 1..5) {
+                            val isFilled = star <= track.rating
+                            Icon(
+                                imageVector = if (isFilled) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = "Rating $star",
+                                tint = if (isFilled) NeonAmber else TextMuted,
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clickable {
+                                        val newRating = if (track.rating == star) 0 else star
+                                        onRatingChanged(newRating)
+                                    }
+                            )
+                        }
+                    }
+
+                    if (onFindCover != null) {
+                        Text(
+                            text = "Find Cover",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = DeckACyan,
                             modifier = Modifier
-                                .size(18.dp)
-                                .clickable {
-                                    val newRating = if (track.rating == star) 0 else star
-                                    onRatingChanged(newRating)
-                                }
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { onFindCover.invoke() }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 }
@@ -799,6 +894,7 @@ private fun InspectorHeaderCard(
         }
     }
 }
+
 
 // ── DJ Information Card ─────────────────────────────────────────────────────
 @OptIn(ExperimentalLayoutApi::class)

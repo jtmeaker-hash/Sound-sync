@@ -210,6 +210,118 @@ open class AppleMetadataProvider(
     }
 
     /**
+     * Looks up a track by its International Standard Recording Code (ISRC).
+     */
+    suspend fun lookupByIsrc(
+        isrc: String,
+        country: String = defaultCountry
+    ): AppleTrackResult? = withContext(Dispatchers.IO) {
+        val cleanIsrc = isrc.trim().replace("-", "").uppercase()
+        if (cleanIsrc.isBlank()) return@withContext null
+
+        enforceRateLimit()
+        val encoded = URLEncoder.encode(cleanIsrc, StandardCharsets.UTF_8.name())
+        val url = "$BASE_URL/lookup?isrc=$encoded&country=$country"
+
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "SoundSync/1.0.0 (Linux; Android)")
+            .header("Accept", "application/json")
+            .get()
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val body = response.body?.string() ?: return@withContext null
+                val parsed = AppleSearchResponse.fromJson(body)
+                return@withContext parsed.results.firstOrNull()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed looking up ISRC $cleanIsrc: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Looks up a track or release by barcode / Universal Product Code (UPC).
+     */
+    suspend fun lookupByUpc(
+        upc: String,
+        country: String = defaultCountry
+    ): AppleTrackResult? = withContext(Dispatchers.IO) {
+        val cleanUpc = upc.trim().replace("-", "").replace(" ", "")
+        if (cleanUpc.isBlank()) return@withContext null
+
+        enforceRateLimit()
+        val encoded = URLEncoder.encode(cleanUpc, StandardCharsets.UTF_8.name())
+        val url = "$BASE_URL/lookup?upc=$encoded&country=$country"
+
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "SoundSync/1.0.0 (Linux; Android)")
+            .header("Accept", "application/json")
+            .get()
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val body = response.body?.string() ?: return@withContext null
+                val parsed = AppleSearchResponse.fromJson(body)
+                return@withContext parsed.results.firstOrNull()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed looking up UPC $cleanUpc: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Searches Apple iTunes for albums/releases matching query.
+     */
+    open suspend fun searchAlbums(
+        query: String,
+        country: String = defaultCountry,
+        limit: Int = 10
+    ): List<AppleAlbumResult> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return@withContext emptyList()
+
+        enforceRateLimit()
+        val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name())
+        val url = "$BASE_URL/search?term=$encoded&country=$country&media=music&entity=album&limit=$limit"
+
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "SoundSync/1.0.0 (Linux; Android)")
+            .header("Accept", "application/json")
+            .get()
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    if (country.equals("AU", ignoreCase = true)) {
+                        return@withContext searchAlbums(query, "US", limit)
+                    }
+                    return@withContext emptyList()
+                }
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val parsed = AppleAlbumSearchResponse.fromJson(body)
+                if (parsed.results.isEmpty() && country.equals("AU", ignoreCase = true)) {
+                    return@withContext searchAlbums(query, "US", limit)
+                }
+                return@withContext parsed.results
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed searching albums for \"$trimmed\": ${e.message}")
+            emptyList()
+        }
+    }
+
+
+    /**
      * Downloads high-resolution artwork from an Apple CDN URL.
      */
     open suspend fun downloadArtwork(artworkUrl: String): com.example.metadata.theaudiodb.DownloadedArtwork? = withContext(Dispatchers.IO) {
