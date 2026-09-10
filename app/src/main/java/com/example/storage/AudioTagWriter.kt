@@ -139,6 +139,55 @@ object AudioTagWriter {
         }
     }
 
+    /**
+     * Logs comprehensive before/after metadata rewrite diagnostics as specified in
+     * SoundSyncMetadataRewriteDebug for tracking the exact failure mechanism.
+     */
+    fun logRewriteDiagnostic(
+        trackId: String,
+        operation: String, // "BEFORE", "WRITE", "AFTER", "SUMMARY"
+        uri: String? = null,
+        mediaStoreId: Long? = null,
+        fileSize: Long? = null,
+        modified: Long? = null,
+        duration: Int? = null,
+        mime: String? = null,
+        playable: Boolean? = null,
+        writerUsed: String? = null,
+        temporaryFileUsed: Boolean? = null,
+        bytesRead: Long? = null,
+        bytesWritten: Long? = null,
+        replacementPerformed: Boolean? = null,
+        renameResult: Boolean? = null,
+        uriChanged: Boolean? = null,
+        mediaStoreIdChanged: Boolean? = null,
+        sizeDelta: Long? = null,
+        validationResult: String? = null
+    ) {
+        val msg = buildString {
+            appendLine("[SoundSyncMetadataRewriteDebug] trackId=$trackId")
+            appendLine("  PHASE: $operation")
+            uri?.let { appendLine("  uri=$it") }
+            mediaStoreId?.let { appendLine("  mediaStoreId=$it") }
+            fileSize?.let { appendLine("  fileSize=$it") }
+            modified?.let { appendLine("  modified=$it") }
+            duration?.let { appendLine("  duration=$it") }
+            mime?.let { appendLine("  mime=$it") }
+            playable?.let { appendLine("  playable=$it") }
+            writerUsed?.let { appendLine("  writerUsed=$it") }
+            temporaryFileUsed?.let { appendLine("  temporaryFileUsed=$it") }
+            bytesRead?.let { appendLine("  bytesRead=$it") }
+            bytesWritten?.let { appendLine("  bytesWritten=$it") }
+            replacementPerformed?.let { appendLine("  replacementPerformed=$it") }
+            renameResult?.let { appendLine("  renameResult=$it") }
+            uriChanged?.let { appendLine("  URI_CHANGED=$it") }
+            mediaStoreIdChanged?.let { appendLine("  MEDIASTORE_ID_CHANGED=$it") }
+            sizeDelta?.let { appendLine("  SIZE_DELTA=$it") }
+            validationResult?.let { appendLine("  VALIDATION_RESULT=$it") }
+        }
+        Log.i(TAG_WRITER, msg)
+    }
+
     private val OGG_CRC_TABLE = IntArray(256) { i ->
         var r = i shl 24
         for (j in 0 until 8) {
@@ -184,6 +233,19 @@ object AudioTagWriter {
         context: Context?,
         filePathOrUri: String,
         payload: CompleteTagPayload
+    ): TagWriteResult = writeCompleteTagsWithResult(context, filePathOrUri, payload, trackId = filePathOrUri)
+
+    /**
+     * Atomically writes complete textual metadata and front cover artwork
+     * returning rich diagnostic result for permissions and failures.
+     *
+     * @param trackId Optional track ID for diagnostic logging (SoundSyncMetadataRewriteDebug)
+     */
+    suspend fun writeCompleteTagsWithResult(
+        context: Context?,
+        filePathOrUri: String,
+        payload: CompleteTagPayload,
+        trackId: String
     ): TagWriteResult = withContext(Dispatchers.IO) {
         setApplicationContext(context)
         if (filePathOrUri.isBlank() || filePathOrUri.startsWith("demo://") || filePathOrUri.startsWith("http")) {
@@ -191,9 +253,32 @@ object AudioTagWriter {
             return@withContext TagWriteResult.Unsupported("Invalid or virtual path: $filePathOrUri")
         }
 
+        // BEFORE diagnostics
+        val beforeFile = if (!filePathOrUri.startsWith("content://")) File(filePathOrUri) else null
+        val beforeSize = beforeFile?.length() ?: 0L
+        val beforeModified = beforeFile?.lastModified() ?: 0L
+        logRewriteDiagnostic(
+            trackId = trackId,
+            operation = "BEFORE",
+            uri = filePathOrUri,
+            fileSize = beforeSize,
+            modified = beforeModified,
+            mime = if (filePathOrUri.startsWith("content://")) "content://" else extFromPath(filePathOrUri),
+            playable = beforeFile?.let { validatePlayability(context, it) } ?: true
+        )
+
         FileLockManager.withFileLock(filePathOrUri) {
             if (filePathOrUri.startsWith("content://")) {
-                return@withFileLock writeContentUriTagsWithResult(context, filePathOrUri, payload)
+                val result = writeContentUriTagsWithResult(context, filePathOrUri, payload)
+                // AFTER diagnostics for content URI
+                logRewriteDiagnostic(
+                    trackId = filePathOrUri,
+                    operation = "AFTER",
+                    uri = filePathOrUri,
+                    writerUsed = "ContentURI",
+                    validationResult = if (result is TagWriteResult.Success) "PASSED" else "FAILED: ${result.message}"
+                )
+                return@withFileLock result
             }
 
             val file = File(filePathOrUri)
@@ -208,7 +293,16 @@ object AudioTagWriter {
                     val mediaUri = getMediaStoreUriForPath(context, file.absolutePath)
                     if (mediaUri != null) {
                         Log.i(TAG, "Using MediaStore URI fallback: $mediaUri for ${file.absolutePath}")
-                        return@withFileLock writeContentUriTagsWithResult(context, mediaUri.toString(), payload)
+                        val result = writeContentUriTagsWithResult(context, mediaUri.toString(), payload)
+                        // AFTER diagnostics for MediaStore fallback
+                        logRewriteDiagnostic(
+                            trackId = filePathOrUri,
+                            operation = "AFTER",
+                            uri = mediaUri.toString(),
+                            writerUsed = "MediaStoreFallback",
+                            validationResult = if (result is TagWriteResult.Success) "PASSED" else "FAILED: ${result.message}"
+                        )
+                        return@withFileLock result
                     }
                 }
                 Log.w(TAG, "Cannot write tags: file is inaccessible or read-only: ${file.absolutePath}")
@@ -218,6 +312,21 @@ object AudioTagWriter {
 
             val ext = file.extension.lowercase(Locale.ROOT)
             val writeResult = writeTagsToFile(file, ext, payload, context)
+
+            // AFTER diagnostics
+            val afterSize = file.length()
+            val afterModified = file.lastModified()
+            logRewriteDiagnostic(
+                trackId = filePathOrUri,
+                operation = "AFTER",
+                uri = filePathOrUri,
+                fileSize = afterSize,
+                modified = afterModified,
+                mime = ext,
+                writerUsed = "DirectFile",
+                validationResult = if (writeResult is TagWriteResult.Success) "PASSED" else "FAILED: ${(writeResult as? TagWriteResult.Failed)?.message}"
+            )
+
             if (writeResult is TagWriteResult.Success && context != null) {
                 try {
                     MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), null, null)
@@ -236,6 +345,27 @@ object AudioTagWriter {
                 )
             }
             return@withFileLock writeResult
+        }
+    }
+
+    private fun extFromPath(path: String): String = File(path).extension.lowercase(Locale.ROOT)
+
+    private fun validatePlayability(context: Context?, file: File): Boolean {
+        return try {
+            val extractor = android.media.MediaExtractor()
+            extractor.setDataSource(file.absolutePath)
+            val trackCount = extractor.trackCount
+            if (trackCount == 0) return false
+            for (i in 0 until trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(android.media.MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("audio/")) return true
+            }
+            false
+        } catch (_: Exception) {
+            false
+        } finally {
+            try { android.media.MediaExtractor().release() } catch (_: Exception) {}
         }
     }
 
@@ -309,13 +439,21 @@ object AudioTagWriter {
                 return writeResult
             }
 
+            // VALIDATION: Verify temp file is playable BEFORE committing to original URI
+            val validationResult = validateTempFileForPlayback(context, tempFile, ext)
+            if (!validationResult) {
+                Log.e(TAG_WRITER, "Temp file validation failed for .$ext - aborting write to preserve original")
+                return TagWriteResult.Failed("Validation failed: rewritten file is not playable")
+            }
+
             try {
-                // Prefer ParcelFileDescriptor with "rwt" or "w" and explicit fsync
+                // Prefer ParcelFileDescriptor with "rwt" (read-write-truncate) to avoid premature truncation
+                // Only fall back to "w" if "rwt" is not supported
                 val pfd = try {
                     contentResolver.openFileDescriptor(uri, "rwt")
                 } catch (_: Exception) {
                     try {
-                        contentResolver.openFileDescriptor(uri, "w")
+                        contentResolver.openFileDescriptor(uri, "rwd")
                     } catch (_: Exception) {
                         null
                     }
@@ -336,9 +474,10 @@ object AudioTagWriter {
                         contentResolver.openOutputStream(uri, "rwt")
                     } catch (_: Exception) {
                         try {
-                            contentResolver.openOutputStream(uri, "w")
+                            contentResolver.openOutputStream(uri, "rwd")
                         } catch (_: Exception) {
-                            contentResolver.openOutputStream(uri, "wt")
+                            // Last resort: "w" mode - but only after validation passed
+                            contentResolver.openOutputStream(uri, "w")
                         }
                     } ?: return TagWriteResult.Failed("Could not open output stream for SAF URI: $uriString")
 
@@ -359,19 +498,10 @@ object AudioTagWriter {
                 return TagWriteResult.Failed("Failed streaming modified audio back to $uriString: ${e.message}", e)
             }
 
-            Log.d(TAG, "Successfully wrote tags back to SAF URI: $uriString")
+            // Refresh MediaStore and resolve new URI after successful write
+            val newUri = refreshMediaStoreAndResolveUri(context, uri, ext)
 
-            // MediaStore refresh
-            try {
-                if (uri.scheme == "file") {
-                    uri.path?.let { MediaScannerConnection.scanFile(context, arrayOf(it), null, null) }
-                } else {
-                    val directPath = StorageWritePermissionHelper.resolveTargetUri(context, Track(id = "", title = "", artist = "", filePath = uriString))
-                    if (directPath != null && directPath.scheme == "file") {
-                        directPath.path?.let { MediaScannerConnection.scanFile(context, arrayOf(it), null, null) }
-                    }
-                }
-            } catch (_: Exception) {}
+            Log.d(TAG, "Successfully wrote tags back to SAF URI: $uriString (resolved: $newUri)")
 
             TagWriteResult.Success
         } catch (e: SecurityException) {
@@ -382,6 +512,117 @@ object AudioTagWriter {
             TagWriteResult.Failed("Exception during content URI write: ${e.message}", e)
         } finally {
             tempFile?.let { if (it.exists()) it.delete() }
+        }
+    }
+
+    /**
+     * Validates that a temp file has a valid audio stream and is playable.
+     * Uses MediaExtractor for lightweight container/audio stream verification.
+     */
+    private fun validateTempFileForPlayback(context: Context?, tempFile: File, ext: String): Boolean {
+        val extractor = android.media.MediaExtractor()
+        return try {
+            if (context != null && context.contentResolver != null) {
+                // Not needed for local file
+            }
+            extractor.setDataSource(tempFile.absolutePath)
+
+            val trackCount = extractor.trackCount
+            if (trackCount == 0) {
+                Log.w(TAG_WRITER, "Validation failed: no tracks in container")
+                return false
+            }
+
+            var hasAudioTrack = false
+            for (i in 0 until trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(android.media.MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("audio/")) {
+                    hasAudioTrack = true
+                    // Verify we can read at least one sample
+                    extractor.selectTrack(i)
+                    val buffer = java.nio.ByteBuffer.allocate(1024)
+                    val sampleSize = extractor.readSampleData(buffer, 0)
+                    if (sampleSize <= 0) {
+                        Log.w(TAG_WRITER, "Validation failed: audio track has no readable samples")
+                        return false
+                    }
+                    break
+                }
+            }
+
+            if (!hasAudioTrack) {
+                Log.w(TAG_WRITER, "Validation failed: no audio track found")
+                return false
+            }
+
+            // Additional format-specific checks
+            if (ext == "wav" || ext == "flac" || ext == "m4a" || ext == "mp3") {
+                // Verify file size is reasonable (not truncated)
+                if (tempFile.length() < 1024) {
+                    Log.w(TAG_WRITER, "Validation failed: file too small (${tempFile.length()} bytes)")
+                    return false
+                }
+            }
+
+            Log.d(TAG_WRITER, "Temp file validation PASSED for .$ext (${tempFile.length()} bytes)")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG_WRITER, "Validation exception for .$ext: ${e.message}")
+            false
+        } finally {
+            try { extractor.release() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Refreshes MediaStore after file write and resolves the current URI.
+     * Returns the potentially updated URI (may be different from original if file was replaced).
+     */
+    private fun refreshMediaStoreAndResolveUri(context: Context, originalUri: Uri, ext: String): Uri? {
+        return try {
+            // Force MediaStore rescan
+            MediaScannerConnection.scanFile(context, arrayOf(originalUri.toString()), null) { scannedUri, _ ->
+                Log.d(TAG, "MediaScanner scanned: $scannedUri")
+            }
+
+            // Give MediaStore a moment to index
+            Thread.sleep(100)
+
+            // Try to find the updated MediaStore entry by querying for the file
+            val projection = arrayOf(
+                android.provider.MediaStore.Audio.Media._ID,
+                android.provider.MediaStore.Audio.Media.DATA,
+                android.provider.MediaStore.Audio.Media.DISPLAY_NAME
+            )
+
+            // Query by original URI's last path segment (filename)
+            val fileName = originalUri.lastPathSegment
+            if (fileName != null) {
+                val selection = "${android.provider.MediaStore.Audio.Media.DISPLAY_NAME} = ?"
+                val selectionArgs = arrayOf(fileName)
+                context.contentResolver.query(
+                    android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media._ID)
+                        val id = cursor.getLong(idCol)
+                        val newUri = android.content.ContentUris.withAppendedId(
+                            android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+                        Log.i(TAG, "Resolved refreshed MediaStore URI: $newUri")
+                        return@refreshMediaStoreAndResolveUri newUri
+                    }
+                }
+            }
+
+            originalUri
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to refresh MediaStore/resolve URI: ${e.message}")
+            originalUri
         }
     }
 
@@ -981,13 +1222,16 @@ object AudioTagWriter {
             val listChunkBytes = listChunkStream.toByteArray()
 
             // 3. Build companion compact 'id3 ' chunk (BPM, Key, comments)
-            // Safe artwork rule for WAV: Never embed massive artwork (> 64KB) in WAV containers
-            // to avoid RIFF chunk overflow, corruption of legacy WAV players, and out-of-memory errors.
+            // Safe artwork rule for WAV: Limit embedded artwork to 256KB to avoid RIFF chunk overflow,
+            // corruption of legacy WAV players, and out-of-memory errors.
             // Artwork is safely cached on disk and in the database.
-            // If artwork is small (e.g. <= 64KB), it can be embedded safely.
-            val safeArtworkBytes = if (payload.artworkBytes != null && payload.artworkBytes.size <= 64 * 1024) {
+            // If artwork exceeds limit, log warning and embed metadata without artwork.
+            val safeArtworkBytes = if (payload.artworkBytes != null && payload.artworkBytes.size <= 256 * 1024) {
                 payload.artworkBytes
             } else {
+                if (payload.artworkBytes != null && payload.artworkBytes.size > 256 * 1024) {
+                    Log.w(TAG, "WAV artwork ${payload.artworkBytes.size} bytes exceeds 256KB limit - embedding metadata without artwork (artwork preserved in library cache)")
+                }
                 null
             }
             val id3Payload = payload.copy(artworkBytes = safeArtworkBytes, artworkMimeType = if (safeArtworkBytes != null) payload.artworkMimeType else "")

@@ -15,6 +15,9 @@ import com.example.storage.StorageAvailabilityHelper
 import com.example.storage.StorageWritePermissionHelper
 import com.example.storage.TagWriteResult
 import com.example.storage.TrackSelfHealingResolver
+import com.example.audio.DjAudioEngine
+import com.example.analysis.PlayabilityValidator
+import com.example.analysis.PlayabilityStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -61,7 +64,8 @@ sealed interface MetadataWriteResult {
 
 class MetadataFileWriter(
     private val context: Context,
-    private val trackDao: TrackDao? = null
+    private val trackDao: TrackDao? = null,
+    private val audioEngine: DjAudioEngine? = null
 ) {
 
     companion object {
@@ -293,7 +297,7 @@ class MetadataFileWriter(
         )
 
         val writeTagResult = try {
-            AudioTagWriter.writeCompleteTagsWithResult(context, targetWritePath, payload)
+            AudioTagWriter.writeCompleteTagsWithResult(context, targetWritePath, payload, track.id)
         } catch (e: SecurityException) {
             val uri = if (targetWritePath.startsWith("content://")) Uri.parse(targetWritePath) else null
             val intentSender = uri?.let { StorageWritePermissionHelper.createSingleWriteRequest(context, it, e) }
@@ -512,6 +516,74 @@ class MetadataFileWriter(
 
         updateDbState(track.id, result.writeState)
 
+        // ============================================================
+        // POST-WRITE PLAYBACK VALIDATION & URI REFRESH
+        // ============================================================
+        // After successful metadata write, validate that the track is still playable
+        // and refresh the MediaStore URI if the file was replaced
+        val finalResult = try {
+            val playbackValidation = PlayabilityValidator.validateTrack(
+                context = context,
+                track = track.copy(filePath = targetWritePath),
+                quickCheckOnly = true, // Lightweight container/audio stream check
+                forceFresh = true
+            )
+
+            if (playbackValidation.status != PlayabilityStatus.PLAYABLE) {
+                Log.e(TAG, "[MetadataFileWriter] PLAYBACK VALIDATION FAILED after metadata write for '${track.title}': ${playbackValidation.problemDescription}")
+                // Track became unplayable after metadata write - this is a critical failure
+                MetadataWriteResult.Failed(
+                    "Metadata write succeeded but track became unplayable: ${playbackValidation.problemDescription}",
+                    Exception("Playback validation failed: ${playbackValidation.errorCode}")
+                )
+            } else {
+                Log.d(TAG, "[MetadataFileWriter] Playback validation PASSED after metadata write for '${track.title}'")
+
+                // Check if URI changed (file replacement invalidated old MediaStore entry)
+                val resolvedPath = playbackValidation.resolvedPath
+                val uriChanged = resolvedPath != null && resolvedPath != track.filePath && resolvedPath != targetWritePath
+
+                if (uriChanged) {
+                    Log.i(TAG, "[MetadataFileWriter] URI changed after metadata write: '${track.filePath}' -> '$resolvedPath'")
+                    // Update database with new path
+                    trackDao?.updateFilePath(track.id, resolvedPath)
+                    // Also update storageRelativePath and directoryPath
+                    val relPath = com.example.storage.CanonicalStorageHelper.toStorageRelativePath(resolvedPath)
+                    val dirPath = if (resolvedPath.startsWith("content://")) {
+                        if (relPath.contains('/')) relPath.substringBeforeLast('/') else ""
+                    } else {
+                        File(resolvedPath).parent ?: ""
+                    }
+                    trackDao?.updateTrack(
+                        com.example.data.TrackEntity.fromTrack(
+                            track.copy(
+                                filePath = resolvedPath,
+                                storageRelativePath = relPath,
+                                directoryPath = dirPath
+                            )
+                        )
+                    )
+
+                    // Notify audio engine of file rewrite
+                    audioEngine?.onTrackFileRewritten(track.copy(filePath = resolvedPath), resolvedPath)
+                }
+
+                // Run self-healing resolver to ensure we have the current valid URI
+                val healedTrack = TrackSelfHealingResolver.healTrack(context, track.copy(filePath = targetWritePath), trackDao)
+                if (healedTrack != null && healedTrack.filePath != track.filePath && healedTrack.filePath != targetWritePath) {
+                    Log.i(TAG, "[MetadataFileWriter] Self-healing refreshed URI: '${track.filePath}' -> '${healedTrack.filePath}'")
+                    // Notify audio engine if self-healing found a different path
+                    audioEngine?.onTrackFileRewritten(healedTrack, healedTrack.filePath)
+                }
+
+                result
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "[MetadataFileWriter] Playback validation error: ${e.message}")
+            // Don't fail the write if validation has an error, but log it
+            result
+        }
+
         // Post-write verification of media reference accessibility & reconciliation
         try {
             val isCurrentPathAvailable = StorageAvailabilityHelper.isTrackPathAvailable(context, track.filePath)
@@ -531,7 +603,7 @@ class MetadataFileWriter(
             Log.w(TAG, "[MetadataFileWriter] Post-write reconciliation check failed: ${e.message}")
         }
 
-        result
+        finalResult
     }
 
     fun write(

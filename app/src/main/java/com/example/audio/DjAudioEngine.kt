@@ -76,6 +76,13 @@ class DjAudioEngine(private val context: Context) {
     var onTrackUnavailableCallback: ((Track) -> Unit)? = null
     var onTrackPlaybackErrorCallback: ((Track, String) -> Unit)? = null
 
+    /**
+     * Callback fired when the current track's file has been rewritten (metadata update)
+     * and the playback source needs to be refreshed.
+     * Provides the new file path/URI that should be used for playback.
+     */
+    var onTrackFileRewrittenCallback: ((Track, String) -> Unit)? = null
+
     @Volatile
     private var completionInFlight = false
 
@@ -448,6 +455,38 @@ class DjAudioEngine(private val context: Context) {
             val baseBpm = if (updatedTrack.bpm > 0) updatedTrack.bpm else 126.0
             _effectiveBpm.value = baseBpm * (1.0 + _pitchPercent.value / 100.0)
             Log.d(TAG, "Updated metadata in-place for active track '${updatedTrack.title}' (bpm=${updatedTrack.bpm}, key=${updatedTrack.musicalKey})")
+        }
+    }
+
+    /**
+     * Notifies the audio engine that the current track's file has been rewritten
+     * (e.g., metadata tags updated). This forces a reload of the audio source with
+     * the new file path/URI to ensure playback continues with the updated file.
+     *
+     * @param updatedTrack The track with the updated file path
+     * @param newFilePath The new file path or URI after metadata rewrite
+     */
+    fun onTrackFileRewritten(updatedTrack: Track, newFilePath: String) {
+        if (isEngineReleased) return
+        val current = _currentTrack.value
+        if (current != null && current.id == updatedTrack.id) {
+            Log.i(TAG, "[DjAudioEngine] Track file rewritten for '${updatedTrack.title}', refreshing playback source: ${current.filePath} -> $newFilePath")
+
+            // Update the track with new file path
+            val trackWithNewPath = updatedTrack.copy(filePath = newFilePath)
+            _currentTrack.value = trackWithNewPath
+
+            // If currently playing, force reload of the playback source
+            if (_isPlaying.value && activeLoopSessionId == activeSessionId && decoderRunning) {
+                Log.i(TAG, "[DjAudioEngine] Forcing playback reload due to file rewrite")
+                // Signal the decoder loop to exit so a new session can be started
+                decoderShouldPause = true
+                pauseLock.withLock { pauseCondition.signalAll() }
+
+                // The next playSession call will pick up the new file path
+                // We don't auto-restart here to avoid interrupting if paused
+                // The UI/playback logic should call play() again if needed
+            }
         }
     }
 
