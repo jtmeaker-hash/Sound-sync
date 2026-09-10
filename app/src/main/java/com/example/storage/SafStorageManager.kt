@@ -188,7 +188,10 @@ object SafStorageManager {
                 if (!mAlbum.isNullOrBlank() && mAlbum != "<unknown>" && album == "Single") album = mAlbum
                 if (!mGenre.isNullOrBlank() && genre == "DJ Library") genre = mGenre
                 if (mDuration != null) {
-                    durationSec = (mDuration.toLongOrNull() ?: 0L).let { (it / 1000).toInt().coerceAtLeast(1) }
+                    val dMs = mDuration.toLongOrNull() ?: 0L
+                    if (dMs > 1000L) {
+                        durationSec = (dMs / 1000L).toInt()
+                    }
                 }
                 if (mBitrate != null) {
                     bitrateKbps = (mBitrate.toIntOrNull() ?: (bitrateKbps * 1000)) / 1000
@@ -200,6 +203,19 @@ object SafStorageManager {
             Log.v(TAG, "Retriever skipped or fallback for $name: ${e.message}")
         } finally {
             try { retriever.release() } catch (_: Exception) {}
+        }
+
+        val effectiveDurationSec = when {
+            embedded.durationSeconds > 1 -> embedded.durationSeconds
+            durationSec > 1 -> durationSec
+            embedded.durationSeconds > 0 -> embedded.durationSeconds
+            durationSec > 0 -> durationSec
+            else -> 0
+        }
+        val effectiveBitrateKbps = when {
+            embedded.bitrateKbps > 0 -> embedded.bitrateKbps
+            bitrateKbps > 0 -> bitrateKbps
+            else -> 0
         }
 
         // Infer BPM and Key heuristics from filename if tagged like "128_8A_Artist_Title"
@@ -225,7 +241,7 @@ object SafStorageManager {
 
         val id = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
         val relPath = RockboxPathResolver.computeStorageRelativePath(uri.toString(), folderPath)
-        val fingerprint = AudioFingerprintUtil.generateDocumentFileFingerprint(context, file, durationSec)
+        val fingerprint = AudioFingerprintUtil.generateDocumentFileFingerprint(context, file, effectiveDurationSec)
 
         return Track(
             id = id,
@@ -238,8 +254,8 @@ object SafStorageManager {
             bpm = bpm,
             musicalKey = musicalKey,
             camelotKey = embedded.camelotKey.orEmpty(),
-            durationSeconds = if (durationSec > 0) durationSec else embedded.durationSeconds,
-            bitrateKbps = if (bitrateKbps > 0) bitrateKbps else embedded.bitrateKbps,
+            durationSeconds = effectiveDurationSec,
+            bitrateKbps = effectiveBitrateKbps,
             format = format,
             fileSizeMb = String.format(Locale.US, "%.2f", sizeMb).toDoubleOrNull() ?: sizeMb,
             filePath = uri.toString(),
@@ -248,7 +264,7 @@ object SafStorageManager {
             syncState = SyncState.SYNCED,
             platforms = listOf(MusicPlatform.LOCAL),
             energyRating = 7,
-            hotCues = listOf(0, (durationSec * 0.15).toInt(), (durationSec * 0.45).toInt(), (durationSec * 0.75).toInt()),
+            hotCues = listOf(0, (effectiveDurationSec * 0.15).toInt(), (effectiveDurationSec * 0.45).toInt(), (effectiveDurationSec * 0.75).toInt()),
             isAiTagged = false,
             qualityRating = qualityRating,
             dateAdded = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),

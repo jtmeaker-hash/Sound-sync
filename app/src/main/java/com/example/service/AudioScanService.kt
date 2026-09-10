@@ -409,7 +409,7 @@ class AudioScanService : Service() {
         var artist = "Unknown Artist"
         var album = "Single"
         var genre = "DJ Library"
-        var durationSec = 210
+        var durationSec = 0
         var bitrateKbps = if (format == "FLAC" || format == "WAV") 1411 else 320
         var bpm = 0.0
         var musicalKey = ""
@@ -423,6 +423,8 @@ class AudioScanService : Service() {
         if (embedded.genre?.isNotBlank() == true) genre = embedded.genre
         if (embedded.hasBpm) bpm = embedded.bpm ?: 0.0
         if (embedded.hasKey) musicalKey = embedded.camelotKey ?: embedded.musicalKey.orEmpty()
+        if (embedded.durationSeconds > 0) durationSec = embedded.durationSeconds
+        if (embedded.bitrateKbps > 0) bitrateKbps = embedded.bitrateKbps
 
         val retriever = MediaMetadataRetriever()
         try {
@@ -447,7 +449,10 @@ class AudioScanService : Service() {
                 if (!mAlbum.isNullOrBlank() && mAlbum != "<unknown>" && album == "Single") album = mAlbum
                 if (!mGenre.isNullOrBlank() && genre == "DJ Library") genre = mGenre
                 if (mDuration != null) {
-                    durationSec = (mDuration.toLongOrNull() ?: 0L).let { (it / 1000).toInt().coerceAtLeast(1) }
+                    val dMs = mDuration.toLongOrNull() ?: 0L
+                    if (dMs > 1000L && durationSec <= 1) {
+                        durationSec = (dMs / 1000L).toInt()
+                    }
                 }
                 if (mBitrate != null) {
                     bitrateKbps = (mBitrate.toIntOrNull() ?: (bitrateKbps * 1000)) / 1000
@@ -460,6 +465,19 @@ class AudioScanService : Service() {
             Log.v(TAG, "Retriever skipped or fallback for $name: ${e.message}")
         } finally {
             try { retriever.release() } catch (e: Exception) {}
+        }
+
+        val effectiveDurationSec = when {
+            embedded.durationSeconds > 1 -> embedded.durationSeconds
+            durationSec > 1 -> durationSec
+            embedded.durationSeconds > 0 -> embedded.durationSeconds
+            durationSec > 0 -> durationSec
+            else -> 0
+        }
+        val effectiveBitrateKbps = when {
+            embedded.bitrateKbps > 0 -> embedded.bitrateKbps
+            bitrateKbps > 0 -> bitrateKbps
+            else -> 0
         }
 
         // Infer BPM and Key heuristics from filename if tagged like "128_8A_Artist_Title"
@@ -488,7 +506,7 @@ class AudioScanService : Service() {
         }
 
         val trackId = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
-        val fingerprint = com.example.storage.AudioFingerprintUtil.generateDocumentFileFingerprint(this, file, durationSec)
+        val fingerprint = com.example.storage.AudioFingerprintUtil.generateDocumentFileFingerprint(this, file, effectiveDurationSec)
 
         return Track(
             id = trackId,
@@ -501,8 +519,8 @@ class AudioScanService : Service() {
             bpm = bpm,
             musicalKey = musicalKey,
             camelotKey = embedded.camelotKey.orEmpty(),
-            durationSeconds = if (durationSec > 0) durationSec else embedded.durationSeconds,
-            bitrateKbps = if (bitrateKbps > 0) bitrateKbps else embedded.bitrateKbps,
+            durationSeconds = effectiveDurationSec,
+            bitrateKbps = effectiveBitrateKbps,
             format = format,
             fileSizeMb = String.format(Locale.US, "%.2f", sizeMb).toDoubleOrNull() ?: sizeMb,
             filePath = uri.toString(),
@@ -511,7 +529,7 @@ class AudioScanService : Service() {
             syncState = SyncState.SYNCED,
             platforms = listOf(MusicPlatform.LOCAL),
             energyRating = 7,
-            hotCues = listOf(0, (durationSec * 0.15).toInt(), (durationSec * 0.45).toInt(), (durationSec * 0.75).toInt()),
+            hotCues = listOf(0, (effectiveDurationSec * 0.15).toInt(), (effectiveDurationSec * 0.45).toInt(), (effectiveDurationSec * 0.75).toInt()),
             isAiTagged = false,
             qualityRating = qualityRating,
             dateAdded = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),

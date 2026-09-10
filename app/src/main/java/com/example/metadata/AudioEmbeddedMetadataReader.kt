@@ -124,7 +124,7 @@ object AudioEmbeddedMetadataReader {
                 album = mAlbum?.takeIf(String::isNotBlank),
                 albumArtist = mAlbumArtist?.takeIf(String::isNotBlank),
                 genre = mGenre?.takeIf(String::isNotBlank),
-                durationSeconds = mDuration?.let { (it / 1000).toInt().coerceAtLeast(1) } ?: 0,
+                durationSeconds = mDuration?.let { if (it > 1000L) (it / 1000).toInt() else 0 } ?: 0,
                 bitrateKbps = mBitrate?.let { it / 1000 } ?: 0,
                 sampleRate = mSampleRate,
                 bitDepth = mBitDepth,
@@ -166,7 +166,7 @@ object AudioEmbeddedMetadataReader {
                         } else {
                             input
                         }
-                        parseId3Tags(header, combinedStream)
+                        parseId3OrPrependedWav(header, combinedStream)
                     }
                     header[0] == 'f'.code.toByte() && header[1] == 'L'.code.toByte() && header[2] == 'a'.code.toByte() && header[3] == 'C'.code.toByte() -> {
                         val combinedStream = if (readHeader > 4) {
@@ -176,7 +176,9 @@ object AudioEmbeddedMetadataReader {
                         }
                         parseFlacVorbisComment(combinedStream)
                     }
-                    header[0] == 'R'.code.toByte() && header[1] == 'I'.code.toByte() && header[2] == 'F'.code.toByte() && header[3] == 'F'.code.toByte() -> {
+                    (header[0] == 'R'.code.toByte() && header[1] == 'I'.code.toByte() && header[2] == 'F'.code.toByte() && header[3] == 'F'.code.toByte()) ||
+                    (header[0] == 'R'.code.toByte() && header[1] == 'F'.code.toByte() && header[2] == '6'.code.toByte() && header[3] == '4'.code.toByte()) ||
+                    (header[0] == 'B'.code.toByte() && header[1] == 'W'.code.toByte() && header[2] == '6'.code.toByte() && header[3] == '4'.code.toByte()) -> {
                         parseWavStream(header, readHeader, input)
                     }
                     header[0] == 'F'.code.toByte() && header[1] == 'O'.code.toByte() && header[2] == 'R'.code.toByte() && header[3] == 'M'.code.toByte() -> {
@@ -199,8 +201,77 @@ object AudioEmbeddedMetadataReader {
     }
 
     // =========================================================================
-    // WAV (RIFF WAVE) PARSER: Parses both 'LIST INFO' and 'id3 ' chunks
+    // WAV (RIFF WAVE / RF64 / BW64) PARSER
+    // Accurately extracts fmt chunk (channels, sample rate, bit depth, byte rate),
+    // data chunk (audio payload size), duration, bitrate, and embedded ID3 / INFO tags.
     // =========================================================================
+
+    private fun safeSkipStream(stream: InputStream, totalToSkip: Long) {
+        var remaining = totalToSkip
+        val buf = ByteArray(minOf(remaining, 8192L).toInt())
+        while (remaining > 0) {
+            val s = stream.skip(remaining)
+            if (s > 0) {
+                remaining -= s
+            } else {
+                val toRead = minOf(remaining, buf.size.toLong()).toInt()
+                val r = stream.read(buf, 0, toRead)
+                if (r <= 0) break
+                remaining -= r
+            }
+        }
+    }
+
+    private fun parseId3OrPrependedWav(header: ByteArray, stream: InputStream): EmbeddedAudioMetadata {
+        val flags = header[5].toInt()
+        val hasFooter = (flags and 0x10) != 0
+        val tagSize = ((header[6].toInt() and 0x7F) shl 21) or
+                ((header[7].toInt() and 0x7F) shl 14) or
+                ((header[8].toInt() and 0x7F) shl 7) or
+                (header[9].toInt() and 0x7F)
+
+        val bytesToRead = min(tagSize, MAX_TAG_HEADER_READ)
+        val tagBytes = ByteArray(bytesToRead)
+        var totalRead = 0
+        while (totalRead < bytesToRead) {
+            val r = stream.read(tagBytes, totalRead, bytesToRead - totalRead)
+            if (r <= 0) break
+            totalRead += r
+        }
+
+        val id3Meta = if (totalRead > 0) {
+            parseId3Tags(header, ByteArrayInputStream(tagBytes, 0, totalRead))
+        } else {
+            EmbeddedAudioMetadata()
+        }
+
+        val skipRemaining = (tagSize - totalRead).toLong() + (if (hasFooter) 10L else 0L)
+        if (skipRemaining > 0) {
+            safeSkipStream(stream, skipRemaining)
+        }
+
+        // Check if RIFF WAVE follows prepended ID3
+        val nextHeader = ByteArray(12)
+        var nhRead = 0
+        while (nhRead < 12) {
+            val c = stream.read(nextHeader, nhRead, 12 - nhRead)
+            if (c <= 0) break
+            nhRead += c
+        }
+
+        if (nhRead >= 12) {
+            val magic = String(nextHeader, 0, 4, StandardCharsets.US_ASCII)
+            val format = String(nextHeader, 8, 4, StandardCharsets.US_ASCII)
+            if ((magic.equals("RIFF", ignoreCase = true) || magic.equals("RF64", ignoreCase = true) || magic.equals("BW64", ignoreCase = true)) &&
+                format.equals("WAVE", ignoreCase = true)
+            ) {
+                val wavMeta = parseWavStream(nextHeader, nhRead, stream)
+                return mergeMetadata(id3Meta, wavMeta)
+            }
+        }
+
+        return id3Meta
+    }
 
     private fun parseWavStream(header: ByteArray, readHeader: Int, stream: InputStream): EmbeddedAudioMetadata {
         val fullHdr = ByteArray(12)
@@ -222,6 +293,12 @@ object AudioEmbeddedMetadataReader {
         var infoMeta: EmbeddedAudioMetadata? = null
         var id3Meta: EmbeddedAudioMetadata? = null
 
+        var sampleRate = 0
+        var numChannels = 0
+        var bitsPerSample = 0
+        var byteRate = 0L
+        var totalDataBytes = 0L
+
         val chunkHdr = ByteArray(8)
         while (true) {
             var r = 0
@@ -240,7 +317,39 @@ object AudioEmbeddedMetadataReader {
             val pad = if (chunkSize % 2L != 0L) 1L else 0L
 
             when {
-                chunkId.equals("id3 ", ignoreCase = true) -> {
+                chunkId.equals("fmt ", ignoreCase = true) -> {
+                    if (chunkSize in 14..1048576) {
+                        val fmtBuf = ByteArray(chunkSize.toInt())
+                        var readTotal = 0
+                        while (readTotal < fmtBuf.size) {
+                            val c = stream.read(fmtBuf, readTotal, fmtBuf.size - readTotal)
+                            if (c <= 0) break
+                            readTotal += c
+                        }
+                        if (readTotal >= 14) {
+                            numChannels = (fmtBuf[2].toInt() and 0xFF) or ((fmtBuf[3].toInt() and 0xFF) shl 8)
+                            sampleRate = (fmtBuf[4].toInt() and 0xFF) or
+                                    ((fmtBuf[5].toInt() and 0xFF) shl 8) or
+                                    ((fmtBuf[6].toInt() and 0xFF) shl 16) or
+                                    ((fmtBuf[7].toInt() and 0xFF) shl 24)
+                            byteRate = (fmtBuf[8].toLong() and 0xFFL) or
+                                    ((fmtBuf[9].toLong() and 0xFFL) shl 8) or
+                                    ((fmtBuf[10].toLong() and 0xFFL) shl 16) or
+                                    ((fmtBuf[11].toLong() and 0xFFL) shl 24)
+                            if (readTotal >= 16) {
+                                bitsPerSample = (fmtBuf[14].toInt() and 0xFF) or ((fmtBuf[15].toInt() and 0xFF) shl 8)
+                            }
+                        }
+                        if (pad > 0) safeSkipStream(stream, pad)
+                    } else {
+                        safeSkipStream(stream, chunkSize + pad)
+                    }
+                }
+                chunkId.equals("data", ignoreCase = true) -> {
+                    totalDataBytes += chunkSize
+                    safeSkipStream(stream, chunkSize + pad)
+                }
+                chunkId.equals("id3 ", ignoreCase = true) || chunkId.equals("ID3 ", ignoreCase = true) -> {
                     val bufSize = minOf(chunkSize, MAX_TAG_HEADER_READ.toLong()).toInt()
                     val id3Buf = ByteArray(bufSize)
                     var readTotal = 0
@@ -251,16 +360,8 @@ object AudioEmbeddedMetadataReader {
                     }
                     val skipRemaining = chunkSize - readTotal + pad
                     if (skipRemaining > 0) {
-                        var skipped = 0L
-                        while (skipped < skipRemaining) {
-                            val s = stream.skip(skipRemaining - skipped)
-                            if (s <= 0) {
-                                if (stream.read() == -1) break
-                                skipped++
-                            } else skipped += s
-                        }
+                        safeSkipStream(stream, skipRemaining)
                     }
-
                     if (id3Buf.size >= 10 && id3Buf[0] == 'I'.code.toByte() && id3Buf[1] == 'D'.code.toByte() && id3Buf[2] == '3'.code.toByte()) {
                         id3Meta = parseId3Tags(id3Buf.copyOfRange(0, 10), ByteArrayInputStream(id3Buf, 10, id3Buf.size - 10))
                     }
@@ -276,34 +377,35 @@ object AudioEmbeddedMetadataReader {
                     }
                     val skipRemaining = chunkSize - readTotal + pad
                     if (skipRemaining > 0) {
-                        var skipped = 0L
-                        while (skipped < skipRemaining) {
-                            val s = stream.skip(skipRemaining - skipped)
-                            if (s <= 0) {
-                                if (stream.read() == -1) break
-                                skipped++
-                            } else skipped += s
-                        }
+                        safeSkipStream(stream, skipRemaining)
                     }
-
                     if (listBuf.size >= 4 && String(listBuf, 0, 4, StandardCharsets.US_ASCII).equals("INFO", ignoreCase = true)) {
                         infoMeta = parseRiffInfoChunk(listBuf, readTotal)
                     }
                 }
                 else -> {
-                    val toSkip = chunkSize + pad
-                    var skipped = 0L
-                    while (skipped < toSkip) {
-                        val s = stream.skip(toSkip - skipped)
-                        if (s <= 0) {
-                            if (stream.read() == -1) break
-                            skipped++
-                        } else {
-                            skipped += s
-                        }
-                    }
+                    safeSkipStream(stream, chunkSize + pad)
                 }
             }
+        }
+
+        val effectiveByteRate = when {
+            byteRate > 0L -> byteRate
+            sampleRate > 0 && numChannels > 0 && bitsPerSample > 0 -> {
+                sampleRate.toLong() * numChannels.toLong() * (bitsPerSample.toLong() / 8L)
+            }
+            else -> 0L
+        }
+
+        val durationSec = if (effectiveByteRate > 0L && totalDataBytes > 0L) {
+            (totalDataBytes / effectiveByteRate).toInt()
+        } else 0
+
+        val bitrateKbps = when {
+            effectiveByteRate > 0L -> ((effectiveByteRate * 8L) / 1000L).toInt()
+            durationSec > 0 && totalDataBytes > 0L -> ((totalDataBytes * 8L) / (durationSec.toLong() * 1000L)).toInt()
+            sampleRate > 0 -> 1411
+            else -> 0
         }
 
         val baseInfo = infoMeta ?: EmbeddedAudioMetadata()
@@ -315,6 +417,10 @@ object AudioEmbeddedMetadataReader {
             album = baseId3.album ?: baseInfo.album,
             albumArtist = baseId3.albumArtist ?: baseInfo.albumArtist,
             genre = baseId3.genre ?: baseInfo.genre,
+            durationSeconds = durationSec,
+            bitrateKbps = bitrateKbps,
+            sampleRate = if (sampleRate > 0) sampleRate else null,
+            bitDepth = if (bitsPerSample > 0) bitsPerSample else null,
             trackNumber = baseId3.trackNumber ?: baseInfo.trackNumber,
             discNumber = baseId3.discNumber ?: baseInfo.discNumber,
             releaseDate = baseId3.releaseDate ?: baseInfo.releaseDate,
@@ -1156,16 +1262,30 @@ object AudioEmbeddedMetadataReader {
         val musicalKey = stream.musicalKey ?: retriever.musicalKey
         val camelotKey = stream.camelotKey ?: CamelotKey.fromMusicalKey(musicalKey)
 
+        val finalDuration = when {
+            stream.durationSeconds > 1 -> stream.durationSeconds
+            retriever.durationSeconds > 1 -> retriever.durationSeconds
+            stream.durationSeconds > 0 -> stream.durationSeconds
+            else -> 0
+        }
+        val finalBitrate = when {
+            stream.bitrateKbps > 0 -> stream.bitrateKbps
+            retriever.bitrateKbps > 0 -> retriever.bitrateKbps
+            else -> 0
+        }
+        val finalSampleRate = stream.sampleRate ?: retriever.sampleRate
+        val finalBitDepth = stream.bitDepth ?: retriever.bitDepth
+
         return EmbeddedAudioMetadata(
             title = stream.title ?: retriever.title,
             artist = stream.artist ?: retriever.artist,
             album = stream.album ?: retriever.album,
             albumArtist = stream.albumArtist ?: retriever.albumArtist,
             genre = stream.genre ?: retriever.genre,
-            durationSeconds = if (retriever.durationSeconds > 0) retriever.durationSeconds else stream.durationSeconds,
-            bitrateKbps = if (retriever.bitrateKbps > 0) retriever.bitrateKbps else stream.bitrateKbps,
-            sampleRate = retriever.sampleRate ?: stream.sampleRate,
-            bitDepth = retriever.bitDepth ?: stream.bitDepth,
+            durationSeconds = finalDuration,
+            bitrateKbps = finalBitrate,
+            sampleRate = finalSampleRate,
+            bitDepth = finalBitDepth,
             trackNumber = stream.trackNumber ?: retriever.trackNumber,
             discNumber = stream.discNumber ?: retriever.discNumber,
             releaseDate = stream.releaseDate ?: retriever.releaseDate,

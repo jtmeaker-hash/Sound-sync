@@ -128,21 +128,7 @@ object MediaScannerHelper {
                         val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
                         val targetPath = dataPath.ifBlank { contentUri.toString() }
 
-                        val durationSec = (durationMs / 1000).toInt().coerceAtLeast(1)
-
-                        // Generate stable content fingerprint
-                        val fingerprint = AudioFingerprintUtil.generateFingerprint(
-                            context = context,
-                            uriOrPath = targetPath,
-                            fileSizeBytes = sizeBytes,
-                            durationSeconds = durationSec
-                        )
-
-                        // Check duplicate protection
-                        if (seenFingerprints.contains(fingerprint) || seenPaths.contains(targetPath)) {
-                            totalSkipped++
-                            continue
-                        }
+                        val rawDurationSec = if (durationMs > 1000L) (durationMs / 1000).toInt() else 0
 
                         val title = rawTitle?.takeIf { it.isNotBlank() && it != "<unknown>" }
                             ?: File(dataPath).nameWithoutExtension.takeIf { it.isNotBlank() }
@@ -154,6 +140,24 @@ object MediaScannerHelper {
                         val format = resolveFormat(dataPath, mimeType)
                         val dirPath = resolveDirectory(dataPath)
 
+                        // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 / RIFF chunks) if present
+                        val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, targetPath)
+                        val finalDurationSec = if (rawDurationSec > 1) rawDurationSec else if (embedded.durationSeconds > 0) embedded.durationSeconds else rawDurationSec
+
+                        // Generate stable content fingerprint
+                        val fingerprint = AudioFingerprintUtil.generateFingerprint(
+                            context = context,
+                            uriOrPath = targetPath,
+                            fileSizeBytes = sizeBytes,
+                            durationSeconds = finalDurationSec
+                        )
+
+                        // Check duplicate protection
+                        if (seenFingerprints.contains(fingerprint) || seenPaths.contains(targetPath)) {
+                            totalSkipped++
+                            continue
+                        }
+
                         // Parse track and disc number
                         val discNum = if (rawTrackNum >= 1000) (rawTrackNum / 1000) else 1
                         val trackNum = if (rawTrackNum >= 1000) (rawTrackNum % 1000) else rawTrackNum
@@ -162,8 +166,10 @@ object MediaScannerHelper {
                         val storageRelPath = RockboxPathResolver.computeStorageRelativePath(dataPath, dirPath)
 
                         // Compute fast bitrate from size/duration or format
-                        val computedBitrateKbps = if (sizeBytes > 0 && durationSec > 0 && format != "FLAC" && format != "WAV") {
-                            ((sizeBytes * 8L) / (durationSec * 1000L)).toInt().coerceIn(64, 320)
+                        val computedBitrateKbps = if (embedded.bitrateKbps > 0) {
+                            embedded.bitrateKbps
+                        } else if (sizeBytes > 0 && finalDurationSec > 0 && format != "FLAC" && format != "WAV") {
+                            ((sizeBytes * 8L) / (finalDurationSec * 1000L)).toInt().coerceIn(64, 320)
                         } else if (format == "FLAC" || format == "WAV" || format == "AIFF") {
                             1411
                         } else {
@@ -172,8 +178,6 @@ object MediaScannerHelper {
 
                         val qualityRating = resolveQualityRating(format, computedBitrateKbps)
 
-                        // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 tags) if present
-                        val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, targetPath)
                         var effectiveTitle = embedded?.title?.takeIf(String::isNotBlank) ?: title
                         var effectiveArtist = embedded?.artist?.takeIf(String::isNotBlank)
                             ?: if (rawArtist.isNullOrBlank() || rawArtist == "<unknown>") null else rawArtist
@@ -186,7 +190,7 @@ object MediaScannerHelper {
                             existingArtist = effectiveArtist,
                             album = effectiveAlbum,
                             filename = targetPath,
-                            durationSeconds = durationSec
+                            durationSeconds = finalDurationSec
                         )
 
                         if (!com.example.metadata.parser.TrackIdentityParser.isArtistValid(effectiveArtist)) {
@@ -220,7 +224,7 @@ object MediaScannerHelper {
                             bpm = effectiveBpm,
                             musicalKey = effectiveKey,
                             camelotKey = embedded.camelotKey.orEmpty(),
-                            durationSeconds = durationSec,
+                            durationSeconds = finalDurationSec,
                             bitrateKbps = computedBitrateKbps,
                             format = format,
                             fileSizeMb = String.format(Locale.US, "%.2f", sizeMb).toDoubleOrNull() ?: sizeMb,
@@ -230,7 +234,7 @@ object MediaScannerHelper {
                             syncState = SyncState.SYNCED,
                             platforms = listOf(MusicPlatform.LOCAL),
                             energyRating = 7,
-                            hotCues = listOf(0, (durationSec * 0.15).toInt(), (durationSec * 0.40).toInt(), (durationSec * 0.70).toInt()),
+                            hotCues = listOf(0, (finalDurationSec * 0.15).toInt(), (finalDurationSec * 0.40).toInt(), (finalDurationSec * 0.70).toInt()),
                             isAiTagged = false,
                             qualityRating = qualityRating,
                             dateAdded = if (dateAddedSec > 0) dateAddedSec * 1000L else System.currentTimeMillis(),
@@ -331,7 +335,8 @@ object MediaScannerHelper {
                 ?: "Unknown Artist"
             val album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "Unknown Album"
             val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            val durationSec = (durationStr?.toLongOrNull() ?: 0L).let { (it / 1000).toInt().coerceAtLeast(1) }
+            val durationMs = durationStr?.toLongOrNull() ?: 0L
+            val durationSec = if (durationMs > 1000L) (durationMs / 1000).toInt() else 0
             val bitrateStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
             val bitrateKbps = (bitrateStr?.toIntOrNull() ?: (320 * 1000)) / 1000
             val genre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE) ?: "DJ Library"
@@ -358,12 +363,8 @@ object MediaScannerHelper {
             }
 
             val format = resolveFormat(displayName, mimeType)
-            val qualityRating = resolveQualityRating(format, bitrateKbps)
-            val id = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
 
-            val effectiveTitle = if (!title.isNullOrBlank()) title else displayName.substringBeforeLast(".")
-
-            // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 tags) if present
+            // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 / RIFF chunks) if present
             val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, uri.toString())
             val resolvedTitle = embedded.title?.takeIf(String::isNotBlank)
                 ?: if (!title.isNullOrBlank()) title else displayName.substringBeforeLast(".")
@@ -374,11 +375,17 @@ object MediaScannerHelper {
             val resolvedKey = embedded.camelotKey?.takeIf(String::isNotBlank)
                 ?: embedded.musicalKey?.takeIf(String::isNotBlank) ?: ""
 
+            val finalDurationSec = if (durationSec > 1) durationSec else if (embedded.durationSeconds > 0) embedded.durationSeconds else durationSec
+            val finalBitrateKbps = if (embedded.bitrateKbps > 0) embedded.bitrateKbps else bitrateKbps
+
+            val qualityRating = resolveQualityRating(format, finalBitrateKbps)
+            val id = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
+
             val fingerprint = AudioFingerprintUtil.generateFingerprint(
                 context = context,
                 uriOrPath = uri.toString(),
                 fileSizeBytes = sizeBytes,
-                durationSeconds = durationSec
+                durationSeconds = finalDurationSec
             )
 
             Track(
@@ -392,8 +399,8 @@ object MediaScannerHelper {
                 bpm = resolvedBpm,
                 musicalKey = resolvedKey,
                 camelotKey = embedded.camelotKey.orEmpty(),
-                durationSeconds = durationSec,
-                bitrateKbps = bitrateKbps,
+                durationSeconds = finalDurationSec,
+                bitrateKbps = finalBitrateKbps,
                 format = format,
                 fileSizeMb = String.format(Locale.US, "%.2f", fileSizeMb).toDoubleOrNull() ?: fileSizeMb,
                 filePath = uri.toString(),
@@ -402,7 +409,7 @@ object MediaScannerHelper {
                 syncState = SyncState.SYNCED,
                 platforms = listOf(MusicPlatform.LOCAL),
                 energyRating = 7,
-                hotCues = listOf(0, (durationSec * 0.15).toInt(), (durationSec * 0.45).toInt(), (durationSec * 0.75).toInt()),
+                hotCues = listOf(0, (finalDurationSec * 0.15).toInt(), (finalDurationSec * 0.45).toInt(), (finalDurationSec * 0.75).toInt()),
                 isAiTagged = false,
                 qualityRating = qualityRating,
                 dateAdded = System.currentTimeMillis(),

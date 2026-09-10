@@ -252,7 +252,7 @@ object LocalFileSystemScanner {
         var artist = "Unknown Artist"
         var album = "Single"
         var genre = "DJ Library"
-        var durationSec = 210
+        var durationSec = 0
         var bitrateKbps = if (format == "FLAC" || format == "WAV") 1411 else 320
         var bpm = 0.0
         var musicalKey = ""
@@ -264,6 +264,8 @@ object LocalFileSystemScanner {
         if (embedded.genre?.isNotBlank() == true) genre = embedded.genre
         if (embedded.hasBpm) bpm = embedded.bpm ?: 0.0
         if (embedded.hasKey) musicalKey = embedded.camelotKey ?: embedded.musicalKey.orEmpty()
+        if (embedded.durationSeconds > 0) durationSec = embedded.durationSeconds
+        if (embedded.bitrateKbps > 0) bitrateKbps = embedded.bitrateKbps
 
         try {
             val retriever = MediaMetadataRetriever()
@@ -282,12 +284,19 @@ object LocalFileSystemScanner {
             if (genre == "DJ Library" && !mGenre.isNullOrBlank()) genre = mGenre
 
             val durMs = mDuration?.toLongOrNull() ?: 0L
-            if (durMs > 0) durationSec = (durMs / 1000L).toInt()
+            if (durMs > 1000L && durationSec <= 1) durationSec = (durMs / 1000L).toInt()
             val br = mBitrate?.toIntOrNull() ?: 0
-            if (br > 0) bitrateKbps = br / 1000
+            if (br > 0 && (bitrateKbps <= 0 || bitrateKbps == 320)) bitrateKbps = br / 1000
 
             retriever.release()
         } catch (_: Exception) {}
+
+        if (durationSec <= 0 && embedded.durationSeconds > 0) {
+            durationSec = embedded.durationSeconds
+        }
+        if (durationSec <= 0) {
+            durationSec = 210
+        }
 
         val parsed = com.example.metadata.parser.TrackIdentityParser.parse(
             existingTitle = title,
