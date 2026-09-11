@@ -50,9 +50,12 @@ import com.example.service.AudioScanService
 import com.example.service.AudioScanState
 import com.example.storage.LocalFileSystemScanner
 import com.example.storage.MediaScannerHelper
+import com.example.storage.PlaybackDiagnostic
+import com.example.storage.PlaybackIssueType
 import com.example.storage.SafStorageManager
 import com.example.storage.ScanStateManager
 import com.example.storage.ScanStatus
+import com.example.storage.TrackSelfHealingResolver
 import com.example.sync.CloudSyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -625,6 +628,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage = _snackbarMessage.asStateFlow()
 
+    private val _playbackIssueDiagnostic = MutableStateFlow<PlaybackDiagnostic?>(null)
+    val playbackIssueDiagnostic = _playbackIssueDiagnostic.asStateFlow()
+
+    private val _playbackIssueTrack = MutableStateFlow<Track?>(null)
+    val playbackIssueTrack = _playbackIssueTrack.asStateFlow()
+
     // Now Playing Display Mode (Waveform vs Artwork) with persistent SharedPreferences
     private val _nowPlayingDisplayMode = MutableStateFlow(
         try {
@@ -1192,27 +1201,36 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
         audioEngine.onTrackUnavailableCallback = { unplayableTrack ->
             viewModelScope.launch(Dispatchers.Main) {
-                Log.w("MainDjViewModel", "Engine reported track unavailable: '${unplayableTrack.title}' (${unplayableTrack.filePath}). Attempting self-healing...")
-                val healed = withContext(Dispatchers.IO) {
-                    com.example.storage.TrackSelfHealingResolver.healTrack(getApplication(), unplayableTrack, trackDao)
+                Log.w("MainDjViewModel", "Engine reported track unavailable: '${unplayableTrack.title}' (${unplayableTrack.filePath}). Diagnosing issue...")
+                val diag = withContext(Dispatchers.IO) {
+                    TrackSelfHealingResolver.diagnoseTrack(getApplication(), unplayableTrack)
                 }
-                if (healed != null) {
-                    Log.i("MainDjViewModel", "Self-healing recovered track reference: ${unplayableTrack.filePath} -> ${healed.filePath}. Resuming playback.")
-                    updateTrackInPlaybackQueue(healed)
-                    audioEngine.loadTrack(healed, autoPlay = true)
-                } else {
-                    val isGenuinelyDisconnected = com.example.storage.StorageAvailabilityHelper.isRootGenuinelyDisconnected(getApplication(), unplayableTrack)
-                    if (isGenuinelyDisconnected) {
-                        val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(unplayableTrack)
-                        val source = if (isUsb) "USB drive" else "external storage"
-                        showSnackbar("Skipping '${unplayableTrack.title}': $source is disconnected.")
-                    } else {
-                        val isContent = unplayableTrack.filePath.startsWith("content://")
-                        val reason = if (isContent) "media reference expired" else "audio file inaccessible"
-                        showSnackbar("Skipping '${unplayableTrack.title}': $reason.")
+
+                if (diag.issueType == PlaybackIssueType.STALE_URI_AFTER_METADATA_REWRITE || diag.canAutoRepair) {
+                    val repairResult = withContext(Dispatchers.IO) {
+                        TrackSelfHealingResolver.repairTrack(getApplication(), unplayableTrack, trackDao)
                     }
-                    nextTrack()
+                    if (repairResult.success && repairResult.healedTrack != null) {
+                        Log.i("MainDjViewModel", "Self-healing recovered track reference: ${unplayableTrack.filePath} -> ${repairResult.healedTrack.filePath}. Resuming playback.")
+                        updateTrackInPlaybackQueue(repairResult.healedTrack)
+                        showSnackbar("Auto-repaired '${repairResult.healedTrack.title}' playback reference")
+                        audioEngine.loadTrack(repairResult.healedTrack, autoPlay = true)
+                        return@launch
+                    }
                 }
+
+                _playbackIssueTrack.value = unplayableTrack
+                _playbackIssueDiagnostic.value = diag
+
+                val isGenuinelyDisconnected = com.example.storage.StorageAvailabilityHelper.isRootGenuinelyDisconnected(getApplication(), unplayableTrack)
+                if (isGenuinelyDisconnected) {
+                    val isUsb = com.example.storage.StorageAvailabilityHelper.isExternalStorageTrack(unplayableTrack)
+                    val source = if (isUsb) "USB drive" else "external storage"
+                    showSnackbar("Skipping '${unplayableTrack.title}': $source is disconnected.")
+                } else {
+                    showSnackbar("Playback issue with '${unplayableTrack.title}': ${diag.message}")
+                }
+                nextTrack()
             }
         }
         audioEngine.onTrackPlaybackErrorCallback = { brokenTrack, reason ->
@@ -3671,6 +3689,27 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun clearSnackbar() {
         _snackbarMessage.value = null
+    }
+
+    fun repairPlaybackIssue(track: Track) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                TrackSelfHealingResolver.repairTrack(getApplication(), track, trackDao)
+            }
+            if (result.success && result.healedTrack != null) {
+                showSnackbar("Track repaired: ${result.message}")
+                updateTrackInPlaybackQueue(result.healedTrack)
+                dismissPlaybackIssue()
+                audioEngine.loadTrack(result.healedTrack, autoPlay = true)
+            } else {
+                showSnackbar("Repair failed: ${result.message}")
+            }
+        }
+    }
+
+    fun dismissPlaybackIssue() {
+        _playbackIssueDiagnostic.value = null
+        _playbackIssueTrack.value = null
     }
 
     override fun onCleared() {

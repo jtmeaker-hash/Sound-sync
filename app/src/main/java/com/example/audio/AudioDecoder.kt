@@ -86,7 +86,17 @@ object AudioDecoder {
             // 1. Configure Extractor
             if (filePathOrUri.startsWith("content://")) {
                 val uri = Uri.parse(filePathOrUri)
-                extractor.setDataSource(context, uri, null)
+                try {
+                    extractor.setDataSource(context, uri, null)
+                } catch (e: Exception) {
+                    val cleanPath = filePathOrUri.removePrefix("file://")
+                    val file = File(cleanPath)
+                    if (file.exists() && file.canRead()) {
+                        extractor.setDataSource(cleanPath)
+                    } else {
+                        throw e
+                    }
+                }
             } else {
                 val cleanPath = filePathOrUri.removePrefix("file://")
                 val file = File(cleanPath)
@@ -386,7 +396,17 @@ object AudioDecoder {
         try {
             if (filePathOrUri.startsWith("content://")) {
                 val uri = Uri.parse(filePathOrUri)
-                extractor.setDataSource(context, uri, null)
+                try {
+                    extractor.setDataSource(context, uri, null)
+                } catch (e: Exception) {
+                    val cleanPath = filePathOrUri.removePrefix("file://")
+                    val file = File(cleanPath)
+                    if (file.exists() && file.canRead()) {
+                        extractor.setDataSource(cleanPath)
+                    } else {
+                        throw e
+                    }
+                }
             } else {
                 val cleanPath = filePathOrUri.removePrefix("file://")
                 val file = File(cleanPath)

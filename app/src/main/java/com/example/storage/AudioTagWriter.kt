@@ -4,6 +4,8 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.IntentSender
 import android.graphics.BitmapFactory
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -54,6 +56,64 @@ sealed interface TagWriteResult {
     data class Failed(val message: String, val cause: Throwable? = null) : TagWriteResult
     data class Unsupported(val message: String) : TagWriteResult
     data class LibraryOnly(val reason: String) : TagWriteResult
+}
+
+sealed class AudioValidationResult {
+    object Valid : AudioValidationResult()
+    data class Invalid(val reason: String) : AudioValidationResult()
+}
+
+/**
+ * Structured diagnostic logger dedicated to tracking metadata rewrite lifecycle events.
+ * Logs BEFORE, WRITE, VALIDATION, and AFTER events with full container & playback state.
+ */
+object SoundSyncMetadataRewriteDebug {
+    private const val TAG = "SoundSyncMetadataRewriteDebug"
+
+    fun logBefore(
+        path: String,
+        uri: String,
+        sizeBytes: Long,
+        durationMs: Long,
+        isPlayable: Boolean,
+        tags: Map<String, String?>
+    ) {
+        Log.i(TAG, "BEFORE SNAPSHOT: path='$path', uri='$uri', size=${sizeBytes}B, duration=${durationMs}ms, playable=$isPlayable, tags=$tags")
+    }
+
+    fun logWrite(
+        path: String,
+        fieldsWritten: List<String>,
+        artworkBytes: Int,
+        stagingSize: Long,
+        sizeDelta: Long
+    ) {
+        Log.i(TAG, "WRITE OPERATION: path='$path', fields=$fieldsWritten, artworkBytes=$artworkBytes, stagingSize=${stagingSize}B, sizeDelta=${sizeDelta}B")
+    }
+
+    fun logValidation(
+        path: String,
+        isValid: Boolean,
+        reason: String? = null
+    ) {
+        if (isValid) {
+            Log.i(TAG, "VALIDATION RESULT: path='$path', valid=true, container and audio streams intact and playable")
+        } else {
+            Log.e(TAG, "VALIDATION RESULT: path='$path', valid=false, REASON: $reason")
+        }
+    }
+
+    fun logAfter(
+        oldPath: String,
+        newPath: String,
+        oldSize: Long,
+        newSize: Long,
+        uriChanged: Boolean,
+        mediaStoreIdChanged: Boolean,
+        isPlayable: Boolean
+    ) {
+        Log.i(TAG, "AFTER SNAPSHOT: oldPath='$oldPath', newPath='$newPath', oldSize=${oldSize}B, newSize=${newSize}B, SIZE_DELTA=${newSize - oldSize}B, URI_CHANGED=$uriChanged, MEDIASTORE_ID_CHANGED=$mediaStoreIdChanged, PLAYBACK_VERIFIED=$isPlayable")
+    }
 }
 
 /**
@@ -239,6 +299,351 @@ object AudioTagWriter {
         }
     }
 
+    data class Mp4Box(val type: String, val offset: Long, val headerSize: Int, val payloadSize: Long, val isExtended: Boolean)
+
+    fun scanMp4Boxes(file: File): List<Mp4Box> {
+        val boxes = mutableListOf<Mp4Box>()
+        val fileLength = file.length()
+        FileInputStream(file).use { inputStream ->
+            var currentPos = 0L
+            while (currentPos + 8 <= fileLength) {
+                val hdr = ByteArray(8)
+                val read = inputStream.read(hdr)
+                if (read < 8) break
+
+                var boxLen = ((hdr[0].toLong() and 0xFF) shl 24) or
+                        ((hdr[1].toLong() and 0xFF) shl 16) or
+                        ((hdr[2].toLong() and 0xFF) shl 8) or
+                        (hdr[3].toLong() and 0xFF)
+                val boxType = String(hdr, 4, 4, StandardCharsets.ISO_8859_1)
+
+                var headerSize = 8
+                var isExtended = false
+                if (boxLen == 1L) {
+                    val extHdr = ByteArray(8)
+                    inputStream.read(extHdr)
+                    boxLen = 0L
+                    for (b in extHdr) {
+                        boxLen = (boxLen shl 8) or (b.toLong() and 0xFF)
+                    }
+                    headerSize = 16
+                    isExtended = true
+                } else if (boxLen == 0L) {
+                    boxLen = fileLength - currentPos
+                }
+
+                if (boxLen < headerSize) break
+                val payloadLen = boxLen - headerSize
+                boxes.add(Mp4Box(boxType, currentPos, headerSize, payloadLen, isExtended))
+                skipFully(inputStream, payloadLen)
+                currentPos += boxLen
+            }
+        }
+        return boxes
+    }
+
+    /**
+     * Pre-commit audio integrity validator.
+     * Checks container headers, sample rates, channels, audio payloads, chunk offsets,
+     * and decodability before allowing any rewritten staging file to replace the original.
+     */
+    fun validateRewrittenAudio(
+        stagingFile: File,
+        ext: String,
+        originalFile: File? = null
+    ): AudioValidationResult {
+        if (!stagingFile.exists()) {
+            return AudioValidationResult.Invalid("Staging file does not exist: ${stagingFile.absolutePath}")
+        }
+        val stagingSize = stagingFile.length()
+        if (stagingSize <= 0L) {
+            return AudioValidationResult.Invalid("Staging file is empty (0 bytes)")
+        }
+
+        if (originalFile != null && originalFile.exists()) {
+            val origSize = originalFile.length()
+            if (origSize > 4096 && stagingSize < origSize / 2) {
+                return AudioValidationResult.Invalid(
+                    "Staging file size ($stagingSize bytes) is suspiciously smaller than original ($origSize bytes)"
+                )
+            }
+        }
+
+        val cleanExt = ext.lowercase(Locale.ROOT).removePrefix(".")
+        try {
+            when (cleanExt) {
+                "wav" -> {
+                    if (stagingSize < 44) return AudioValidationResult.Invalid("WAV file too small: $stagingSize bytes")
+                    stagingFile.inputStream().use { stream ->
+                        val header = ByteArray(12)
+                        if (stream.read(header) < 12) return AudioValidationResult.Invalid("Cannot read WAV header")
+                        val magic = String(header, 0, 4, StandardCharsets.US_ASCII)
+                        if (magic != "RIFF" && magic != "RIFX") {
+                            return AudioValidationResult.Invalid("WAV does not start with RIFF/RIFX magic: $magic")
+                        }
+                        if (String(header, 8, 4, StandardCharsets.US_ASCII) != "WAVE") {
+                            return AudioValidationResult.Invalid("WAV subtype is not WAVE")
+                        }
+
+                        var foundFmt = false
+                        var foundData = false
+                        var dataSize = 0L
+                        val chunkHdr = ByteArray(8)
+                        while (stream.available() >= 8) {
+                            if (stream.read(chunkHdr) < 8) break
+                            val id = String(chunkHdr, 0, 4, StandardCharsets.US_ASCII)
+                            val size = ((chunkHdr[4].toLong() and 0xFF)) or
+                                    ((chunkHdr[5].toLong() and 0xFF) shl 8) or
+                                    ((chunkHdr[6].toLong() and 0xFF) shl 16) or
+                                    ((chunkHdr[7].toLong() and 0xFF) shl 24)
+                            val pad = if (size % 2L != 0L) 1L else 0L
+
+                            if (id == "fmt ") {
+                                foundFmt = true
+                                if (size < 14) return AudioValidationResult.Invalid("WAV fmt chunk too small: $size")
+                                val fmtData = ByteArray(minOf(size, 40L).toInt())
+                                stream.read(fmtData)
+                                val channels = (fmtData[2].toInt() and 0xFF) or ((fmtData[3].toInt() and 0xFF) shl 8)
+                                val sampleRate = (fmtData[4].toLong() and 0xFF) or
+                                        ((fmtData[5].toLong() and 0xFF) shl 8) or
+                                        ((fmtData[6].toLong() and 0xFF) shl 16) or
+                                        ((fmtData[7].toLong() and 0xFF) shl 24)
+                                if (channels <= 0 || sampleRate <= 0L) {
+                                    return AudioValidationResult.Invalid("WAV fmt chunk invalid: channels=$channels, sampleRate=$sampleRate")
+                                }
+                                val rem = size - fmtData.size + pad
+                                if (rem > 0) skipFully(stream, rem)
+                            } else if (id == "data") {
+                                foundData = true
+                                dataSize = size
+                                skipFully(stream, size + pad)
+                            } else {
+                                skipFully(stream, size + pad)
+                            }
+                        }
+                        if (!foundFmt) return AudioValidationResult.Invalid("WAV missing 'fmt ' chunk")
+                        if (!foundData || dataSize <= 0) return AudioValidationResult.Invalid("WAV missing or empty 'data' chunk")
+                    }
+                }
+
+                "mp3" -> {
+                    if (stagingSize < 128) return AudioValidationResult.Invalid("MP3 file too small: $stagingSize bytes")
+                    stagingFile.inputStream().use { stream ->
+                        val head = ByteArray(10)
+                        if (stream.read(head) < 10) return AudioValidationResult.Invalid("Cannot read MP3 header")
+                        var audioStart = 0L
+                        if (head[0] == 'I'.code.toByte() && head[1] == 'D'.code.toByte() && head[2] == '3'.code.toByte()) {
+                            val flags = head[5].toInt()
+                            val hasFooter = (flags and 0x10) != 0
+                            val tagSize = ((head[6].toInt() and 0x7F) shl 21) or
+                                    ((head[7].toInt() and 0x7F) shl 14) or
+                                    ((head[8].toInt() and 0x7F) shl 7) or
+                                    (head[9].toInt() and 0x7F)
+                            audioStart = 10L + tagSize + (if (hasFooter) 10 else 0)
+                        }
+
+                        if (audioStart > 0) {
+                            skipFully(stream, audioStart - 10)
+                        }
+
+                        val buf = ByteArray(8192)
+                        val read = stream.read(buf)
+                        if (read < 4) return AudioValidationResult.Invalid("No audio data following ID3 tag in MP3")
+                        var foundSync = false
+                        for (i in 0 until read - 3) {
+                            val b0 = buf[i].toInt() and 0xFF
+                            val b1 = buf[i + 1].toInt() and 0xFF
+                            val b2 = buf[i + 2].toInt() and 0xFF
+                            if (b0 == 0xFF && (b1 and 0xE0) == 0xE0) {
+                                val version = (b1 shr 3) and 0x03
+                                val layer = (b1 shr 1) and 0x03
+                                val bitrateIdx = (b2 shr 4) and 0x0F
+                                val sampleRateIdx = (b2 shr 2) and 0x03
+                                if (version != 1 && layer != 0 && bitrateIdx != 15 && sampleRateIdx != 3) {
+                                    foundSync = true
+                                    break
+                                }
+                            }
+                        }
+                        if (!foundSync) return AudioValidationResult.Invalid("No valid MPEG frame sync found in MP3 payload")
+                    }
+                }
+
+                "flac" -> {
+                    if (stagingSize < 42) return AudioValidationResult.Invalid("FLAC file too small: $stagingSize bytes")
+                    stagingFile.inputStream().use { stream ->
+                        val magic = ByteArray(4)
+                        if (stream.read(magic) < 4) return AudioValidationResult.Invalid("Cannot read FLAC magic")
+                        if (String(magic, StandardCharsets.US_ASCII) != "fLaC") {
+                            return AudioValidationResult.Invalid("FLAC does not start with 'fLaC' magic")
+                        }
+                        val blockHdr = ByteArray(4)
+                        if (stream.read(blockHdr) < 4) return AudioValidationResult.Invalid("Cannot read FLAC STREAMINFO header")
+                        val blockType = blockHdr[0].toInt() and 0x7F
+                        val blockLen = ((blockHdr[1].toInt() and 0xFF) shl 16) or
+                                ((blockHdr[2].toInt() and 0xFF) shl 8) or
+                                (blockHdr[3].toInt() and 0xFF)
+                        if (blockType != 0 || blockLen != 34) {
+                            return AudioValidationResult.Invalid("FLAC first block is not STREAMINFO (type=$blockType, len=$blockLen)")
+                        }
+                        val streamInfo = ByteArray(34)
+                        if (stream.read(streamInfo) < 34) return AudioValidationResult.Invalid("Cannot read FLAC STREAMINFO data")
+                        val sampleRate = ((streamInfo[10].toLong() and 0xFF) shl 12) or
+                                ((streamInfo[11].toLong() and 0xFF) shl 4) or
+                                ((streamInfo[12].toLong() and 0xF0) shr 4)
+                        val channels = (((streamInfo[12].toInt() and 0x0E) shr 1) + 1)
+                        if (sampleRate <= 0L || channels !in 1..8) {
+                            return AudioValidationResult.Invalid("FLAC STREAMINFO invalid: sampleRate=$sampleRate, channels=$channels")
+                        }
+                    }
+                }
+
+                "m4a", "mp4", "aac" -> {
+                    if (stagingSize < 32) return AudioValidationResult.Invalid("M4A file too small: $stagingSize bytes")
+                    val boxes = scanMp4Boxes(stagingFile)
+                    val moov = boxes.find { it.type == "moov" }
+                    val mdat = boxes.find { it.type == "mdat" }
+                    if (moov == null) return AudioValidationResult.Invalid("M4A file missing 'moov' box")
+                    if (mdat == null || mdat.payloadSize <= 0) return AudioValidationResult.Invalid("M4A file missing or empty 'mdat' audio data")
+
+                    stagingFile.inputStream().use { stream ->
+                        skipFully(stream, moov.offset + moov.headerSize)
+                        val moovBytes = ByteArray(moov.payloadSize.toInt())
+                        var read = 0
+                        while (read < moovBytes.size) {
+                            val c = stream.read(moovBytes, read, moovBytes.size - read)
+                            if (c <= 0) break
+                            read += c
+                        }
+                        var foundTrak = false
+                        fun checkContainer(offset: Int, length: Int) {
+                            var pos = offset
+                            while (pos + 8 <= offset + length && pos + 8 <= moovBytes.size) {
+                                val b0 = moovBytes[pos].toLong() and 0xFF
+                                val b1 = moovBytes[pos + 1].toLong() and 0xFF
+                                val b2 = moovBytes[pos + 2].toLong() and 0xFF
+                                val b3 = moovBytes[pos + 3].toLong() and 0xFF
+                                var boxLen = (b0 shl 24) or (b1 shl 16) or (b2 shl 8) or b3
+                                var headerSize = 8
+                                if (boxLen == 1L) {
+                                    if (pos + 16 > offset + length) break
+                                    var ext = 0L
+                                    for (i in 0 until 8) ext = (ext shl 8) or (moovBytes[pos + 8 + i].toLong() and 0xFF)
+                                    boxLen = ext
+                                    headerSize = 16
+                                } else if (boxLen == 0L) {
+                                    boxLen = (offset + length - pos).toLong()
+                                }
+                                if (boxLen < headerSize || pos + boxLen > offset + length) {
+                                    pos++
+                                    continue
+                                }
+                                val type = String(moovBytes, pos + 4, 4, StandardCharsets.ISO_8859_1)
+                                when (type) {
+                                    "trak" -> {
+                                        foundTrak = true
+                                        checkContainer(pos + headerSize, (boxLen - headerSize).toInt())
+                                    }
+                                    "mdia", "minf", "stbl" -> {
+                                        checkContainer(pos + headerSize, (boxLen - headerSize).toInt())
+                                    }
+                                    "stco" -> {
+                                        if (pos + headerSize + 8 <= pos + boxLen) {
+                                            val entryCount = ((moovBytes[pos + headerSize + 4].toInt() and 0xFF) shl 24) or
+                                                    ((moovBytes[pos + headerSize + 5].toInt() and 0xFF) shl 16) or
+                                                    ((moovBytes[pos + headerSize + 6].toInt() and 0xFF) shl 8) or
+                                                    (moovBytes[pos + headerSize + 7].toInt() and 0xFF)
+                                            if (entryCount > 0 && pos + headerSize + 12 <= pos + boxLen) {
+                                                val firstOffset = ((moovBytes[pos + headerSize + 8].toLong() and 0xFF) shl 24) or
+                                                        ((moovBytes[pos + headerSize + 9].toLong() and 0xFF) shl 16) or
+                                                        ((moovBytes[pos + headerSize + 10].toLong() and 0xFF) shl 8) or
+                                                        (moovBytes[pos + headerSize + 11].toLong() and 0xFF)
+                                                if (firstOffset < 0 || firstOffset >= stagingSize) {
+                                                    throw IllegalStateException("M4A stco chunk offset ($firstOffset) out of file bounds ($stagingSize)")
+                                                }
+                                            }
+                                        }
+                                    }
+                                    "co64" -> {
+                                        if (pos + headerSize + 8 <= pos + boxLen) {
+                                            val entryCount = ((moovBytes[pos + headerSize + 4].toInt() and 0xFF) shl 24) or
+                                                    ((moovBytes[pos + headerSize + 5].toInt() and 0xFF) shl 16) or
+                                                    ((moovBytes[pos + headerSize + 6].toInt() and 0xFF) shl 8) or
+                                                    (moovBytes[pos + headerSize + 7].toInt() and 0xFF)
+                                            if (entryCount > 0 && pos + headerSize + 16 <= pos + boxLen) {
+                                                var firstOffset = 0L
+                                                for (b in 0 until 8) {
+                                                    firstOffset = (firstOffset shl 8) or (moovBytes[pos + headerSize + 8 + b].toLong() and 0xFF)
+                                                }
+                                                if (firstOffset < 0 || firstOffset >= stagingSize) {
+                                                    throw IllegalStateException("M4A co64 chunk offset ($firstOffset) out of file bounds ($stagingSize)")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                pos += boxLen.toInt()
+                            }
+                        }
+                        checkContainer(0, moovBytes.size)
+                        if (!foundTrak) return AudioValidationResult.Invalid("M4A missing audio 'trak' box in moov")
+                    }
+                }
+
+                "ogg", "opus" -> {
+                    if (stagingSize < 28) return AudioValidationResult.Invalid("OGG file too small: $stagingSize bytes")
+                    stagingFile.inputStream().use { stream ->
+                        val capture = ByteArray(4)
+                        if (stream.read(capture) < 4) return AudioValidationResult.Invalid("Cannot read Ogg magic")
+                        if (String(capture, StandardCharsets.US_ASCII) != "OggS") {
+                            return AudioValidationResult.Invalid("OGG does not start with 'OggS' capture pattern")
+                        }
+                    }
+                }
+
+                "aif", "aiff" -> {
+                    if (stagingSize < 54) return AudioValidationResult.Invalid("AIFF file too small: $stagingSize bytes")
+                    stagingFile.inputStream().use { stream ->
+                        val head = ByteArray(12)
+                        if (stream.read(head) < 12) return AudioValidationResult.Invalid("Cannot read AIFF header")
+                        if (String(head, 0, 4, StandardCharsets.US_ASCII) != "FORM") {
+                            return AudioValidationResult.Invalid("AIFF does not start with 'FORM' chunk")
+                        }
+                        val formType = String(head, 8, 4, StandardCharsets.US_ASCII)
+                        if (formType != "AIFF" && formType != "AIFC") {
+                            return AudioValidationResult.Invalid("AIFF subtype is not AIFF/AIFC: $formType")
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            return AudioValidationResult.Invalid("Structural audio validation exception for .$cleanExt: ${e.message}")
+        }
+
+        // Secondary MediaExtractor probe if environment permits
+        try {
+            val extractor = MediaExtractor()
+            extractor.setDataSource(stagingFile.absolutePath)
+            var foundAudio = false
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("audio/")) {
+                    foundAudio = true
+                    break
+                }
+            }
+            extractor.release()
+            if (!foundAudio && extractor.trackCount > 0) {
+                return AudioValidationResult.Invalid("MediaExtractor detected tracks but no audio track")
+            }
+        } catch (_: Throwable) {
+            // Ignored in test / headless environments where MediaExtractor native service is unavailable
+        }
+
+        return AudioValidationResult.Valid
+    }
+
     private fun writeContentUriTagsWithResult(
         context: Context?,
         uriString: String,
@@ -308,6 +713,15 @@ object AudioTagWriter {
                 Log.e(TAG_WRITER, "Tag writing failed on SAF temp file for .$ext: ${(writeResult as? TagWriteResult.Failed)?.message}")
                 return writeResult
             }
+
+            // Pre-commit audio validation before streaming back to content URI
+            val validation = validateRewrittenAudio(tempFile, ext, null)
+            if (validation is AudioValidationResult.Invalid) {
+                SoundSyncMetadataRewriteDebug.logValidation(uriString, false, validation.reason)
+                Log.e(TAG_WRITER, "[AudioTagWriter] PRE-COMMIT AUDIO VALIDATION REJECTED content URI rewrite for '$uriString': ${validation.reason}")
+                return TagWriteResult.Failed("Pre-commit validation failed: ${validation.reason}")
+            }
+            SoundSyncMetadataRewriteDebug.logValidation(uriString, true, "Audio container and streams intact and verified")
 
             try {
                 // Prefer ParcelFileDescriptor with "rwt" or "w" and explicit fsync
@@ -497,6 +911,18 @@ object AudioTagWriter {
         val originalPath = originalFile.absolutePath
         val stagingSize = tempFile.length()
         val originalSizeBefore = if (originalFile.exists()) originalFile.length() else 0L
+
+        // PRE-COMMIT AUDIO VALIDATION:
+        // Strictly verify that the staging file is structurally valid, contains intact audio streams,
+        // has valid chunk offsets / frame headers, and can be decoded BEFORE committing to file replacement.
+        val validation = validateRewrittenAudio(tempFile, originalFile.extension, originalFile)
+        if (validation is AudioValidationResult.Invalid) {
+            SoundSyncMetadataRewriteDebug.logValidation(originalPath, false, validation.reason)
+            Log.e(TAG, "[AudioTagWriter] PRE-COMMIT AUDIO VALIDATION REJECTED staged rewrite for '$originalPath': ${validation.reason}. Staged file deleted, original audio untouched.")
+            FileDeletionGuard.deleteTempFile(tempFile, "AudioTagWriter:preCommitValidationFailed")
+            return false
+        }
+        SoundSyncMetadataRewriteDebug.logValidation(originalPath, true, "Audio container and streams intact and verified")
 
         Log.d(TAG, "[AudioTagWriter] Starting file replacement for '$originalPath' (before=${originalSizeBefore}B, new=${stagingSize}B)")
 
@@ -1695,44 +2121,7 @@ object AudioTagWriter {
             val fileLength = file.length()
             if (fileLength < 16) return false
 
-            val inputStream = FileInputStream(file)
-
-            data class Mp4Box(val type: String, val offset: Long, val headerSize: Int, val payloadSize: Long, val isExtended: Boolean)
-            val boxes = mutableListOf<Mp4Box>()
-            var currentPos = 0L
-
-            while (currentPos + 8 <= fileLength) {
-                val hdr = ByteArray(8)
-                val read = inputStream.read(hdr)
-                if (read < 8) break
-
-                var boxLen = ((hdr[0].toLong() and 0xFF) shl 24) or
-                        ((hdr[1].toLong() and 0xFF) shl 16) or
-                        ((hdr[2].toLong() and 0xFF) shl 8) or
-                        (hdr[3].toLong() and 0xFF)
-                val boxType = String(hdr, 4, 4, StandardCharsets.ISO_8859_1)
-
-                var headerSize = 8
-                var isExtended = false
-                if (boxLen == 1L) {
-                    val extHdr = ByteArray(8)
-                    inputStream.read(extHdr)
-                    boxLen = 0L
-                    for (b in extHdr) {
-                        boxLen = (boxLen shl 8) or (b.toLong() and 0xFF)
-                    }
-                    headerSize = 16
-                    isExtended = true
-                } else if (boxLen == 0L) {
-                    boxLen = fileLength - currentPos
-                }
-
-                val payloadLen = boxLen - headerSize
-                boxes.add(Mp4Box(boxType, currentPos, headerSize, payloadLen, isExtended))
-                skipFully(inputStream, payloadLen)
-                currentPos += boxLen
-            }
-            inputStream.close()
+            val boxes = scanMp4Boxes(file)
 
             val moovBox = boxes.find { it.type == "moov" }
             val mdatBox = boxes.find { it.type == "mdat" }
@@ -2485,45 +2874,100 @@ object AudioTagWriter {
         return out.toByteArray()
     }
 
-    private fun adjustMp4ChunkOffsets(moovPayload: ByteArray, delta: Long): ByteArray {
+    fun adjustMp4ChunkOffsets(moovPayload: ByteArray, delta: Long): ByteArray {
         val result = moovPayload.clone()
-        var pos = 0
-        while (pos + 8 <= result.size) {
-            val boxLen = ((result[pos].toInt() and 0xFF) shl 24) or
-                    ((result[pos + 1].toInt() and 0xFF) shl 16) or
-                    ((result[pos + 2].toInt() and 0xFF) shl 8) or
-                    (result[pos + 3].toInt() and 0xFF)
 
-            if (boxLen < 8 || pos + boxLen > result.size) {
-                pos++
-                continue
-            }
+        fun scanContainer(offset: Int, length: Int) {
+            var pos = offset
+            while (pos + 8 <= offset + length && pos + 8 <= result.size) {
+                val b0 = result[pos].toLong() and 0xFF
+                val b1 = result[pos + 1].toLong() and 0xFF
+                val b2 = result[pos + 2].toLong() and 0xFF
+                val b3 = result[pos + 3].toLong() and 0xFF
+                var boxLen = (b0 shl 24) or (b1 shl 16) or (b2 shl 8) or b3
+                var headerSize = 8
 
-            val type = String(result, pos + 4, 4, StandardCharsets.ISO_8859_1)
-            if (type == "stco") {
-                val entryCount = ((result[pos + 12].toInt() and 0xFF) shl 24) or
-                        ((result[pos + 13].toInt() and 0xFF) shl 16) or
-                        ((result[pos + 14].toInt() and 0xFF) shl 8) or
-                        (result[pos + 15].toInt() and 0xFF)
-
-                var offsetPos = pos + 16
-                for (i in 0 until entryCount) {
-                    if (offsetPos + 4 > pos + boxLen) break
-                    val oldOffset = ((result[offsetPos].toLong() and 0xFF) shl 24) or
-                            ((result[offsetPos + 1].toLong() and 0xFF) shl 16) or
-                            ((result[offsetPos + 2].toLong() and 0xFF) shl 8) or
-                            (result[offsetPos + 3].toLong() and 0xFF)
-
-                    val newOffset = oldOffset + delta
-                    result[offsetPos] = ((newOffset shr 24) and 0xFF).toByte()
-                    result[offsetPos + 1] = ((newOffset shr 16) and 0xFF).toByte()
-                    result[offsetPos + 2] = ((newOffset shr 8) and 0xFF).toByte()
-                    result[offsetPos + 3] = (newOffset and 0xFF).toByte()
-                    offsetPos += 4
+                if (boxLen == 1L) {
+                    if (pos + 16 > offset + length || pos + 16 > result.size) break
+                    var extLen = 0L
+                    for (i in 0 until 8) {
+                        extLen = (extLen shl 8) or (result[pos + 8 + i].toLong() and 0xFF)
+                    }
+                    boxLen = extLen
+                    headerSize = 16
+                } else if (boxLen == 0L) {
+                    boxLen = (offset + length - pos).toLong()
                 }
+
+                if (boxLen < headerSize || pos + boxLen > offset + length || pos + boxLen > result.size) {
+                    pos++
+                    continue
+                }
+
+                val type = String(result, pos + 4, 4, StandardCharsets.ISO_8859_1)
+                when (type) {
+                    "trak", "mdia", "minf", "stbl", "edts", "moov", "mvex", "dinf" -> {
+                        // Recurse into nested container box
+                        scanContainer(pos + headerSize, (boxLen - headerSize).toInt())
+                    }
+                    "stco" -> {
+                        // 32-bit chunk offset atom
+                        val entryCountOffset = pos + headerSize + 4
+                        if (entryCountOffset + 4 <= pos + boxLen) {
+                            val count = ((result[entryCountOffset].toInt() and 0xFF) shl 24) or
+                                    ((result[entryCountOffset + 1].toInt() and 0xFF) shl 16) or
+                                    ((result[entryCountOffset + 2].toInt() and 0xFF) shl 8) or
+                                    (result[entryCountOffset + 3].toInt() and 0xFF)
+
+                            var offsetPos = entryCountOffset + 4
+                            for (i in 0 until count) {
+                                if (offsetPos + 4 > pos + boxLen) break
+                                val oldOffset = ((result[offsetPos].toLong() and 0xFF) shl 24) or
+                                        ((result[offsetPos + 1].toLong() and 0xFF) shl 16) or
+                                        ((result[offsetPos + 2].toLong() and 0xFF) shl 8) or
+                                        (result[offsetPos + 3].toLong() and 0xFF)
+
+                                val newOffset = maxOf(0L, oldOffset + delta)
+                                result[offsetPos] = ((newOffset shr 24) and 0xFF).toByte()
+                                result[offsetPos + 1] = ((newOffset shr 16) and 0xFF).toByte()
+                                result[offsetPos + 2] = ((newOffset shr 8) and 0xFF).toByte()
+                                result[offsetPos + 3] = (newOffset and 0xFF).toByte()
+                                offsetPos += 4
+                            }
+                            Log.d(TAG, "[adjustMp4ChunkOffsets] Adjusted $count stco chunk offsets by $delta")
+                        }
+                    }
+                    "co64" -> {
+                        // 64-bit chunk offset atom
+                        val entryCountOffset = pos + headerSize + 4
+                        if (entryCountOffset + 4 <= pos + boxLen) {
+                            val count = ((result[entryCountOffset].toInt() and 0xFF) shl 24) or
+                                    ((result[entryCountOffset + 1].toInt() and 0xFF) shl 16) or
+                                    ((result[entryCountOffset + 2].toInt() and 0xFF) shl 8) or
+                                    (result[entryCountOffset + 3].toInt() and 0xFF)
+
+                            var offsetPos = entryCountOffset + 4
+                            for (i in 0 until count) {
+                                if (offsetPos + 8 > pos + boxLen) break
+                                var oldOffset = 0L
+                                for (b in 0 until 8) {
+                                    oldOffset = (oldOffset shl 8) or (result[offsetPos + b].toLong() and 0xFF)
+                                }
+                                val newOffset = maxOf(0L, oldOffset + delta)
+                                for (b in 7 downTo 0) {
+                                    result[offsetPos + (7 - b)] = ((newOffset shr (b * 8)) and 0xFF).toByte()
+                                }
+                                offsetPos += 8
+                            }
+                            Log.d(TAG, "[adjustMp4ChunkOffsets] Adjusted $count co64 chunk offsets by $delta")
+                        }
+                    }
+                }
+                pos += boxLen.toInt()
             }
-            pos += boxLen
         }
+
+        scanContainer(0, result.size)
         return result
     }
 

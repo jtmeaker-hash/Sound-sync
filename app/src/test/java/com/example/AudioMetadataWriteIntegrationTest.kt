@@ -12,7 +12,13 @@ import com.example.metadata.MetadataWriteResult
 import com.example.model.MetadataWriteState
 import com.example.model.Track
 import com.example.storage.AudioTagWriter
+import com.example.storage.AudioValidationResult
 import com.example.storage.CompleteTagPayload
+import com.example.storage.FileLockManager
+import com.example.storage.PlaybackIssueType
+import com.example.storage.TrackSelfHealingResolver
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -1687,4 +1693,301 @@ class AudioMetadataWriteIntegrationTest {
             com.example.storage.StorageWritePermissionHelper.resolveCanonicalOverrideForTesting = null
         }
     }
+
+    // ---- Album Validation Tests (Bug Fix: folder names used as album) ----
+
+    @Test
+    fun `AlbumValidator rejects folder name Download`() {
+        assertFalse(
+            "Album 'Download' from path /storage/emulated/0/Music/Download/song.wav should be invalid",
+            com.example.metadata.AlbumValidator.isValidAlbum("Download", "/storage/emulated/0/Music/Download/song.wav")
+        )
+    }
+
+    @Test
+    fun `AlbumValidator rejects generic folder names`() {
+        assertFalse(com.example.metadata.AlbumValidator.isValidAlbum("Music", "/storage/emulated/0/Music/song.wav"))
+        assertFalse(com.example.metadata.AlbumValidator.isValidAlbum("Downloads", "/storage/emulated/0/Downloads/song.mp3"))
+        assertFalse(com.example.metadata.AlbumValidator.isValidAlbum("Single", "/storage/emulated/0/Music/song.wav"))
+        assertFalse(com.example.metadata.AlbumValidator.isValidAlbum(null, "/storage/emulated/0/Music/song.wav"))
+        assertFalse(com.example.metadata.AlbumValidator.isValidAlbum("", "/storage/emulated/0/Music/song.wav"))
+    }
+
+    @Test
+    fun `AlbumValidator accepts legitimate album names`() {
+        assertTrue(com.example.metadata.AlbumValidator.isValidAlbum("Tomorrowland 2024", "/storage/emulated/0/Music/Download/song.wav"))
+        assertTrue(com.example.metadata.AlbumValidator.isValidAlbum("One Night in Bangkok", "/storage/emulated/0/Music/Download/song.wav"))
+        assertTrue(com.example.metadata.AlbumValidator.isValidAlbum("10 Years Da Tweekaz - The Definitive Collection", "/storage/emulated/0/Music/song.flac"))
+    }
+
+    @Test
+    fun `AlbumValidator rejects path segment as album`() {
+        // If the album name exactly matches a directory component of the file path, reject it
+        assertFalse(com.example.metadata.AlbumValidator.isValidAlbum("storage", "/storage/emulated/0/Music/song.wav"))
+        assertFalse(com.example.metadata.AlbumValidator.isValidAlbum("emulated", "/storage/emulated/0/Music/song.wav"))
+        assertFalse(com.example.metadata.AlbumValidator.isValidAlbum("0", "/storage/emulated/0/Music/song.wav"))
+    }
+
+    @Test
+    fun `TrackIdentityParser isGenericAlbumName identifies Download folder`() {
+        assertTrue(com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName("Download"))
+        assertTrue(com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName("Downloads"))
+        assertTrue(com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName("Music"))
+        assertTrue(com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName("Single"))
+        assertFalse(com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName("One Night in Bangkok"))
+    }
+
+    // =========================================================================
+    // Regression Tests: Playback Invariant After Metadata Rewrite Across All Formats
+    // =========================================================================
+
+    private fun createSampleMp3File(file: File, frameCount: Int = 10): File {
+        // Standard MPEG-1 Layer 3 frame header: 0xFF, 0xFB, 0x90, 0x64
+        val frameHeader = byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x64.toByte())
+        val frameSize = 417
+        FileOutputStream(file).use { fos ->
+            for (i in 0 until frameCount) {
+                val frame = ByteArray(frameSize) { 0xAA.toByte() }
+                frameHeader.copyInto(frame, 0)
+                fos.write(frame)
+            }
+        }
+        return file
+    }
+
+    @Test
+    fun `wav file metadata writing preserves audio frames and passes pre-commit audio validation`() = runBlocking {
+        val wavFile = File(tempFolder.root, "playback_test.wav")
+        val pcm = ByteArray(1600) { 0x3B }
+        createSampleWavFile(wavFile, pcm)
+
+        val valBefore = AudioTagWriter.validateRewrittenAudio(wavFile, "wav", null)
+        assertTrue("WAV before rewrite must be valid: $valBefore", valBefore is AudioValidationResult.Valid)
+
+        val track = Track(
+            id = "wav-playback-test",
+            title = "Clarity",
+            artist = "Zedd",
+            album = "Clarity",
+            genre = "Electro House",
+            releaseYear = 2012,
+            bpm = 128.0,
+            musicalKey = "8B",
+            camelotKey = "8B",
+            trackNumber = 1,
+            filePath = wavFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = sampleArtworkBytes)
+        assertTrue("Write result must be Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val valAfter = AudioTagWriter.validateRewrittenAudio(wavFile, "wav", null)
+        assertTrue("WAV after rewrite must remain valid and playable: $valAfter", valAfter is AudioValidationResult.Valid)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, wavFile.absolutePath)
+        assertEquals("Clarity", readBack.title)
+        assertEquals("Zedd", readBack.artist)
+        assertEquals("Clarity", readBack.album)
+    }
+
+    @Test
+    fun `mp3 file metadata writing embeds ID3v2 tags, preserves MPEG audio frames, and passes validation`() = runBlocking {
+        val mp3File = File(tempFolder.root, "playback_test.mp3")
+        createSampleMp3File(mp3File, frameCount = 12)
+
+        val valBefore = AudioTagWriter.validateRewrittenAudio(mp3File, "mp3", null)
+        assertTrue("MP3 before rewrite must be valid: $valBefore", valBefore is AudioValidationResult.Valid)
+
+        val track = Track(
+            id = "mp3-playback-test",
+            title = "Levels",
+            artist = "Avicii",
+            album = "Levels - EP",
+            genre = "House",
+            releaseYear = 2011,
+            bpm = 126.0,
+            musicalKey = "4B",
+            camelotKey = "4B",
+            trackNumber = 1,
+            filePath = mp3File.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = sampleArtworkBytes)
+        assertTrue("Write result must be Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val valAfter = AudioTagWriter.validateRewrittenAudio(mp3File, "mp3", null)
+        assertTrue("MP3 after rewrite must maintain valid MPEG frames and be playable: $valAfter", valAfter is AudioValidationResult.Valid)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, mp3File.absolutePath)
+        assertEquals("Levels", readBack.title)
+        assertEquals("Avicii", readBack.artist)
+        assertEquals("Levels - EP", readBack.album)
+    }
+
+    @Test
+    fun `flac file metadata writing preserves streaminfo, Vorbis comments, and passes validation`() = runBlocking {
+        val flacFile = File(tempFolder.root, "playback_test.flac")
+        val dummyAudio = ByteArray(1500) { 0x5C }
+        createSampleFlacFile(flacFile, dummyAudio)
+
+        val valBefore = AudioTagWriter.validateRewrittenAudio(flacFile, "flac", null)
+        assertTrue("FLAC before rewrite must be valid: $valBefore", valBefore is AudioValidationResult.Valid)
+
+        val track = Track(
+            id = "flac-playback-test",
+            title = "Strobe",
+            artist = "deadmau5",
+            album = "For Lack of a Better Name",
+            genre = "Progressive House",
+            releaseYear = 2009,
+            bpm = 128.0,
+            musicalKey = "7B",
+            camelotKey = "7B",
+            trackNumber = 9,
+            filePath = flacFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = sampleArtworkBytes)
+        assertTrue("Write result must be Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val valAfter = AudioTagWriter.validateRewrittenAudio(flacFile, "flac", null)
+        assertTrue("FLAC after rewrite must retain pristine STREAMINFO and remain playable: $valAfter", valAfter is AudioValidationResult.Valid)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, flacFile.absolutePath)
+        assertEquals("Strobe", readBack.title)
+        assertEquals("deadmau5", readBack.artist)
+        assertEquals("For Lack of a Better Name", readBack.album)
+    }
+
+    @Test
+    fun `m4a file metadata writing adjusts nested stco chunk offsets and passes pre-commit audio validation`() = runBlocking {
+        val m4aFile = File(tempFolder.root, "playback_test.m4a")
+        val dummyAudio = ByteArray(1024) { 0x21 }
+        createSampleM4aFile(m4aFile, dummyAudio)
+
+        val valBefore = AudioTagWriter.validateRewrittenAudio(m4aFile, "m4a", null)
+        assertTrue("M4A before rewrite must be valid: $valBefore", valBefore is AudioValidationResult.Valid)
+
+        val boxesBefore = AudioTagWriter.scanMp4Boxes(m4aFile)
+        val moovBefore = boxesBefore.first { it.type == "moov" }
+        val mdatBefore = boxesBefore.first { it.type == "mdat" }
+
+        val track = Track(
+            id = "m4a-playback-test",
+            title = "Titanium",
+            artist = "David Guetta",
+            album = "Nothing but the Beat",
+            genre = "Dance",
+            releaseYear = 2011,
+            bpm = 126.0,
+            musicalKey = "5B",
+            camelotKey = "5B",
+            trackNumber = 4,
+            filePath = m4aFile.absolutePath
+        )
+
+        val writer = MetadataFileWriter(context)
+        val result = writer.writeAsync(track, artworkBytes = sampleArtworkBytes)
+        assertTrue("Write result must be Written or Partial, got $result", result is MetadataWriteResult.Written || result is MetadataWriteResult.Partial)
+
+        val valAfter = AudioTagWriter.validateRewrittenAudio(m4aFile, "m4a", null)
+        assertTrue("M4A after rewrite must pass audio validation: $valAfter", valAfter is AudioValidationResult.Valid)
+
+        val boxesAfter = AudioTagWriter.scanMp4Boxes(m4aFile)
+        val moovAfter = boxesAfter.first { it.type == "moov" }
+        val mdatAfter = boxesAfter.first { it.type == "mdat" }
+
+        // When moov expands, mdat offset must shift forward
+        val moovBeforeLen = moovBefore.headerSize + moovBefore.payloadSize
+        val moovAfterLen = moovAfter.headerSize + moovAfter.payloadSize
+        val delta = (moovAfterLen - moovBeforeLen).toInt()
+        assertTrue("moov atom should have grown to accommodate metadata", delta > 0)
+        assertEquals("mdat offset should shift by exactly moov delta", mdatBefore.offset + delta, mdatAfter.offset)
+
+        val readBack = AudioEmbeddedMetadataReader.read(context, m4aFile.absolutePath)
+        assertEquals("Titanium", readBack.title)
+        assertEquals("David Guetta", readBack.artist)
+        assertEquals("Nothing but the Beat", readBack.album)
+    }
+
+    @Test
+    fun `pre-commit validation rejects corrupted staging file and preserves original untouched`() = runBlocking {
+        val originalFile = File(tempFolder.root, "original_intact.wav")
+        val pcm = ByteArray(800) { 0x4A }
+        createSampleWavFile(originalFile, pcm)
+        val originalBytes = originalFile.readBytes()
+
+        // Create a corrupted staging file: missing 'fmt ' and 'data' chunks
+        val corruptedStaging = File(tempFolder.root, "original_intact.wav.corrupted.tmp")
+        corruptedStaging.writeBytes("RIFF1234CORRUPTED".toByteArray(StandardCharsets.US_ASCII))
+
+        val validation = AudioTagWriter.validateRewrittenAudio(corruptedStaging, "wav", originalFile)
+        assertTrue("Validation should reject corrupted staging file", validation is AudioValidationResult.Invalid)
+
+        val replaced = AudioTagWriter.replaceOriginalFile(originalFile, corruptedStaging)
+        assertFalse("replaceOriginalFile must return false when validation fails", replaced)
+        assertFalse("Corrupted staging file must be immediately deleted", corruptedStaging.exists())
+        assertTrue("Original file must remain intact on disk", originalFile.exists())
+        assertEquals("Original file content must match byte-for-byte", originalBytes.size, originalFile.length().toInt())
+        assertTrue("Original file bytes must not be modified", originalBytes.contentEquals(originalFile.readBytes()))
+    }
+
+    @Test
+    fun `track self healing resolver diagnoses corrupted file and restores from backup`() = runBlocking {
+        val audioFile = File(tempFolder.root, "corrupted_song.wav")
+        val pcm = ByteArray(600) { 0x22 }
+        createSampleWavFile(audioFile, pcm)
+        val validBytes = audioFile.readBytes()
+
+        // Create backup file as if AudioTagWriter created it during staging
+        val backupFile = File(tempFolder.root, ".${audioFile.name}.12345.bak")
+        backupFile.writeBytes(validBytes)
+
+        // Corrupt audio file
+        audioFile.writeBytes(ByteArray(10) { 0x00 })
+
+        val track = Track(
+            id = "track-corrupt-test",
+            title = "Corrupted Song",
+            artist = "Artist",
+            filePath = audioFile.absolutePath
+        )
+
+        val diag = TrackSelfHealingResolver.diagnoseTrack(context, track)
+        assertEquals(PlaybackIssueType.CORRUPTED_FILE, diag.issueType)
+        assertTrue(diag.canAutoRepair)
+
+        val repairResult = TrackSelfHealingResolver.repairTrack(context, track, null)
+        assertTrue("Repair must succeed from backup", repairResult.success)
+        assertTrue("Audio file must be restored", audioFile.exists())
+        assertTrue("Audio file must be valid after restoration", AudioTagWriter.validateRewrittenAudio(audioFile, "wav", null) is AudioValidationResult.Valid)
+    }
+
+    @Test
+    fun `concurrent writes to same file are safely synchronized via FileLockManager`() = runBlocking {
+        val audioFile = File(tempFolder.root, "concurrent_test.mp3")
+        createSampleMp3File(audioFile, frameCount = 15)
+
+        val writeResults = (1..5).map { index ->
+            async {
+                FileLockManager.withFileLock(audioFile.absolutePath) {
+                    val track = Track(
+                        id = "concurrent-track",
+                        title = "Concurrent Title $index",
+                        artist = "Concurrent Artist $index",
+                        filePath = audioFile.absolutePath
+                    )
+                    MetadataFileWriter(context).writeAsync(track)
+                }
+            }
+        }.awaitAll()
+
+        assertTrue("All concurrent writes should succeed", writeResults.all { it is MetadataWriteResult.Written || it is MetadataWriteResult.Partial })
+        val finalValidation = AudioTagWriter.validateRewrittenAudio(audioFile, "mp3", null)
+        assertTrue("File must remain valid and uncorrupted after concurrent writes: $finalValidation", finalValidation is AudioValidationResult.Valid)
+    }
 }
+

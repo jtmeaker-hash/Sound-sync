@@ -11,15 +11,13 @@ import com.example.model.MetadataWriteState
 import com.example.model.Track
 import com.example.storage.AudioTagWriter
 import com.example.storage.CompleteTagPayload
-import com.example.storage.StorageAvailabilityHelper
 import com.example.storage.StorageWritePermissionHelper
 import com.example.storage.TagWriteResult
-import com.example.storage.TrackSelfHealingResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
+import com.example.metadata.AlbumValidator
 import java.util.Locale
 
 /**
@@ -101,6 +99,34 @@ class MetadataFileWriter(
         var ext: String = ""
         var mimeType: String = "audio/mpeg"
         var targetWritePath = path
+
+        val preCapturedPhysicalPath: String? = if (isContentUri) {
+            try {
+                context.contentResolver.query(
+                    Uri.parse(path),
+                    arrayOf(android.provider.MediaStore.Audio.Media.DATA),
+                    null, null, null
+                )?.use { c ->
+                    if (c.moveToFirst()) {
+                        val col = c.getColumnIndex(android.provider.MediaStore.Audio.Media.DATA)
+                        if (col >= 0) c.getString(col) else null
+                    } else null
+                }
+            } catch (_: Exception) { null }
+        } else {
+            path
+        }
+
+        val beforeSizeBytes = if (preCapturedPhysicalPath != null && File(preCapturedPhysicalPath).exists()) {
+            File(preCapturedPhysicalPath).length()
+        } else {
+            try {
+                if (isContentUri) {
+                    context.contentResolver.openFileDescriptor(Uri.parse(path), "r")?.use { it.statSize } ?: 0L
+                } else File(path).length()
+            } catch (_: Throwable) { 0L }
+        }
+        val isPlayableBefore = com.example.storage.StorageAvailabilityHelper.isTrackPathAvailable(context, path)
 
         if (isContentUri) {
             val uri = Uri.parse(path)
@@ -222,6 +248,21 @@ class MetadataFileWriter(
         // Sensible merge: read existing embedded metadata before overwriting
         val existing = AudioEmbeddedMetadataReader.read(context, targetWritePath)
 
+        com.example.storage.SoundSyncMetadataRewriteDebug.logBefore(
+            path = preCapturedPhysicalPath ?: path,
+            uri = path,
+            sizeBytes = beforeSizeBytes,
+            durationMs = (track.durationSeconds * 1000).toLong(),
+            isPlayable = isPlayableBefore,
+            tags = mapOf(
+                "title" to existing.title,
+                "artist" to existing.artist,
+                "album" to existing.album,
+                "bpm" to existing.bpm?.toString(),
+                "key" to existing.musicalKey
+            )
+        )
+
         val mergedTitle = track.title.takeIf { it.isNotBlank() && it != "Unknown Title" }
             ?: existing.title?.takeIf { it.isNotBlank() }
             ?: track.title
@@ -234,10 +275,15 @@ class MetadataFileWriter(
             ?: existing.albumArtist?.takeIf { it.isNotBlank() }
             ?: mergedArtist
 
-        val mergedAlbum = track.album.takeIf { it.isNotBlank() && it != "Single" && it != "Unknown Album" }
+        var mergedAlbum = track.album.takeIf { it.isNotBlank() && it != "Single" && it != "Unknown Album" }
             ?: existing.album?.takeIf { it.isNotBlank() && it != "Single" && it != "Unknown Album" }
             ?: track.album.takeIf { it.isNotBlank() }
             ?: existing.album
+        // Validate mergedAlbum to ensure it is not a folder-derived or generic invalid name.
+        if (!AlbumValidator.isValidAlbum(mergedAlbum, track.filePath)) {
+            Log.w(TAG, "AlbumRejected during write merge: $mergedAlbum")
+            mergedAlbum = ""
+        }
 
         val mergedGenre = track.genre.takeIf { it.isNotBlank() && it != "DJ Library" && it != "Club" && it != "Unknown Genre" }
             ?: existing.genre?.takeIf { it.isNotBlank() && it != "DJ Library" && it != "Club" }
@@ -292,8 +338,25 @@ class MetadataFileWriter(
             artworkMimeType = activeArtworkMime
         )
 
+        com.example.storage.SoundSyncMetadataRewriteDebug.logWrite(
+            path = targetWritePath,
+            fieldsWritten = listOfNotNull(
+                "title".takeIf { !mergedTitle.isNullOrBlank() },
+                "artist".takeIf { !mergedArtist.isNullOrBlank() },
+                "album".takeIf { !mergedAlbum.isNullOrBlank() },
+                "bpm".takeIf { mergedBpm != null },
+                "key".takeIf { !mergedMusicalKey.isNullOrBlank() },
+                "artwork".takeIf { activeArtworkBytes != null }
+            ),
+            artworkBytes = activeArtworkBytes?.size ?: 0,
+            stagingSize = 0L,
+            sizeDelta = 0L
+        )
+
         val writeTagResult = try {
-            AudioTagWriter.writeCompleteTagsWithResult(context, targetWritePath, payload)
+            com.example.storage.FileLockManager.withFileLock(targetWritePath) {
+                AudioTagWriter.writeCompleteTagsWithResult(context, targetWritePath, payload)
+            }
         } catch (e: SecurityException) {
             val uri = if (targetWritePath.startsWith("content://")) Uri.parse(targetWritePath) else null
             val intentSender = uri?.let { StorageWritePermissionHelper.createSingleWriteRequest(context, it, e) }
@@ -368,16 +431,6 @@ class MetadataFileWriter(
                 return@withContext res
             }
             is TagWriteResult.Failed -> {
-                val isTargetWritable = targetWritePath.startsWith("content://") || File(targetWritePath).canWrite()
-                AudioTagWriter.logDiagnostic(
-                    operation = "METADATA_FILE_WRITER_FAILED",
-                    filePathOrUri = targetWritePath,
-                    ext = ext,
-                    payload = payload,
-                    isWritable = isTargetWritable,
-                    backend = "MetadataFileWriter",
-                    exception = writeTagResult.cause
-                )
                 PhysicalTagWriteLogger.logFailure(
                     tag = TAG,
                     track = track,
@@ -490,9 +543,6 @@ class MetadataFileWriter(
                 if (ext == "wav") {
                     Log.i(TAG, "WAV artwork preserved in SoundSync database/cache rather than bloated into RIFF container")
                     unverifiedFields.add("artwork (stored in library)")
-                } else if (ext == "flac") {
-                    Log.i(TAG, "FLAC artwork embedding omitted or failed; textual tags saved, artwork preserved in library")
-                    unverifiedFields.add("artwork (stored in library)")
                 } else {
                     Log.w(TAG, "Write verification notice: embedded artwork not detected on disk after write")
                     unverifiedFields.add("embeddedArtwork")
@@ -512,24 +562,95 @@ class MetadataFileWriter(
 
         updateDbState(track.id, result.writeState)
 
-        // Post-write verification of media reference accessibility & reconciliation
-        try {
-            val isCurrentPathAvailable = StorageAvailabilityHelper.isTrackPathAvailable(context, track.filePath)
-            if (!isCurrentPathAvailable) {
-                Log.w(TAG, "[MetadataFileWriter] Stored path '${track.filePath}' is inaccessible after write for '${track.title}'. Reconciling reference...")
-                val healed = TrackSelfHealingResolver.healTrack(context, track, trackDao)
-                if (healed != null) {
-                    Log.i(TAG, "[MetadataFileWriter] Post-write reconciliation SUCCESS: new path='${healed.filePath}'")
-                } else if (targetWritePath.isNotBlank() && StorageAvailabilityHelper.isTrackPathAvailable(context, targetWritePath)) {
-                    Log.i(TAG, "[MetadataFileWriter] Post-write fallback: Reconciling to verified targetWritePath: '$targetWritePath'")
-                    trackDao?.updateFilePath(track.id, targetWritePath)
+        // Post-write MediaStore URI reconciliation.
+        // IMPORTANT: Only reconcile if the track's filePath is ALREADY a content:// URI.
+        // Converting a direct file path to a content URI would cause the track to break
+        // if MediaStore later re-indexes the file under a different media ID.
+        // For direct file paths, the path itself is stable — no reconciliation needed.
+        var finalTrackPath = track.filePath
+        var uriChanged = false
+        var mediaStoreIdChanged = false
+
+        if (track.filePath.startsWith("content://") && track.id.isNotBlank()) {
+            try {
+                // Check if the existing content URI is still accessible
+                val isUriStillValid = try {
+                    context.contentResolver.openFileDescriptor(Uri.parse(track.filePath), "r")?.use { true } ?: false
+                } catch (_: Exception) { false }
+
+                if (!isUriStillValid) {
+                    // Original content URI is stale. Use preCapturedPhysicalPath to scan and resolve current URI.
+                    val physicalPath = preCapturedPhysicalPath ?: try {
+                        context.contentResolver.query(
+                            Uri.parse(track.filePath),
+                            arrayOf(android.provider.MediaStore.Audio.Media.DATA),
+                            null, null, null
+                        )?.use { c ->
+                            if (c.moveToFirst()) {
+                                val col = c.getColumnIndex(android.provider.MediaStore.Audio.Media.DATA)
+                                if (col >= 0) c.getString(col) else null
+                            } else null
+                        }
+                    } catch (_: Exception) { null }
+
+                    if (physicalPath != null && File(physicalPath).exists()) {
+                        try {
+                            android.media.MediaScannerConnection.scanFile(context, arrayOf(physicalPath), null, null)
+                        } catch (_: Throwable) {}
+
+                        val reconciledUri = com.example.storage.AudioTagWriter.getMediaStoreUriForPath(context, physicalPath)
+                        if (reconciledUri != null) {
+                            val reconciledStr = reconciledUri.toString()
+                            if (reconciledStr != track.filePath) {
+                                val dao = trackDao ?: AppDatabase.getDatabase(context).trackDao()
+                                dao.updateFilePath(track.id, reconciledStr)
+                                finalTrackPath = reconciledStr
+                                uriChanged = true
+                                mediaStoreIdChanged = true
+                                Log.i(TAG, "[PostWriteReconcile] Stale content URI fixed for track=${track.id}: '${track.filePath}' -> '$reconciledStr'")
+                            }
+                        } else {
+                            val dao = trackDao ?: AppDatabase.getDatabase(context).trackDao()
+                            dao.updateFilePath(track.id, physicalPath)
+                            finalTrackPath = physicalPath
+                            uriChanged = true
+                            Log.i(TAG, "[PostWriteReconcile] Content URI stale, falling back to physical path for track=${track.id}: '$physicalPath'")
+                        }
+                    } else {
+                        Log.w(TAG, "[PostWriteReconcile] Could not resolve physical path for stale content URI, track=${track.id}: '${track.filePath}'")
+                    }
+                } else {
+                    Log.d(TAG, "[PostWriteReconcile] Content URI still valid for track=${track.id}: '${track.filePath}'")
                 }
-            } else {
-                Log.d(TAG, "[MetadataFileWriter] Verified track '${track.title}' media reference remains accessible at '${track.filePath}'")
+            } catch (e: Exception) {
+                Log.w(TAG, "[PostWriteReconcile] Failed for track ${track.id}: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "[MetadataFileWriter] Post-write reconciliation check failed: ${e.message}")
         }
+
+        // Cache invalidation and engine notification
+        try {
+            com.example.audio.WaveformCache.remove(com.example.audio.WaveformCache.getCacheKey(track, context), context)
+        } catch (_: Throwable) {}
+
+        try {
+            com.example.audio.DjAudioEngine.getInstance(context).onTrackFileModified(track.id, track.filePath, finalTrackPath)
+        } catch (_: Throwable) {}
+
+        val afterSizeBytes = if (preCapturedPhysicalPath != null && File(preCapturedPhysicalPath).exists()) {
+            File(preCapturedPhysicalPath).length()
+        } else beforeSizeBytes
+
+        val isPlayableAfter = com.example.storage.StorageAvailabilityHelper.isTrackPathAvailable(context, finalTrackPath)
+
+        com.example.storage.SoundSyncMetadataRewriteDebug.logAfter(
+            oldPath = track.filePath,
+            newPath = finalTrackPath,
+            oldSize = beforeSizeBytes,
+            newSize = afterSizeBytes,
+            uriChanged = uriChanged,
+            mediaStoreIdChanged = mediaStoreIdChanged,
+            isPlayable = isPlayableAfter
+        )
 
         result
     }

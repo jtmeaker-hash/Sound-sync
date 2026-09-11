@@ -80,7 +80,7 @@ object TunebatMetadataService {
     suspend fun resolveTrackMetadata(
         context: Context,
         track: Track,
-        writeTagsToFile: Boolean = true
+        writeTagsToFile: Boolean = false
     ): VerifiedMetadata = withContext(Dispatchers.IO) {
         val cacheKey = "${track.id}_${track.filePath}_${track.durationSeconds}"
         metadataCache.get(cacheKey)?.let { return@withContext it }

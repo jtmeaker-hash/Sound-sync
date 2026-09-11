@@ -8,12 +8,37 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import com.example.audio.WaveformCache
 import com.example.data.TrackDao
 import com.example.model.Track
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
+
+enum class PlaybackIssueType {
+    NONE,
+    STALE_URI_AFTER_METADATA_REWRITE,
+    CORRUPTED_FILE,
+    DISCONNECTED_STORAGE,
+    FILE_NOT_FOUND
+}
+
+data class PlaybackDiagnostic(
+    val trackId: String,
+    val issueType: PlaybackIssueType,
+    val message: String,
+    val details: String,
+    val canAutoRepair: Boolean,
+    val suggestedPath: String? = null
+)
+
+data class TrackRepairResult(
+    val success: Boolean,
+    val issueType: PlaybackIssueType,
+    val message: String,
+    val healedTrack: Track? = null
+)
 
 /**
  * Self-healing reference resolver for audio tracks whose stored file path or content URI
@@ -485,5 +510,209 @@ object TrackSelfHealingResolver {
         } catch (_: Throwable) {
             false
         }
+    }
+
+    /**
+     * Diagnoses why a track is unplayable or unavailable, classifying the root cause
+     * into STALE_URI_AFTER_METADATA_REWRITE, CORRUPTED_FILE, DISCONNECTED_STORAGE, or FILE_NOT_FOUND.
+     */
+    fun diagnoseTrack(context: Context, track: Track): PlaybackDiagnostic {
+        val path = track.filePath
+        if (path.isBlank()) {
+            return PlaybackDiagnostic(
+                trackId = track.id,
+                issueType = PlaybackIssueType.FILE_NOT_FOUND,
+                message = "Track file path is empty",
+                details = "No file path or URI is associated with this track.",
+                canAutoRepair = false
+            )
+        }
+
+        val isDirectFile = !path.startsWith("content://") && !path.startsWith("http")
+        val cleanPath = path.removePrefix("file://")
+        val directFile = if (isDirectFile) File(cleanPath) else null
+
+        // 1. If direct file exists on disk, check structural integrity
+        if (directFile != null && directFile.exists()) {
+            val validation = AudioTagWriter.validateRewrittenAudio(directFile, directFile.extension, null)
+            if (validation is AudioValidationResult.Invalid) {
+                // Check if a restorable backup file exists
+                val parent = directFile.parentFile
+                val backupFile = parent?.listFiles { _, name ->
+                    name.startsWith(".${directFile.name}.") && name.endsWith(".bak")
+                }?.firstOrNull { it.length() > 0 }
+
+                return PlaybackDiagnostic(
+                    trackId = track.id,
+                    issueType = PlaybackIssueType.CORRUPTED_FILE,
+                    message = "Audio file is corrupted (${validation.reason})",
+                    details = "The audio file container or stream was damaged during a previous write. Backup available: ${backupFile != null}.",
+                    canAutoRepair = backupFile != null
+                )
+            }
+            // File is valid and playable
+            return PlaybackDiagnostic(
+                trackId = track.id,
+                issueType = PlaybackIssueType.NONE,
+                message = "Track is playable",
+                details = "Direct file is intact and decodable.",
+                canAutoRepair = false
+            )
+        }
+
+        // 2. If content:// URI, check readability
+        if (path.startsWith("content://")) {
+            val uri = Uri.parse(path)
+            val isReadable = isUriReadable(context, uri)
+            if (isReadable) {
+                return PlaybackDiagnostic(
+                    trackId = track.id,
+                    issueType = PlaybackIssueType.NONE,
+                    message = "Content URI is readable",
+                    details = "URI is active and accessible.",
+                    canAutoRepair = false
+                )
+            }
+
+            // URI is NOT readable. Check if the underlying physical file exists on disk
+            val physicalPath = resolveFromCrossReference(context, track) ?: resolveFromMediaStoreId(context, track)
+            if (physicalPath != null && File(physicalPath.removePrefix("file://")).exists()) {
+                val f = File(physicalPath.removePrefix("file://"))
+                val valResult = AudioTagWriter.validateRewrittenAudio(f, f.extension, null)
+                if (valResult is AudioValidationResult.Valid) {
+                    return PlaybackDiagnostic(
+                        trackId = track.id,
+                        issueType = PlaybackIssueType.STALE_URI_AFTER_METADATA_REWRITE,
+                        message = "Content URI became stale after metadata rewrite",
+                        details = "MediaStore ID or URI was invalidated following file replacement, but the audio file on disk is valid and playable.",
+                        canAutoRepair = true,
+                        suggestedPath = physicalPath
+                    )
+                }
+            }
+        }
+
+        // 3. File not found: check if storage root is disconnected
+        val isDisconnected = StorageAvailabilityHelper.isRootGenuinelyDisconnected(context, track)
+        if (isDisconnected) {
+            return PlaybackDiagnostic(
+                trackId = track.id,
+                issueType = PlaybackIssueType.DISCONNECTED_STORAGE,
+                message = "Storage device is disconnected",
+                details = "The volume containing this audio file is currently not mounted.",
+                canAutoRepair = false
+            )
+        }
+
+        return PlaybackDiagnostic(
+            trackId = track.id,
+            issueType = PlaybackIssueType.FILE_NOT_FOUND,
+            message = "Audio file not found",
+            details = "The audio file could not be located at the stored path.",
+            canAutoRepair = false
+        )
+    }
+
+    /**
+     * Attempts to repair an unplayable track based on its diagnosed failure condition.
+     */
+    suspend fun repairTrack(
+        context: Context,
+        track: Track,
+        trackDao: TrackDao? = null
+    ): TrackRepairResult = withContext(Dispatchers.IO) {
+        val diag = diagnoseTrack(context, track)
+
+        when (diag.issueType) {
+            PlaybackIssueType.NONE -> {
+                TrackRepairResult(true, PlaybackIssueType.NONE, "Track is already playable", track)
+            }
+
+            PlaybackIssueType.STALE_URI_AFTER_METADATA_REWRITE -> {
+                Log.i(TAG, "[repairTrack] Repairing STALE_URI_AFTER_METADATA_REWRITE for '${track.title}'")
+                val healed = healTrack(context, track, trackDao)
+                if (healed != null) {
+                    try {
+                        WaveformCache.remove(WaveformCache.getCacheKey(track, context), context)
+                    } catch (_: Throwable) {}
+                    try {
+                        com.example.audio.DjAudioEngine.getInstance(context).onTrackFileModified(track.id, track.filePath, healed.filePath)
+                    } catch (_: Throwable) {}
+                    TrackRepairResult(true, PlaybackIssueType.STALE_URI_AFTER_METADATA_REWRITE, "Reconciled stale URI with valid audio file: ${healed.filePath}", healed)
+                } else {
+                    TrackRepairResult(false, PlaybackIssueType.STALE_URI_AFTER_METADATA_REWRITE, "Failed to resolve valid audio path", null)
+                }
+            }
+
+            PlaybackIssueType.CORRUPTED_FILE -> {
+                Log.i(TAG, "[repairTrack] Attempting repair for CORRUPTED_FILE for '${track.title}'")
+                val cleanPath = track.filePath.removePrefix("file://")
+                val file = File(cleanPath)
+                val parent = file.parentFile
+                val backupFile = parent?.listFiles { _, name ->
+                    name.startsWith(".${file.name}.") && name.endsWith(".bak")
+                }?.maxByOrNull { it.lastModified() }
+
+                if (backupFile != null && backupFile.exists() && backupFile.length() > 0) {
+                    val valBackup = AudioTagWriter.validateRewrittenAudio(backupFile, file.extension, null)
+                    if (valBackup is AudioValidationResult.Valid) {
+                        try {
+                            backupFile.copyTo(file, overwrite = true)
+                            val valRestored = AudioTagWriter.validateRewrittenAudio(file, file.extension, null)
+                            if (valRestored is AudioValidationResult.Valid) {
+                                backupFile.delete()
+                                try {
+                                    WaveformCache.remove(WaveformCache.getCacheKey(track, context), context)
+                                } catch (_: Throwable) {}
+                                Log.i(TAG, "[repairTrack] Successfully restored corrupted file from backup for '${track.title}'")
+                                return@withContext TrackRepairResult(true, PlaybackIssueType.CORRUPTED_FILE, "Restored original audio from pre-rewrite backup.", track.copy(isAvailable = true))
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "[repairTrack] Failed copying backup file: ${e.message}")
+                        }
+                    }
+                }
+
+                TrackRepairResult(false, PlaybackIssueType.CORRUPTED_FILE, "File is damaged and no restorable backup was found.", null)
+            }
+
+            PlaybackIssueType.DISCONNECTED_STORAGE -> {
+                TrackRepairResult(false, PlaybackIssueType.DISCONNECTED_STORAGE, "Storage volume is disconnected.", null)
+            }
+
+            PlaybackIssueType.FILE_NOT_FOUND -> {
+                val healed = healTrack(context, track, trackDao)
+                if (healed != null) {
+                    TrackRepairResult(true, PlaybackIssueType.FILE_NOT_FOUND, "Located audio file at ${healed.filePath}", healed)
+                } else {
+                    TrackRepairResult(false, PlaybackIssueType.FILE_NOT_FOUND, "File could not be found.", null)
+                }
+            }
+        }
+    }
+
+    /**
+     * Scans database for broken or unavailable tracks and attempts automated self-healing.
+     */
+    suspend fun scanAndRepairAllBrokenRewriteTracks(
+        context: Context,
+        trackDao: TrackDao
+    ): List<TrackRepairResult> = withContext(Dispatchers.IO) {
+        val tracks = try {
+            trackDao.getAllTracksSync()
+        } catch (_: Throwable) {
+            emptyList()
+        }
+
+        val results = mutableListOf<TrackRepairResult>()
+        for (entity in tracks) {
+            val track = entity.toTrack()
+            val diag = diagnoseTrack(context, track)
+            if (diag.canAutoRepair || diag.issueType == PlaybackIssueType.STALE_URI_AFTER_METADATA_REWRITE) {
+                val res = repairTrack(context, track, trackDao)
+                results.add(res)
+            }
+        }
+        results
     }
 }

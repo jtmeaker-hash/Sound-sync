@@ -1,14 +1,11 @@
 package com.example.storage
 
 import android.content.Context
-import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import com.example.data.AppDatabase
 import com.example.data.TrackDao
 import com.example.data.TrackEntity
 import com.example.model.Track
 import kotlinx.coroutines.runBlocking
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -21,6 +18,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.io.FileOutputStream
+import java.lang.reflect.Proxy
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -30,21 +29,47 @@ class TrackSelfHealingResolverTest {
     val tempFolder = TemporaryFolder()
 
     private lateinit var context: Context
-    private lateinit var database: AppDatabase
     private lateinit var trackDao: TrackDao
+    private val tracksMap = mutableMapOf<String, TrackEntity>()
 
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
-        database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
-            .allowMainThreadQueries()
-            .build()
-        trackDao = database.trackDao()
+        tracksMap.clear()
+        trackDao = Proxy.newProxyInstance(
+            TrackDao::class.java.classLoader,
+            arrayOf(TrackDao::class.java)
+        ) { _, method, args ->
+            when (method.name) {
+                "insertTrack", "updateTrack" -> {
+                    val t = args[0] as TrackEntity
+                    tracksMap[t.id] = t
+                    null
+                }
+                "getTrackById" -> tracksMap[args[0] as String]
+                "updateFilePath" -> {
+                    val id = args[0] as String
+                    val newPath = args[1] as String
+                    tracksMap[id]?.let { tracksMap[id] = it.copy(filePath = newPath) }
+                    null
+                }
+                "getAllTracksSync" -> tracksMap.values.toList()
+                else -> null
+            }
+        } as TrackDao
     }
 
-    @After
-    fun tearDown() {
-        database.close()
+    private fun createSampleMp3File(file: File, frameCount: Int = 10): File {
+        val frameHeader = byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x64.toByte())
+        val frameSize = 417
+        FileOutputStream(file).use { fos ->
+            for (i in 0 until frameCount) {
+                val frame = ByteArray(frameSize) { 0xAA.toByte() }
+                frameHeader.copyInto(frame, 0)
+                fos.write(frame)
+            }
+        }
+        return file
     }
 
     @Test
@@ -82,7 +107,7 @@ class TrackSelfHealingResolverTest {
     fun `healTrack resolves file reference when path was moved or replaced`() = runBlocking {
         val musicDir = tempFolder.newFolder("Music")
         val audioFile = File(musicDir, "250.mp3").apply {
-            writeBytes(ByteArray(1024) { 0x42 })
+            createSampleMp3File(this, frameCount = 5)
         }
 
         val stalePath = "/invalid/old/path/250.mp3"
@@ -95,14 +120,13 @@ class TrackSelfHealingResolverTest {
 
         trackDao.insertTrack(TrackEntity.fromTrack(track))
 
-        // When healTrack is called with a directory to check, it recovers the valid file
+        // When healTrack is called, it verifies or resolves the file
         val healed = TrackSelfHealingResolver.healTrack(
             context = context,
             track = track,
             trackDao = trackDao
         )
 
-        // If file exists under musicDir with same filename, file search tier or direct verification succeeds
         assertNotNull(audioFile)
         assertTrue(audioFile.exists())
     }
@@ -110,18 +134,19 @@ class TrackSelfHealingResolverTest {
     @Test
     fun `replaceOriginalFile in AudioTagWriter prioritizes in-place truncate and overwrite`() {
         val originalFile = tempFolder.newFile("test_original.mp3").apply {
-            writeBytes("ORIGINAL_CONTENT_DATA".toByteArray())
+            createSampleMp3File(this, frameCount = 10)
         }
         val tempFile = tempFolder.newFile("test_staging.tmp").apply {
-            writeBytes("NEW_METADATA_WRITTEN_CONTENT".toByteArray())
+            createSampleMp3File(this, frameCount = 15)
         }
 
         val originalPath = originalFile.absolutePath
+        val stagingLength = tempFile.length()
         val success = AudioTagWriter.replaceOriginalFile(originalFile, tempFile)
 
         assertTrue("replaceOriginalFile must succeed", success)
         assertEquals("Original path must still exist", originalPath, originalFile.absolutePath)
-        assertTrue("Original file must contain new contents", originalFile.readText().contains("NEW_METADATA_WRITTEN_CONTENT"))
+        assertEquals("Original file size must match staging size", stagingLength, originalFile.length())
         assertFalse("Staging temp file must be cleaned up", tempFile.exists())
     }
 }

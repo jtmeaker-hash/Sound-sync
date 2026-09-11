@@ -160,6 +160,8 @@ fun MainDjScreen(
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
     val showApiConfigDialog by viewModel.showApiConfigDialog.collectAsState()
     val inspectingTrackForProperties by viewModel.inspectingTrackForProperties.collectAsState()
+    val playbackIssueDiagnostic by viewModel.playbackIssueDiagnostic.collectAsState()
+    val playbackIssueTrack by viewModel.playbackIssueTrack.collectAsState()
 
     // Song Finds States
     val songFinds by viewModel.songFinds.collectAsState()
@@ -641,6 +643,18 @@ fun MainDjScreen(
                         viewModel.closeBulkEditor()
                         viewModel.scanDeviceMediaStore()
                     }
+                )
+            }
+
+            // Playback Issue Dialog
+            playbackIssueDiagnostic?.let { diag ->
+                com.example.ui.components.PlaybackIssueDialog(
+                    diagnostic = diag,
+                    track = playbackIssueTrack,
+                    onRepair = {
+                        playbackIssueTrack?.let { viewModel.repairPlaybackIssue(it) }
+                    },
+                    onDismiss = { viewModel.dismissPlaybackIssue() }
                 )
             }
 

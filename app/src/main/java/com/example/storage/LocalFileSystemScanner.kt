@@ -260,7 +260,12 @@ object LocalFileSystemScanner {
         val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, path)
         if (embedded.title?.isNotBlank() == true) title = embedded.title
         if (embedded.artist?.isNotBlank() == true) artist = embedded.artist
-        if (embedded.album?.isNotBlank() == true) album = embedded.album
+        // Validate embedded album before accepting it: reject folder-derived names (e.g. "Download", "Music")
+        if (embedded.album?.isNotBlank() == true &&
+            !com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(embedded.album) &&
+            com.example.metadata.AlbumValidator.isValidAlbum(embedded.album, path)) {
+            album = embedded.album
+        }
         if (embedded.genre?.isNotBlank() == true) genre = embedded.genre
         if (embedded.hasBpm) bpm = embedded.bpm ?: 0.0
         if (embedded.hasKey) musicalKey = embedded.camelotKey ?: embedded.musicalKey.orEmpty()
@@ -280,7 +285,12 @@ object LocalFileSystemScanner {
 
             if (title == fallbackTitle && !mTitle.isNullOrBlank()) title = mTitle
             if (artist == "Unknown Artist" && !mArtist.isNullOrBlank()) artist = mArtist
-            if (album == "Single" && !mAlbum.isNullOrBlank()) album = mAlbum
+            // Validate retriever album: MediaStore often returns the parent folder name — reject those.
+            if (album == "Single" && !mAlbum.isNullOrBlank() &&
+                !com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(mAlbum) &&
+                com.example.metadata.AlbumValidator.isValidAlbum(mAlbum, path)) {
+                album = mAlbum
+            }
             if (genre == "DJ Library" && !mGenre.isNullOrBlank()) genre = mGenre
 
             val durMs = mDuration?.toLongOrNull() ?: 0L
@@ -312,8 +322,17 @@ object LocalFileSystemScanner {
         } else {
             title = com.example.metadata.parser.TrackIdentityParser.cleanGarbage(title)
         }
-        if (com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(album)) {
-            album = parsed.album ?: "Single"
+        if (com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(album) ||
+            !com.example.metadata.AlbumValidator.isValidAlbum(album, path)) {
+            // Accept parsed.album only if it is itself valid — never store a folder name or "Single" as album
+            val candidateAlbum = parsed.album
+            album = if (candidateAlbum != null &&
+                !com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(candidateAlbum) &&
+                com.example.metadata.AlbumValidator.isValidAlbum(candidateAlbum, path)) {
+                candidateAlbum
+            } else {
+                "Single" // placeholder only — MetadataResolver will clear this if it is still invalid after enrichment
+            }
         }
 
         val sizeMb = file.length().toDouble() / (1024.0 * 1024.0)

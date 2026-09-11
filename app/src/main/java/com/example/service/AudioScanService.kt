@@ -419,7 +419,12 @@ class AudioScanService : Service() {
         val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(this, uri.toString())
         if (embedded.title?.isNotBlank() == true) title = embedded.title
         if (embedded.artist?.isNotBlank() == true) artist = embedded.artist
-        if (embedded.album?.isNotBlank() == true) album = embedded.album
+        // Validate embedded album before accepting it: reject folder-derived names (e.g. "Download", "Music")
+        if (embedded.album?.isNotBlank() == true &&
+            !com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(embedded.album) &&
+            com.example.metadata.AlbumValidator.isValidAlbum(embedded.album, uri.toString())) {
+            album = embedded.album
+        }
         if (embedded.genre?.isNotBlank() == true) genre = embedded.genre
         if (embedded.hasBpm) bpm = embedded.bpm ?: 0.0
         if (embedded.hasKey) musicalKey = embedded.camelotKey ?: embedded.musicalKey.orEmpty()
@@ -446,7 +451,12 @@ class AudioScanService : Service() {
 
                 if (!mTitle.isNullOrBlank() && title == name.substringBeforeLast(".")) title = mTitle
                 if (!mArtist.isNullOrBlank() && mArtist != "<unknown>" && artist == "Unknown Artist") artist = mArtist
-                if (!mAlbum.isNullOrBlank() && mAlbum != "<unknown>" && album == "Single") album = mAlbum
+                // Validate retriever album: MediaStore may return the parent folder name as album — reject those.
+                if (!mAlbum.isNullOrBlank() && mAlbum != "<unknown>" && album == "Single" &&
+                    !com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(mAlbum) &&
+                    com.example.metadata.AlbumValidator.isValidAlbum(mAlbum, uri.toString())) {
+                    album = mAlbum
+                }
                 if (!mGenre.isNullOrBlank() && genre == "DJ Library") genre = mGenre
                 if (mDuration != null) {
                     val dMs = mDuration.toLongOrNull() ?: 0L

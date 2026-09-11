@@ -35,15 +35,22 @@ object ArtworkEmbeddingHelper {
         }
         if (artworkBytes.isEmpty()) return@withContext false
 
-        val ext = audioFile.extension.lowercase()
-        return@withContext when (ext) {
-            "mp3" -> com.example.storage.FileLockManager.withFileLock(audioFile.absolutePath) {
-                embedApicIntoMp3(audioFile, artworkBytes, mimeType)
-            }
-            else -> {
-                Log.d(TAG, "Embedding artwork is currently optimized for MP3 container. Other formats preserved safely.")
-                false
-            }
+        com.example.storage.FileLockManager.withFileLock(audioFile.absolutePath) {
+            val existing = AudioEmbeddedMetadataReader.read(null, audioFile.absolutePath)
+            val payload = com.example.storage.CompleteTagPayload(
+                title = existing.title,
+                artist = existing.artist,
+                album = existing.album,
+                albumArtist = existing.albumArtist,
+                genre = existing.genre,
+                trackNumber = existing.trackNumber,
+                discNumber = existing.discNumber,
+                bpm = existing.bpm,
+                musicalKey = existing.musicalKey,
+                artworkBytes = artworkBytes,
+                artworkMimeType = mimeType
+            )
+            com.example.storage.AudioTagWriter.writeCompleteTags(null, audioFile.absolutePath, payload)
         }
     }
 

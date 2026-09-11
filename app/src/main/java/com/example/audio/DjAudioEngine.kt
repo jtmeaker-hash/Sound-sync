@@ -1457,9 +1457,18 @@ class DjAudioEngine(private val context: Context) {
     }
 
     private fun setExtractorDataSource(extractor: MediaExtractor, uriOrPath: String) {
-        if (uriOrPath.startsWith("content://")) {
-            extractor.setDataSource(context, Uri.parse(uriOrPath), null)
-            return
+        if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
+            val uri = Uri.parse(uriOrPath)
+            try {
+                extractor.setDataSource(context, uri, null)
+                return
+            } catch (_: Exception) {}
+            val cleanPath = uriOrPath.removePrefix("file://")
+            val file = File(cleanPath)
+            if (file.exists() && file.canRead()) {
+                extractor.setDataSource(cleanPath)
+                return
+            }
         }
         val cleanPath = uriOrPath.removePrefix("file://")
         val file = File(cleanPath)
@@ -1472,6 +1481,18 @@ class DjAudioEngine(private val context: Context) {
             return
         }
         extractor.setDataSource(uriOrPath)
+    }
+
+    /**
+     * Called when a track file has been modified or its path/URI reconciled.
+     * Updates active track reference safely without interrupting session state.
+     */
+    fun onTrackFileModified(trackId: String, oldPath: String, newPath: String) {
+        val current = _currentTrack.value
+        if (current != null && (current.id == trackId || current.filePath == oldPath)) {
+            Log.i(TAG, "Active track file modified: updating path from '$oldPath' to '$newPath'")
+            _currentTrack.value = current.copy(filePath = newPath, isAvailable = true)
+        }
     }
 
     // ── Release ────────────────────────────────────────────────────────────
@@ -1519,8 +1540,14 @@ class DjAudioEngine(private val context: Context) {
         private var frameBuffer = ShortArray(0)
 
         init {
-            if (uriOrPath.startsWith("content://")) {
-                extractor.setDataSource(context, Uri.parse(uriOrPath), null)
+            if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
+                val uri = Uri.parse(uriOrPath)
+                try {
+                    extractor.setDataSource(context, uri, null)
+                } catch (_: Exception) {
+                    val cleanPath = uriOrPath.removePrefix("file://")
+                    extractor.setDataSource(cleanPath)
+                }
             } else {
                 val clean = uriOrPath.removePrefix("file://")
                 val f = File(clean)

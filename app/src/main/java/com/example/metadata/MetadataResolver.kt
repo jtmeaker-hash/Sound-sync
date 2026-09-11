@@ -12,6 +12,7 @@ import com.example.metadata.coverart.DownloadedCoverArt
 import com.example.metadata.musicbrainz.MusicBrainzResolver
 import com.example.metadata.parser.ParsedTrackIdentity
 import com.example.metadata.parser.TrackIdentityParser
+import com.example.metadata.AlbumValidator
 import com.example.metadata.theaudiodb.TheAudioDbArtworkProvider
 import com.example.model.MetadataScanState
 import com.example.model.Track
@@ -70,20 +71,41 @@ class MetadataResolver(
         if (!forceRefresh && (track.userConfirmedMetadata ||
                 track.metadataScanState == MetadataScanState.USER_CONFIRMED.name ||
                 track.metadataScanState == MetadataScanState.APPROVED.name ||
-                track.metadataScanState == MetadataScanState.APPLIED.name ||
-                track.metadataScanState == MetadataScanState.RESTORED.name)) {
-            Log.d(TAG, "Track has user confirmed / applied / restored metadata; skipping auto-resolution to protect manual choices.")
+                track.metadataScanState == MetadataScanState.APPLIED.name)) {
+            Log.d(TAG, "Track has user confirmed / applied metadata; skipping auto-resolution to protect manual choices.")
             return@withContext MetadataResolutionResult(
                 updatedTrack = track,
-                scanState = if (track.metadataScanState == MetadataScanState.RESTORED.name) MetadataScanState.RESTORED else MetadataScanState.USER_CONFIRMED,
-                confidence = track.metadataConfidence.coerceAtLeast(100.0),
+                scanState = MetadataScanState.USER_CONFIRMED,
+                confidence = 100.0,
                 wasRepaired = false,
-                message = "Protected user-confirmed / restored metadata"
+                message = "Protected user-confirmed metadata"
             )
         }
 
         // 2. Check if already complete or restored and file has not changed (Section 15, 16)
         if (!forceRefresh && com.example.storage.TrackIdentityReconciler.isMetadataScanComplete(track.metadataScanState) && !track.filePath.isBlank()) {
+            // Even for COMPLETE tracks, validate the album field to catch folder-name albums
+            // stored by older versions of the app or incorrect MediaStore data.
+            if (!AlbumValidator.isValidAlbum(track.album, track.filePath)) {
+                Log.d(TAG, "AlbumRepair: track '${track.title}' (${track.metadataScanState}) has invalid album '${track.album}' — clearing in DB")
+                val repairedTrack = track.copy(album = "")
+                val db = database ?: try { AppDatabase.getDatabase(context) } catch (_: Exception) { null }
+                db?.trackDao()?.let { dao ->
+                    try {
+                        dao.updateTrack(TrackEntity.fromTrack(repairedTrack))
+                        Log.d(TAG, "AlbumRepair: DB updated for track ${track.id}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "AlbumRepair: failed to update DB: ${e.message}")
+                    }
+                }
+                return@withContext MetadataResolutionResult(
+                    updatedTrack = repairedTrack,
+                    scanState = if (track.metadataScanState == MetadataScanState.RESTORED.name) MetadataScanState.RESTORED else MetadataScanState.COMPLETE,
+                    confidence = track.metadataConfidence,
+                    wasRepaired = true,
+                    message = "Repaired invalid album on already-resolved track"
+                )
+            }
             Log.d(TAG, "Track metadata scan already complete (${track.metadataScanState}); skipping redundant lookup.")
             return@withContext MetadataResolutionResult(
                 updatedTrack = track,
@@ -200,7 +222,19 @@ class MetadataResolver(
         val cleanedArtist = parsed.artist?.takeIf { TrackIdentityParser.isArtistValid(it) }
             ?: track.artist.takeIf { TrackIdentityParser.isArtistValid(it) }
         val cleanedTitle = parsed.title.ifBlank { track.title }
-        val cleanedAlbum = parsed.album ?: track.album.takeIf { !TrackIdentityParser.isGenericAlbumName(it) } ?: "Single"
+        // Validate cleanedAlbum through AlbumValidator: reject folder names, generic labels, or path segments.
+        // Fall back to blank ("") — never to "Single" — so the file's own embedded tag (if valid) takes precedence
+        // on the next write cycle rather than a synthetic placeholder polluting the DB.
+        val rawCleanedAlbum = parsed.album ?: track.album.takeIf { !TrackIdentityParser.isGenericAlbumName(it) }
+        val cleanedAlbum = if (rawCleanedAlbum != null && AlbumValidator.isValidAlbum(rawCleanedAlbum, track.filePath)) {
+            Log.d(TAG, "AlbumResolved (NO_MATCH path): '$rawCleanedAlbum' for '${track.title}'")
+            rawCleanedAlbum
+        } else {
+            if (rawCleanedAlbum != null) {
+                Log.d(TAG, "AlbumRejected (NO_MATCH path): '$rawCleanedAlbum' for '${track.title}' — keeping blank to avoid persisting folder name")
+            }
+            "" // blank — never write a generic placeholder as album
+        }
 
         // Section 27 & 10: Preserve local parsed metadata when match is uncertain, rejected, or missing
         if (selectedCandidate == null || matchState == MetadataScanState.NO_MATCH || matchState == MetadataScanState.REJECTED) {
@@ -212,10 +246,18 @@ class MetadataResolver(
             }
 
             // Crucial: Preserve parsed artist and title locally rather than leaving <unknown> or raw timestamp!
+            // For album: only write it if it is non-blank (already validated above); otherwise preserve whatever
+            // existing album the track has (if it is itself valid) or leave blank.
+            val safeAlbum = when {
+                !track.userConfirmedMetadata && cleanedAlbum.isNotBlank() -> cleanedAlbum
+                !track.userConfirmedMetadata && AlbumValidator.isValidAlbum(track.album, track.filePath) -> track.album
+                !track.userConfirmedMetadata -> "" // existing album is also invalid — leave blank
+                else -> track.album // user confirmed — never touch
+            }
             val localRepairedTrack = track.copy(
                 artist = if (!track.userConfirmedMetadata && cleanedArtist != null) cleanedArtist else track.artist,
                 title = if (!track.userConfirmedMetadata && cleanedTitle.isNotBlank()) cleanedTitle else track.title,
-                album = if (!track.userConfirmedMetadata) cleanedAlbum else track.album,
+                album = safeAlbum,
                 metadataScanState = finalUncertainState.name,
                 metadataWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY.name
             )
@@ -273,7 +315,14 @@ class MetadataResolver(
         val finalAlbum = if (track.userConfirmedMetadata) {
             track.album
         } else if (TrackIdentityParser.isGenericAlbumName(track.album) || !resolvedAlbum.isNullOrBlank()) {
-            resolvedAlbum ?: "Single"
+            val candidate = resolvedAlbum ?: "Single"
+            if (AlbumValidator.isValidAlbum(candidate, track.filePath)) {
+                Log.d(TAG, "AlbumAccepted: $candidate")
+                candidate
+            } else {
+                Log.d(TAG, "AlbumRejected: $candidate, Reason=INVALID_OR_FOLDER_NAME")
+                ""
+            }
         } else {
             track.album
         }
@@ -462,7 +511,7 @@ class MetadataResolver(
                 (track.filePath.startsWith("content://") || File(track.filePath).exists())
 
         val shouldWritePhysicalFile = embedArtworkToFile && isLocalPhysicalFile &&
-                (!settings.writeMetadataOnlyAfterApproval || track.userConfirmedMetadata || track.metadataScanState == MetadataScanState.APPROVED.name || track.metadataScanState == MetadataScanState.APPLIED.name)
+                (!settings.writeMetadataOnlyAfterApproval || forceRefresh || matchState == MetadataScanState.VERIFIED)
 
         var finalScanState = matchState
         var fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
@@ -541,13 +590,7 @@ class MetadataResolver(
             if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] DEFERRED: awaiting user confirmation; preserved in database")
         }
 
-        val latestDb = if (dao != null && intermediateTrack.id.isNotBlank()) {
-            try { dao.getTrackById(intermediateTrack.id) } catch (_: Exception) { null }
-        } else null
-        val reconciledFilePath = latestDb?.filePath?.takeIf { it.isNotBlank() } ?: intermediateTrack.filePath
-
         val finalTrack = intermediateTrack.copy(
-            filePath = reconciledFilePath,
             artworkUrl = finalArtworkUrl,
             artworkSource = artworkSource,
             artworkCachePath = artworkCachePath,

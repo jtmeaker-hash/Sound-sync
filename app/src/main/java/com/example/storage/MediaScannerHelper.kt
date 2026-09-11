@@ -237,8 +237,19 @@ object MediaScannerHelper {
                             effectiveTitle = com.example.metadata.parser.TrackIdentityParser.cleanGarbage(effectiveTitle)
                         }
 
-                        if (com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(effectiveAlbum)) {
-                            effectiveAlbum = parsed.album ?: "Single"
+                        // Reject generic album names AND path-derived directory names.
+                        // e.g. if file is at /Music/Download/song.wav, album="Download" is invalid.
+                        val albumIsInvalid = com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(effectiveAlbum) ||
+                            !com.example.metadata.AlbumValidator.isValidAlbum(effectiveAlbum, targetPath)
+                        if (albumIsInvalid) {
+                            // Use parsed.album only if it passes both validation checks
+                            val candidateAlbum = parsed.album
+                            effectiveAlbum = if (candidateAlbum != null &&
+                                com.example.metadata.AlbumValidator.isValidAlbum(candidateAlbum, targetPath)) {
+                                candidateAlbum
+                            } else {
+                                null // will become empty string / "Single" below
+                            }
                         }
 
                         val effectiveGenre = embedded?.genre?.takeIf(String::isNotBlank) ?: "DJ Library"
