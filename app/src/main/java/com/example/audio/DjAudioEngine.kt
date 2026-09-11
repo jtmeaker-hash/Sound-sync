@@ -515,12 +515,9 @@ class DjAudioEngine(private val context: Context) {
                 _currentTrack.value = track.copy(filePath = healedPath, isAvailable = true)
                 startStreamingPlayback(session)
             } else {
-                Log.w(TAG, "Cannot access audio stream for track '${track.title}': ${track.filePath}")
-                _isPlaying.value = false
-                decoderShouldPause = true
-                stopPlaybackImmediately()
-                onTrackUnavailableCallback?.invoke(track)
-                onTrackPlaybackErrorCallback?.invoke(track, "Audio file could not be opened or decoded.")
+                Log.w(TAG, "Cannot access audio stream for track '${track.title}': ${track.filePath}, falling back to audio synthesis")
+                onTrackPlaybackErrorCallback?.invoke(track, "Audio file could not be opened; using safe synthesis fallback.")
+                startAudioSynthesis(session)
             }
         }
     }

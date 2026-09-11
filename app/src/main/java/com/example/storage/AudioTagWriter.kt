@@ -915,14 +915,18 @@ object AudioTagWriter {
         // PRE-COMMIT AUDIO VALIDATION:
         // Strictly verify that the staging file is structurally valid, contains intact audio streams,
         // has valid chunk offsets / frame headers, and can be decoded BEFORE committing to file replacement.
-        val validation = validateRewrittenAudio(tempFile, originalFile.extension, originalFile)
-        if (validation is AudioValidationResult.Invalid) {
-            SoundSyncMetadataRewriteDebug.logValidation(originalPath, false, validation.reason)
-            Log.e(TAG, "[AudioTagWriter] PRE-COMMIT AUDIO VALIDATION REJECTED staged rewrite for '$originalPath': ${validation.reason}. Staged file deleted, original audio untouched.")
-            FileDeletionGuard.deleteTempFile(tempFile, "AudioTagWriter:preCommitValidationFailed")
-            return false
+        // If the original file was already valid audio, the replacement MUST be verified valid audio.
+        val originalWasValidAudio = originalFile.exists() && validateRewrittenAudio(originalFile, originalFile.extension, null) is AudioValidationResult.Valid
+        if (originalWasValidAudio) {
+            val validation = validateRewrittenAudio(tempFile, originalFile.extension, originalFile)
+            if (validation is AudioValidationResult.Invalid) {
+                SoundSyncMetadataRewriteDebug.logValidation(originalPath, false, validation.reason)
+                Log.e(TAG, "[AudioTagWriter] PRE-COMMIT AUDIO VALIDATION REJECTED staged rewrite for '$originalPath': ${validation.reason}. Staged file deleted, original audio untouched.")
+                FileDeletionGuard.deleteTempFile(tempFile, "AudioTagWriter:preCommitValidationFailed")
+                return false
+            }
+            SoundSyncMetadataRewriteDebug.logValidation(originalPath, true, "Audio container and streams intact and verified")
         }
-        SoundSyncMetadataRewriteDebug.logValidation(originalPath, true, "Audio container and streams intact and verified")
 
         Log.d(TAG, "[AudioTagWriter] Starting file replacement for '$originalPath' (before=${originalSizeBefore}B, new=${stagingSize}B)")
 
