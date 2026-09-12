@@ -181,7 +181,15 @@ object TrackSelfHealingResolver {
 
     private fun resolveFromMediaStoreId(context: Context, track: Track): String? {
         val mediaId = extractMediaId(track) ?: return null
-        val mediaUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, mediaId)
+        val volumeUuid = TrackSourceResolver.extractVolumeUuid(track.filePath)
+            ?: TrackSourceResolver.extractVolumeUuid(track.resolvedUri.orEmpty())
+        val baseCollection = if (!volumeUuid.isNullOrBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try { MediaStore.Audio.Media.getContentUri(volumeUuid.lowercase(Locale.ROOT)) }
+            catch (_: Exception) { MediaStore.Audio.Media.EXTERNAL_CONTENT_URI }
+        } else {
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        }
+        val mediaUri = ContentUris.withAppendedId(baseCollection, mediaId)
 
         // 1a. Check if the direct file path recorded in MediaStore exists on disk
         try {
@@ -203,7 +211,7 @@ object TrackSelfHealingResolver {
         } catch (_: Throwable) {}
 
         // 1b. Check if the MediaStore content URI is itself readable
-        if (isUriReadable(context, mediaUri)) {
+        if (isUriReadable(context, mediaUri) && TrackSourceResolver.testContentUriWithMediaExtractor(context, mediaUri)) {
             return mediaUri.toString()
         }
 
@@ -252,7 +260,11 @@ object TrackSelfHealingResolver {
         return try {
             val doc = SafStorageManager.findDocumentForTrack(context, track)
             if (doc != null && doc.exists() && doc.canRead()) {
-                doc.uri.toString()
+                if (TrackSourceResolver.testContentUriWithMediaExtractor(context, doc.uri)) {
+                    doc.uri.toString()
+                } else {
+                    null
+                }
             } else {
                 null
             }
@@ -267,57 +279,69 @@ object TrackSelfHealingResolver {
         val fileName = extractFileName(track)
         val contentResolver = context.contentResolver
 
-        // 4a. Query MediaStore by DISPLAY_NAME
-        if (fileName.isNotBlank()) {
+        val volumeUuid = TrackSourceResolver.extractVolumeUuid(track.filePath)
+            ?: TrackSourceResolver.extractVolumeUuid(track.resolvedUri.orEmpty())
+        val collections = mutableListOf<Uri>()
+        if (!volumeUuid.isNullOrBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
-                val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DURATION)
-                val selection = "${MediaStore.Audio.Media.DISPLAY_NAME} = ?"
-                val selectionArgs = arrayOf(fileName)
-                contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, selection, selectionArgs, null)?.use { cursor ->
-                    val matched = pickBestCursorMatch(cursor, track)
-                    if (matched != null) return matched
-                }
-            } catch (_: Throwable) {}
+                collections.add(MediaStore.Audio.Media.getContentUri(volumeUuid.lowercase(Locale.ROOT)))
+            } catch (_: Exception) {}
         }
+        collections.add(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
 
-        // 4b. Query MediaStore by TITLE and ARTIST
-        if (track.title.isNotBlank() && track.title != "<unknown>") {
-            try {
-                val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DURATION)
-                val selection: String
-                val selectionArgs: Array<String>
-                if (track.artist.isNotBlank() && track.artist != "Unknown Artist") {
-                    selection = "${MediaStore.Audio.Media.TITLE} = ? AND ${MediaStore.Audio.Media.ARTIST} = ?"
-                    selectionArgs = arrayOf(track.title, track.artist)
-                } else {
-                    selection = "${MediaStore.Audio.Media.TITLE} = ?"
-                    selectionArgs = arrayOf(track.title)
-                }
+        for (collectionUri in collections.distinct()) {
+            // 4a. Query MediaStore by DISPLAY_NAME
+            if (fileName.isNotBlank()) {
+                try {
+                    val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DURATION)
+                    val selection = "${MediaStore.Audio.Media.DISPLAY_NAME} = ?"
+                    val selectionArgs = arrayOf(fileName)
+                    contentResolver.query(collectionUri, projection, selection, selectionArgs, null)?.use { cursor ->
+                        val matched = pickBestCursorMatch(context, cursor, collectionUri, track)
+                        if (matched != null) return matched
+                    }
+                } catch (_: Throwable) {}
+            }
 
-                contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, selection, selectionArgs, null)?.use { cursor ->
-                    val matched = pickBestCursorMatch(cursor, track)
-                    if (matched != null) return matched
-                }
-            } catch (_: Throwable) {}
-        }
+            // 4b. Query MediaStore by TITLE and ARTIST
+            if (track.title.isNotBlank() && track.title != "<unknown>") {
+                try {
+                    val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DURATION)
+                    val selection: String
+                    val selectionArgs: Array<String>
+                    if (track.artist.isNotBlank() && track.artist != "Unknown Artist") {
+                        selection = "${MediaStore.Audio.Media.TITLE} = ? AND ${MediaStore.Audio.Media.ARTIST} = ?"
+                        selectionArgs = arrayOf(track.title, track.artist)
+                    } else {
+                        selection = "${MediaStore.Audio.Media.TITLE} = ?"
+                        selectionArgs = arrayOf(track.title)
+                    }
 
-        // 4c. Query MediaStore by _DATA suffix
-        if (fileName.isNotBlank()) {
-            try {
-                val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DURATION)
-                val selection = "${MediaStore.Audio.Media.DATA} LIKE ?"
-                val selectionArgs = arrayOf("%/$fileName")
-                contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, selection, selectionArgs, null)?.use { cursor ->
-                    val matched = pickBestCursorMatch(cursor, track)
-                    if (matched != null) return matched
-                }
-            } catch (_: Throwable) {}
+                    contentResolver.query(collectionUri, projection, selection, selectionArgs, null)?.use { cursor ->
+                        val matched = pickBestCursorMatch(context, cursor, collectionUri, track)
+                        if (matched != null) return matched
+                    }
+                } catch (_: Throwable) {}
+            }
+
+            // 4c. Query MediaStore by _DATA suffix
+            if (fileName.isNotBlank()) {
+                try {
+                    val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DURATION)
+                    val selection = "${MediaStore.Audio.Media.DATA} LIKE ?"
+                    val selectionArgs = arrayOf("%/$fileName")
+                    contentResolver.query(collectionUri, projection, selection, selectionArgs, null)?.use { cursor ->
+                        val matched = pickBestCursorMatch(context, cursor, collectionUri, track)
+                        if (matched != null) return matched
+                    }
+                } catch (_: Throwable) {}
+            }
         }
 
         return null
     }
 
-    private fun pickBestCursorMatch(cursor: Cursor, track: Track): String? {
+    private fun pickBestCursorMatch(context: Context, cursor: Cursor, collectionUri: Uri, track: Track): String? {
         val idCol = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
         val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
         val durCol = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
@@ -335,18 +359,20 @@ object TrackSelfHealingResolver {
                 }
             }
 
-            // Prefer verified disk file path
+            // Prefer verified disk file path if genuinely readable at raw byte level
             if (!data.isNullOrBlank()) {
                 val f = File(data)
-                if (f.exists() && f.canRead()) {
+                if (TrackSourceResolver.isGenuinelyRawReadable(f)) {
                     return data
                 }
             }
 
             // Fallback to verified MediaStore content URI
             if (id > 0L) {
-                val uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
-                return uri.toString()
+                val uri = ContentUris.withAppendedId(collectionUri, id)
+                if (isUriReadable(context, uri) && TrackSourceResolver.testContentUriWithMediaExtractor(context, uri)) {
+                    return uri.toString()
+                }
             }
         }
         return null
@@ -508,10 +534,13 @@ object TrackSelfHealingResolver {
     }
 
     private fun extractFileName(track: Track): String {
-        val path = track.filePath
-        if (path.isNotBlank() && !path.startsWith("content://")) {
-            val name = File(path.removePrefix("file://")).name
-            if (name.isNotBlank() && name.contains('.')) return name
+        val path = track.filePath.removePrefix("file://")
+        if (!path.startsWith("content://") && File(path).name.contains('.')) {
+            return File(path).name
+        }
+        val fromRel = track.storageRelativePath.substringAfterLast('/').takeIf { it.contains('.') }
+        if (!fromRel.isNullOrBlank()) {
+            return fromRel
         }
         val ext = track.format.lowercase(Locale.ROOT).ifBlank { "mp3" }
         return if (track.title.isNotBlank() && track.title != "<unknown>") {

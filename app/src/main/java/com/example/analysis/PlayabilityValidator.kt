@@ -272,20 +272,24 @@ object PlayabilityValidator {
                 } catch (_: Exception) {
                     var opened = false
                     try {
-                        val openedPfd = context.contentResolver.openFileDescriptor(uri, "r")
-                        if (openedPfd != null) {
-                            pfd = openedPfd
-                            extractor.setDataSource(openedPfd.fileDescriptor)
+                        val openedAfd = context.contentResolver.openAssetFileDescriptor(uri, "r")
+                        if (openedAfd != null) {
+                            afd = openedAfd
+                            if (openedAfd.declaredLength < 0) {
+                                extractor.setDataSource(openedAfd.fileDescriptor)
+                            } else {
+                                extractor.setDataSource(openedAfd.fileDescriptor, openedAfd.startOffset, openedAfd.declaredLength)
+                            }
                             opened = true
                         }
                     } catch (_: Exception) {}
 
                     if (!opened) {
                         try {
-                            val openedAfd = context.contentResolver.openAssetFileDescriptor(uri, "r")
-                            if (openedAfd != null) {
-                                afd = openedAfd
-                                extractor.setDataSource(openedAfd.fileDescriptor, openedAfd.startOffset, openedAfd.length)
+                            val openedPfd = context.contentResolver.openFileDescriptor(uri, "r")
+                            if (openedPfd != null) {
+                                pfd = openedPfd
+                                extractor.setDataSource(openedPfd.fileDescriptor)
                                 opened = true
                             }
                         } catch (_: Exception) {}

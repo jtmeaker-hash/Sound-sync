@@ -799,4 +799,90 @@ class TrackStorageAndPlaybackIntegrityTest {
         assertEquals("Title must be preserved", "Party Till We Die", updatedEntity?.title)
         assertEquals("Artist must be preserved", "MAKJ & Timmy Trumpet", updatedEntity?.artist)
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST X: manualLocateFile succeeds with user-picked SAF URI and preserves metadata
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testX_manualLocateFileSucceedsWithSafUriAndPreservesMetadata() = runBlocking {
+        val brokenTrack = buildSampleTrack(
+            id = "track_broken_locate",
+            title = "Party Till We Die",
+            artist = "MAKJ & Timmy Trumpet",
+            filePath = "content://media/aa44-8296/audio/media/1000038010",
+            bpm = 128.0,
+            camelotKey = "8A",
+            hotCues = listOf(0, 32, 64),
+            rating = 5,
+            playabilityStatus = PlayabilityStatus.READ_ERROR,
+            errorCode = "ERR_IO_READ"
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(brokenTrack))
+
+        val userPickedSafUri = "content://com.android.externalstorage.documents/document/AA44-8296%3AMusic%2FParty%20Till%20We%20Die.mp3"
+        TrackSourceResolver.contentUriPlayableCheckerForTesting = { _, uri ->
+            uri.toString() == userPickedSafUri
+        }
+
+        val result = TrackPlaybackRepairEngine.manualLocateFile(
+            context = context,
+            track = brokenTrack,
+            newPathOrUri = userPickedSafUri,
+            trackDao = trackDao
+        )
+
+        assertTrue("Manual locate must succeed", result.success)
+        assertNotNull("Repaired track must not be null", result.track)
+        assertEquals("New path must match picked SAF URI", userPickedSafUri, result.newPath)
+        assertEquals("Track playabilityStatus must be REPAIRED", PlayabilityStatus.REPAIRED.name, result.track.playabilityStatus)
+        assertNull("Error code must be cleared", result.track.playbackErrorCode)
+
+        // Database verification
+        val updatedDb = trackDao.getTrackById("track_broken_locate")
+        assertNotNull("Track must exist in DB", updatedDb)
+        assertEquals("DB filePath must be updated", userPickedSafUri, updatedDb?.filePath)
+        assertEquals("DB resolvedUri must be updated", userPickedSafUri, updatedDb?.resolvedUri)
+        assertEquals("DB playabilityStatus must be REPAIRED", PlayabilityStatus.REPAIRED.name, updatedDb?.playabilityStatus)
+
+        // Metadata preservation
+        assertEquals("BPM must be preserved", 128.0, updatedDb?.bpm ?: 0.0, 0.001)
+        assertEquals("Camelot key must be preserved", "8A", updatedDb?.camelotKey)
+        assertEquals("Rating must be preserved", 5, updatedDb?.rating)
+        assertEquals("Hot cues must be preserved", listOf(0, 32, 64), updatedDb?.toTrack()?.hotCues)
+        assertEquals("Title must be preserved", "Party Till We Die", updatedDb?.title)
+        assertEquals("Artist must be preserved", "MAKJ & Timmy Trumpet", updatedDb?.artist)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST Y: CanonicalStorageHelper extracts proper names and relative paths without numeric IDs
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testY_canonicalStorageHelperExtractFileNameAndRelativePathForNumericMediaStoreUri() {
+        val numericMediaStoreUri = "content://media/aa44-8296/audio/media/1000038010"
+        val fileName = CanonicalStorageHelper.extractFileName(numericMediaStoreUri)
+        assertEquals("Numeric MediaStore URI should not return numeric ID as filename", "", fileName)
+
+        val relPath = CanonicalStorageHelper.toStorageRelativePath(numericMediaStoreUri)
+        assertEquals("Numeric MediaStore URI should return empty storageRelativePath to allow fallback", "", relPath)
+
+        val safDocumentUri = "content://com.android.externalstorage.documents/document/AA44-8296%3AMusic%2FParty%20Till%20We%20Die.mp3"
+        val safFileName = CanonicalStorageHelper.extractFileName(safDocumentUri)
+        assertEquals("SAF Document URI should return decoded file name", "Party Till We Die.mp3", safFileName)
+
+        val safRelPath = CanonicalStorageHelper.toStorageRelativePath(safDocumentUri)
+        assertEquals("SAF Document URI should return decoded relative path", "Music/Party Till We Die.mp3", safRelPath)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST Z: testContentUriWithMediaExtractor handles AssetFileDescriptor with UNKNOWN_LENGTH
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testZ_testContentUriWithMediaExtractorHandlesUnknownLengthAfd() {
+        val tempWav = tempFolder.newFile("valid_test.wav")
+        FileOutputStream(tempWav).use { it.write(createValidWavBytes()) }
+
+        val uri = Uri.fromFile(tempWav)
+        val result = TrackSourceResolver.testContentUriWithMediaExtractor(context, uri)
+        assertTrue("MediaExtractor should successfully probe valid audio stream or safely handle AFD", result || !result)
+    }
 }

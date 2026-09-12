@@ -7,6 +7,8 @@ import android.os.StatFs
 import com.example.model.AudioQualityRating
 import com.example.model.FolderItem
 import com.example.model.MusicPlatform
+import com.example.model.PlayabilityStatus
+import com.example.model.PlaybackErrorCodes
 import com.example.model.StorageSource
 import com.example.model.StorageSourceType
 import com.example.model.SyncState
@@ -352,10 +354,15 @@ object LocalFileSystemScanner {
         val dir = file.parent ?: "/"
 
         val isRemovable = StorageAvailabilityHelper.isExternalStoragePath(path)
-        val mediaStoreUri = if (isRemovable || !TrackSourceResolver.isGenuinelyRawReadable(file)) {
+        val isRawReadable = TrackSourceResolver.isGenuinelyRawReadable(file)
+        val mediaStoreUri = if (isRemovable || !isRawReadable) {
             TrackSourceResolver.findMediaStoreUriForPath(context, path)
         } else null
-        val effectivePath = mediaStoreUri ?: path
+        val safUri = if (mediaStoreUri == null && (isRemovable || !isRawReadable)) {
+            CanonicalStorageHelper.findAccessibleSafUriForPath(context, path)
+        } else null
+        val effectivePath = mediaStoreUri ?: safUri ?: path
+        val isPlayable = isRawReadable || (mediaStoreUri != null) || (safUri != null)
 
         return Track(
             id = trackId,
@@ -376,8 +383,17 @@ object LocalFileSystemScanner {
             filePath = effectivePath,
             resolvedUri = effectivePath,
             directoryPath = dir,
-            isOfflineReady = true,
-            isAvailable = true,
+            isOfflineReady = isPlayable,
+            isAvailable = isPlayable,
+            playabilityStatus = if (isPlayable) PlayabilityStatus.PLAYABLE.name else {
+                if (isRemovable) PlayabilityStatus.PERMISSION_REQUIRED.name else PlayabilityStatus.READ_ERROR.name
+            },
+            playbackErrorCode = if (isPlayable) null else {
+                if (isRemovable) PlaybackErrorCodes.ERR_SCOPED_STORAGE_RESTRICTION else PlaybackErrorCodes.ERR_SOURCE_IO
+            },
+            playbackErrorMessage = if (isPlayable) null else {
+                if (isRemovable) "Scoped storage restricts raw access to removable storage; folder permission or MediaStore index required." else "Audio file is not readable."
+            },
             syncState = SyncState.SYNCED,
             platforms = listOf(MusicPlatform.LOCAL),
             energyRating = 7,

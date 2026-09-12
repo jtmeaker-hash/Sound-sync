@@ -299,6 +299,21 @@ object SafStorageManager {
     }
 
     /**
+     * Retrieves all persisted SAF tree URIs with read or write permissions that are currently accessible.
+     * Essential for playback where read-only folder grants are completely sufficient.
+     */
+    fun getPersistedAccessibleFolderUris(context: Context): List<Uri> {
+        return try {
+            context.contentResolver.persistedUriPermissions
+                .filter { it.isReadPermission || it.isWritePermission }
+                .map { it.uri }
+                .filter { isUriAccessible(context, it) }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
      * Retrieves all persisted SAF tree URIs with write permissions that are currently accessible.
      */
     fun getPersistedWriteFolderUris(context: Context): List<Uri> {
@@ -335,7 +350,7 @@ object SafStorageManager {
         pathOrName: String,
         storageRelativePath: String = ""
     ): DocumentFile? {
-        val persistedTrees = getPersistedWriteFolderUris(context)
+        val persistedTrees = getPersistedAccessibleFolderUris(context)
         if (persistedTrees.isEmpty()) return null
 
         val fileName = File(pathOrName).name.ifBlank { pathOrName }

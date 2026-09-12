@@ -227,32 +227,60 @@ object TrackPlaybackRepairEngine {
         trackDao: TrackDao
     ): RepairResult = withContext(Dispatchers.IO) {
         val originalPath = track.filePath
-        val testTrack = track.copy(filePath = newPathOrUri)
-        val validation = PlayabilityValidator.validateTrack(context, testTrack, forceFresh = true)
+
+        // Determine best playable reference: if user picked via SAF document, check if a valid MediaStore URI exists for seamless playback
+        val mediaStoreCandidate = if (newPathOrUri.startsWith("content://") && !TrackSourceResolver.isMediaStoreUri(newPathOrUri)) {
+            val canonical = CanonicalStorageHelper.toCanonicalPath(newPathOrUri)
+            val candidate = TrackSourceResolver.findMediaStoreUriForPath(context, canonical)
+                ?: TrackSourceResolver.findMediaStoreUriForPath(context, newPathOrUri)
+            if (candidate != null && TrackSourceResolver.testMediaStoreUri(context, Uri.parse(candidate)).isPlayable) {
+                candidate
+            } else null
+        } else null
+
+        val primaryTarget = mediaStoreCandidate ?: newPathOrUri
+        var testTrack = track.copy(filePath = primaryTarget, resolvedUri = primaryTarget)
+        var validation = PlayabilityValidator.validateTrack(context, testTrack, forceFresh = true)
+
+        var effectiveTarget = primaryTarget
+        if (validation.status != PlayabilityStatus.PLAYABLE && primaryTarget != newPathOrUri) {
+            // Fallback to testing the raw picked URI directly
+            testTrack = track.copy(filePath = newPathOrUri, resolvedUri = newPathOrUri)
+            val fallbackValidation = PlayabilityValidator.validateTrack(context, testTrack, forceFresh = true)
+            if (fallbackValidation.status == PlayabilityStatus.PLAYABLE) {
+                validation = fallbackValidation
+                effectiveTarget = newPathOrUri
+            }
+        }
 
         if (validation.status == PlayabilityStatus.PLAYABLE) {
-            val dir = if (newPathOrUri.contains("/")) newPathOrUri.substringBeforeLast("/") else "/Music"
+            val dir = if (effectiveTarget.contains("/")) effectiveTarget.substringBeforeLast("/") else "/Music"
+            val relPath = CanonicalStorageHelper.toStorageRelativePath(newPathOrUri)
+                .ifBlank { CanonicalStorageHelper.toStorageRelativePath(effectiveTarget) }
+                .ifBlank { track.storageRelativePath }
+
             val repairedTrack = track.copy(
-                filePath = newPathOrUri,
+                filePath = effectiveTarget,
+                resolvedUri = effectiveTarget,
                 directoryPath = dir,
+                storageRelativePath = relPath,
                 format = validation.containerMime?.substringAfter("audio/")?.uppercase() ?: track.format,
                 bitrateKbps = if (validation.bitRateKbps > 0) validation.bitRateKbps else track.bitrateKbps,
                 playabilityStatus = PlayabilityStatus.REPAIRED.name,
                 playbackErrorCode = null,
                 playbackErrorMessage = null,
                 lastPlaybackValidation = System.currentTimeMillis(),
-                lastRepairAttempt = System.currentTimeMillis(),
-                resolvedUri = newPathOrUri
+                lastRepairAttempt = System.currentTimeMillis()
             )
 
             trackDao.updateTrack(TrackEntity.fromTrack(repairedTrack))
-            Log.i(TAG, "Manual locate succeeded for '${track.title}' -> '$newPathOrUri'")
+            Log.i(TAG, "Manual locate succeeded for '${track.title}' -> '$effectiveTarget' (original pick: '$newPathOrUri')")
 
             RepairResult(
                 success = true,
                 track = repairedTrack,
                 previousPath = originalPath,
-                newPath = newPathOrUri,
+                newPath = effectiveTarget,
                 message = "Track successfully reconnected to selected audio file.",
                 diagnosticReport = validation
             )

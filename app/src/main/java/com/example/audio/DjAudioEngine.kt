@@ -348,10 +348,11 @@ class DjAudioEngine(private val context: Context) {
         activeSessionId = session
         Log.d(TAG, "loadTrack(track='${track?.title}', autoPlay=$autoPlay, initialSec=$initialPositionSec, session=$session)")
         if (track != null) {
-            val targetSource = if (!track.resolvedUri.isNullOrBlank() && com.example.storage.TrackSourceResolver.isMediaStoreUri(track.resolvedUri)) {
-                track.resolvedUri
-            } else {
-                track.filePath
+            val targetSource = when {
+                !track.resolvedUri.isNullOrBlank() && (com.example.storage.TrackSourceResolver.isMediaStoreUri(track.resolvedUri) || isUriAccessible(track.resolvedUri)) -> track.resolvedUri
+                isUriAccessible(track.filePath) -> track.filePath
+                !track.resolvedUri.isNullOrBlank() -> track.resolvedUri
+                else -> track.filePath
             }
             Log.i(TAG, "PLAYBACK_SOURCE_TRACE: DB_SOURCE='${track.filePath}', ORIGINAL_SOURCE='${track.filePath}', RESOLVED_SOURCE='${track.resolvedUri ?: track.filePath}', TARGET_SOURCE='$targetSource'")
         }
@@ -693,10 +694,11 @@ class DjAudioEngine(private val context: Context) {
             if (!generationGate.isCurrent(session) || isEngineReleased) return
 
             val track = _currentTrack.value ?: return
-            val uriOrPath = if (!track.resolvedUri.isNullOrBlank() && com.example.storage.TrackSourceResolver.isMediaStoreUri(track.resolvedUri)) {
-                track.resolvedUri
-            } else {
-                track.filePath
+            val uriOrPath = when {
+                !track.resolvedUri.isNullOrBlank() && (com.example.storage.TrackSourceResolver.isMediaStoreUri(track.resolvedUri) || isUriAccessible(track.resolvedUri)) -> track.resolvedUri
+                isUriAccessible(track.filePath) -> track.filePath
+                !track.resolvedUri.isNullOrBlank() -> track.resolvedUri
+                else -> track.filePath
             }
 
             val ex = MediaExtractor()
@@ -1489,7 +1491,11 @@ class DjAudioEngine(private val context: Context) {
                 if (afd != null) {
                     activeAfd?.let { runCatching { it.close() } }
                     activeAfd = afd
-                    extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    if (afd.declaredLength < 0) {
+                        extractor.setDataSource(afd.fileDescriptor)
+                    } else {
+                        extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.declaredLength)
+                    }
                     return
                 }
             } catch (_: Exception) {}
@@ -1615,6 +1621,26 @@ class DjAudioEngine(private val context: Context) {
                     extractor.setDataSource(context, uri, null)
                     dataSourceSet = true
                 } catch (_: Exception) {}
+                if (!dataSourceSet) {
+                    try {
+                        context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                            if (afd.declaredLength < 0) {
+                                extractor.setDataSource(afd.fileDescriptor)
+                            } else {
+                                extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.declaredLength)
+                            }
+                            dataSourceSet = true
+                        }
+                    } catch (_: Exception) {}
+                }
+                if (!dataSourceSet) {
+                    try {
+                        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                            extractor.setDataSource(pfd.fileDescriptor)
+                            dataSourceSet = true
+                        }
+                    } catch (_: Exception) {}
+                }
             }
             if (!dataSourceSet) {
                 val cleanPath = uriOrPath.removePrefix("file://")

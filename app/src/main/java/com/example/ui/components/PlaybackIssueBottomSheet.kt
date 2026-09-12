@@ -47,9 +47,13 @@ fun PlaybackIssueBottomSheet(
     ) { uri: Uri? ->
         if (uri != null) {
             try {
-                val takeFlags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                val takeFlags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 context.contentResolver.takePersistableUriPermission(uri, takeFlags)
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+                try {
+                    context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (_: Exception) {}
+            }
             viewModel.manualLocateFileForTrack(track, uri.toString()) { success ->
                 if (success) {
                     onDismiss()

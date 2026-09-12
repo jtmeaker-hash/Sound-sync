@@ -90,6 +90,9 @@ object CanonicalStorageHelper {
 
         // Case 2: Canonical or direct path
         val canonical = toCanonicalPath(clean)
+        if (canonical.startsWith("content://")) {
+            return ""
+        }
         return when {
             canonical.startsWith(PRIMARY_EMULATED_ROOT, ignoreCase = true) ->
                 canonical.substring(PRIMARY_EMULATED_ROOT.length).trimStart('/')
@@ -145,6 +148,9 @@ object CanonicalStorageHelper {
     fun extractFileName(pathOrUri: String): String {
         if (pathOrUri.isBlank()) return ""
         val decoded = safeUrlDecode(pathOrUri).substringBefore('?').substringBefore('#')
+        if (decoded.startsWith("content://media/") && decoded.substringAfterLast('/').toLongOrNull() != null) {
+            return ""
+        }
         val lastSlash = decoded.lastIndexOf('/')
         val lastColon = decoded.lastIndexOf(':')
         val splitIdx = maxOf(lastSlash, lastColon)
@@ -203,7 +209,7 @@ object CanonicalStorageHelper {
         val relPath = toStorageRelativePath(canonicalPath)
         if (relPath.isBlank()) return null
 
-        val persistedTrees = SafStorageManager.getPersistedWriteFolderUris(context)
+        val persistedTrees = SafStorageManager.getPersistedAccessibleFolderUris(context)
         for (treeUri in persistedTrees) {
             val rootDoc = try { DocumentFile.fromTreeUri(context, treeUri) } catch (_: Exception) { null }
             if (rootDoc == null || !rootDoc.exists() || !rootDoc.canRead()) continue

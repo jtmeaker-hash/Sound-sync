@@ -327,8 +327,12 @@ object TrackSourceResolver {
             } catch (t: Throwable) {
                 if (exactException == null) exactException = "extractor.setDataSource: ${t.javaClass.simpleName}: ${t.message}"
                 try {
-                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                        ex.setDataSource(pfd.fileDescriptor)
+                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                        if (afd.declaredLength < 0) {
+                            ex.setDataSource(afd.fileDescriptor)
+                        } else {
+                            ex.setDataSource(afd.fileDescriptor, afd.startOffset, afd.declaredLength)
+                        }
                         extractorInitSuccess = true
                         for (i in 0 until ex.trackCount) {
                             val f = ex.getTrackFormat(i)
@@ -340,6 +344,23 @@ object TrackSourceResolver {
                         }
                     }
                 } catch (_: Throwable) {}
+
+                if (!extractorInitSuccess) {
+                    try {
+                        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                            ex.setDataSource(pfd.fileDescriptor)
+                            extractorInitSuccess = true
+                            for (i in 0 until ex.trackCount) {
+                                val f = ex.getTrackFormat(i)
+                                val m = f.getString(android.media.MediaFormat.KEY_MIME) ?: ""
+                                if (m.startsWith("audio/")) {
+                                    audioTrackFound = true
+                                    break
+                                }
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
             } finally {
                 try { ex.release() } catch (_: Throwable) {}
             }
@@ -402,14 +423,27 @@ object TrackSourceResolver {
             ex.setDataSource(context, uri, null)
             ex.trackCount > 0
         } catch (_: Throwable) {
+            var ok = false
             try {
-                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                    ex.setDataSource(pfd.fileDescriptor)
-                    ex.trackCount > 0
-                } ?: false
-            } catch (_: Throwable) {
-                false
+                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                    if (afd.declaredLength < 0) {
+                        ex.setDataSource(afd.fileDescriptor)
+                    } else {
+                        ex.setDataSource(afd.fileDescriptor, afd.startOffset, afd.declaredLength)
+                    }
+                    ok = ex.trackCount > 0
+                }
+            } catch (_: Throwable) {}
+
+            if (!ok) {
+                try {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        ex.setDataSource(pfd.fileDescriptor)
+                        ok = ex.trackCount > 0
+                    }
+                } catch (_: Throwable) {}
             }
+            ok
         } finally {
             try { ex.release() } catch (_: Throwable) {}
         }
@@ -905,16 +939,28 @@ object TrackSourceResolver {
     fun findMediaStoreUriForTrack(context: Context, track: Track): Uri? {
         mediaStoreUriFinderForTesting?.let { return it(context, track) }
         val path = track.filePath.removePrefix("file://")
-        val fileName = File(path).name.ifBlank {
-            if (track.title.isNotBlank() && track.title != "<unknown>") {
-                "${track.title}.${track.format.lowercase(Locale.ROOT).ifBlank { "wav" }}"
+        val fileName = if (!path.startsWith("content://") && File(path).name.contains('.')) {
+            File(path).name
+        } else {
+            val fromRel = track.storageRelativePath.substringAfterLast('/').takeIf { it.contains('.') }
+            fromRel ?: if (track.title.isNotBlank() && track.title != "<unknown>") {
+                "${track.title}.${track.format.lowercase(Locale.ROOT).ifBlank { "mp3" }}"
             } else ""
         }
         val volumeUuid = extractVolumeUuid(path) ?: extractVolumeUuid(track.resolvedUri.orEmpty())
+        val volumeFromUri = Regex("""content://media/([^/]+)/audio/media""", RegexOption.IGNORE_CASE).find(path)?.groupValues?.get(1)
+            ?: Regex("""content://media/([^/]+)/audio/media""", RegexOption.IGNORE_CASE).find(track.resolvedUri.orEmpty())?.groupValues?.get(1)
         val contentResolver = context.contentResolver
 
         // Build list of volume collection URIs to search across all mounted collections
         val collections = mutableListOf<Uri>()
+        volumeFromUri?.let { vol ->
+            if (!vol.equals("external", ignoreCase = true) && !vol.equals("internal", ignoreCase = true)) {
+                try {
+                    collections.add(MediaStore.Audio.Media.getContentUri(vol.lowercase(Locale.ROOT)))
+                } catch (_: Exception) {}
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 val volumeNames = MediaStore.getExternalVolumeNames(context)
@@ -979,8 +1025,8 @@ object TrackSourceResolver {
         val parentDir = if (relPath.contains('/')) relPath.substringBeforeLast('/') + "/" else ""
 
         for (collectionUri in collections.distinct()) {
-            // Strategy A: Exact DATA column match
-            if (path.isNotBlank()) {
+            // Strategy A: Exact DATA column match (only applicable for filesystem paths)
+            if (path.isNotBlank() && !path.startsWith("content://")) {
                 try {
                     contentResolver.query(
                         collectionUri,
@@ -1026,22 +1072,47 @@ object TrackSourceResolver {
                 } catch (_: Throwable) {}
             }
 
-            // Strategy C: Match by TITLE and ARTIST
+            // Strategy C: Match by TITLE and ARTIST (with normalization for featured artists)
             if (track.title.isNotBlank() && track.title != "<unknown>") {
-                try {
-                    val hasArtist = track.artist.isNotBlank() && track.artist != "Unknown Artist"
-                    val sel = if (hasArtist) {
-                        "${MediaStore.Audio.Media.TITLE} = ? AND ${MediaStore.Audio.Media.ARTIST} = ?"
-                    } else {
-                        "${MediaStore.Audio.Media.TITLE} = ?"
-                    }
-                    val args = if (hasArtist) arrayOf(track.title, track.artist) else arrayOf(track.title)
+                val cleanTitle = track.title
+                    .replace(Regex("""\s*[\(\[](?:feat|ft)\.?\s+[^\)\]]+[\)\]]""", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("""\s*[\(\[]remix[\)\]]""", RegexOption.IGNORE_CASE), "")
+                    .trim()
+                val candidateTitles = listOf(track.title, cleanTitle).distinct().filter { it.isNotBlank() }
 
-                    contentResolver.query(collectionUri, projection, sel, args, null)?.use { cursor ->
-                        val uri = pickBestCursorMatch(context, cursor, collectionUri, track)
-                        if (uri != null) return uri
-                    }
-                } catch (_: Throwable) {}
+                for (candTitle in candidateTitles) {
+                    try {
+                        val hasArtist = track.artist.isNotBlank() && track.artist != "Unknown Artist"
+                        val cleanArtist = track.artist.split(Regex("[,&]|(?i)\\s+feat\\.?\\s+")).firstOrNull()?.trim().orEmpty()
+                        val candidateArtists = if (hasArtist) listOf(track.artist, cleanArtist).distinct().filter { it.isNotBlank() } else emptyList()
+
+                        var matched: Uri? = null
+                        for (candArtist in candidateArtists) {
+                            contentResolver.query(
+                                collectionUri,
+                                projection,
+                                "${MediaStore.Audio.Media.TITLE} = ? AND ${MediaStore.Audio.Media.ARTIST} = ?",
+                                arrayOf(candTitle, candArtist),
+                                null
+                            )?.use { cursor ->
+                                matched = pickBestCursorMatch(context, cursor, collectionUri, track)
+                            }
+                            if (matched != null) return matched
+                        }
+
+                        // Also try TITLE alone with duration/size matching
+                        contentResolver.query(
+                            collectionUri,
+                            projection,
+                            "${MediaStore.Audio.Media.TITLE} = ?",
+                            arrayOf(candTitle),
+                            null
+                        )?.use { cursor ->
+                            matched = pickBestCursorMatch(context, cursor, collectionUri, track)
+                        }
+                        if (matched != null) return matched
+                    } catch (_: Throwable) {}
+                }
             }
 
             // Strategy D: DATA column suffix LIKE %/fileName
@@ -1085,8 +1156,13 @@ object TrackSourceResolver {
         safDocumentUriFinderForTesting?.let { return it(context, track) }
         val path = track.filePath.removePrefix("file://")
         val relPath = CanonicalStorageHelper.toStorageRelativePath(path).ifBlank { track.storageRelativePath }
-        val fileName = File(path).name.ifBlank {
-            "${track.title}.${track.format.lowercase(Locale.ROOT).ifBlank { "wav" }}"
+        val fileName = if (!path.startsWith("content://") && File(path).name.contains('.')) {
+            File(path).name
+        } else {
+            val fromRel = track.storageRelativePath.substringAfterLast('/').takeIf { it.contains('.') }
+            fromRel ?: if (track.title.isNotBlank() && track.title != "<unknown>") {
+                "${track.title}.${track.format.lowercase(Locale.ROOT).ifBlank { "wav" }}"
+            } else ""
         }
 
         // Fast lookup via SafStorageManager
@@ -1095,7 +1171,7 @@ object TrackSourceResolver {
             return fastDoc!!.uri
         }
 
-        val persistedTrees = SafStorageManager.getPersistedWriteFolderUris(context)
+        val persistedTrees = SafStorageManager.getPersistedAccessibleFolderUris(context)
         for (treeUri in persistedTrees) {
             val rootDoc = try { DocumentFile.fromTreeUri(context, treeUri) } catch (_: Throwable) { null }
             if (rootDoc == null || !rootDoc.exists() || !rootDoc.canRead()) continue

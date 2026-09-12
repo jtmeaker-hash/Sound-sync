@@ -470,6 +470,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             if (result.success) {
                 showSnackbar("Reconnected '${track.title}' to audio file!")
                 updateTrackInPlaybackQueue(result.track)
+                if (audioEngine.currentTrack.value?.id == result.track.id) {
+                    val wasPlaying = audioEngine.isPlaying.value
+                    audioEngine.loadTrack(result.track, autoPlay = wasPlaying)
+                }
             } else {
                 showSnackbar(result.message)
             }
@@ -2610,7 +2614,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 playbackQueue.value = emptyList()
                 queueIndex.value = 0
             }
-            if (audioEngine.currentTrack.value?.id == effectiveTrack.id) {
+            val currentLoaded = audioEngine.currentTrack.value
+            if (currentLoaded?.id == effectiveTrack.id &&
+                currentLoaded.filePath == effectiveTrack.filePath &&
+                currentLoaded.resolvedUri == effectiveTrack.resolvedUri &&
+                !effectiveTrack.hasPlaybackIssue) {
                 audioEngine.togglePlayPause()
             } else {
                 audioEngine.loadTrack(effectiveTrack, autoPlay = true)
