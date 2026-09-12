@@ -129,8 +129,12 @@ object MediaScannerHelper {
                         val dateModifiedSec = if (dateModifiedCol != -1) cursor.getLong(dateModifiedCol) else 0L
                         val rawTrackNum = if (trackCol != -1) cursor.getInt(trackCol) else 0
 
-                        val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
-                        val targetPath = dataPath.ifBlank { contentUri.toString() }
+                        val contentUri = ContentUris.withAppendedId(collectionUri, id)
+                        // Under Android Scoped Storage, raw paths on secondary/removable storage cannot be opened directly.
+                        // Prefer MediaStore content URI; only store raw path for primary internal storage if genuinely readable.
+                        val isRemovable = StorageAvailabilityHelper.isExternalStoragePath(dataPath)
+                        val isRawReadable = !isRemovable && dataPath.isNotBlank() && TrackSourceResolver.isGenuinelyRawReadable(File(dataPath))
+                        val targetPath = if (isRawReadable) dataPath else contentUri.toString()
 
                         val rawDurationSec = if (durationMs > 1000L) (durationMs / 1000).toInt() else 0
 
@@ -189,7 +193,7 @@ object MediaScannerHelper {
                             }
                         } else {
                             // Check duplicate protection fallback
-                            if (seenFingerprints.contains(fingerprint) || seenPaths.contains(targetPath)) {
+                            if (seenFingerprints.contains(fingerprint) || seenPaths.contains(targetPath) || (dataPath.isNotBlank() && seenPaths.contains(dataPath))) {
                                 totalSkipped++
                                 continue
                             }
@@ -306,6 +310,7 @@ object MediaScannerHelper {
 
                         seenFingerprints.add(fingerprint)
                         seenPaths.add(targetPath)
+                        if (dataPath.isNotBlank()) seenPaths.add(dataPath)
                         if (reconcilerIndexes != null) {
                             TrackIdentityReconciler.registerTrackInIndices(com.example.data.TrackEntity.fromTrack(track), reconcilerIndexes)
                         }

@@ -26,7 +26,11 @@ enum class PlayabilityStatus(
     UNKNOWN_PLAYBACK_ERROR("Playback Error", "Can't Play", false, true),
     REPAIRING("Repairing...", "Repairing", false, false),
     REPAIRED("Repaired & Playable", "Repaired", true, false),
-    REPAIR_FAILED("Repair Failed", "Unresolved", false, true)
+    REPAIR_FAILED("Repair Failed", "Unresolved", false, true),
+    VOLUME_UNAVAILABLE("Volume Disconnected", "Unmounted", false, true),
+    PERMISSION_REQUIRED("Permission Required", "Need Permission", false, true),
+    SOURCE_STALE("Stale Media Source", "Source Stale", false, true),
+    RELOCATED("Track Relocated", "Relocated", false, true)
 }
 
 /**
@@ -68,6 +72,9 @@ data class PlayabilityDiagnosticReport(
     val isDecoderInitialized: Boolean = false,
     val isSampleDecoded: Boolean = false,
     val validationTimestamp: Long = System.currentTimeMillis(),
+    val originalExceptionClass: String? = null,
+    val originalExceptionMessage: String? = null,
+    val resolvedSourceType: String? = null,
     val availableActions: List<RepairActionType> = listOf(
         RepairActionType.FIX_AUTOMATICALLY,
         RepairActionType.LOCATE_FILE,
@@ -79,9 +86,13 @@ data class PlayabilityDiagnosticReport(
         get() = when (status) {
             PlayabilityStatus.MISSING_FILE,
             PlayabilityStatus.STALE_URI,
-            PlayabilityStatus.MEDIASTORE_MISMATCH -> PlayabilityCategory.MISSING_FILES
+            PlayabilityStatus.MEDIASTORE_MISMATCH,
+            PlayabilityStatus.VOLUME_UNAVAILABLE,
+            PlayabilityStatus.SOURCE_STALE,
+            PlayabilityStatus.RELOCATED -> PlayabilityCategory.MISSING_FILES
 
-            PlayabilityStatus.PERMISSION_DENIED -> PlayabilityCategory.PERMISSION_PROBLEMS
+            PlayabilityStatus.PERMISSION_DENIED,
+            PlayabilityStatus.PERMISSION_REQUIRED -> PlayabilityCategory.PERMISSION_PROBLEMS
 
             PlayabilityStatus.UNSUPPORTED_FORMAT,
             PlayabilityStatus.DECODER_ERROR,

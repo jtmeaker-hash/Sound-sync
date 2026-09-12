@@ -222,8 +222,8 @@ private fun BrokenTrackItemCard(
 ) {
     val statusColor = when (track.playability) {
         PlayabilityStatus.PLAYABLE, PlayabilityStatus.REPAIRED -> Color(0xFF4CAF50)
-        PlayabilityStatus.MISSING_FILE, PlayabilityStatus.STALE_URI, PlayabilityStatus.MEDIASTORE_MISMATCH -> MaterialTheme.colorScheme.error
-        PlayabilityStatus.PERMISSION_DENIED -> Color(0xFFFF9800)
+        PlayabilityStatus.MISSING_FILE, PlayabilityStatus.STALE_URI, PlayabilityStatus.MEDIASTORE_MISMATCH, PlayabilityStatus.VOLUME_UNAVAILABLE, PlayabilityStatus.SOURCE_STALE, PlayabilityStatus.RELOCATED -> MaterialTheme.colorScheme.error
+        PlayabilityStatus.PERMISSION_DENIED, PlayabilityStatus.PERMISSION_REQUIRED -> Color(0xFFFF9800)
         PlayabilityStatus.UNSUPPORTED_FORMAT -> Color(0xFFE91E63)
         PlayabilityStatus.DECODER_ERROR, PlayabilityStatus.CORRUPTED_FILE, PlayabilityStatus.INVALID_CONTAINER, PlayabilityStatus.READ_ERROR -> MaterialTheme.colorScheme.error
         else -> Color(0xFFFFB300)

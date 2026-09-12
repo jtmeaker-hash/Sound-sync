@@ -1766,8 +1766,8 @@ private fun InspectorPlayabilityHealthCard(
     val isPlayable = track.isActuallyPlayable
     val statusColor = when (status) {
         com.example.model.PlayabilityStatus.PLAYABLE, com.example.model.PlayabilityStatus.REPAIRED -> NeonGreen
-        com.example.model.PlayabilityStatus.MISSING_FILE, com.example.model.PlayabilityStatus.STALE_URI, com.example.model.PlayabilityStatus.MEDIASTORE_MISMATCH -> NeonRed
-        com.example.model.PlayabilityStatus.PERMISSION_DENIED -> NeonAmber
+        com.example.model.PlayabilityStatus.MISSING_FILE, com.example.model.PlayabilityStatus.STALE_URI, com.example.model.PlayabilityStatus.MEDIASTORE_MISMATCH, com.example.model.PlayabilityStatus.VOLUME_UNAVAILABLE, com.example.model.PlayabilityStatus.SOURCE_STALE, com.example.model.PlayabilityStatus.RELOCATED -> NeonRed
+        com.example.model.PlayabilityStatus.PERMISSION_DENIED, com.example.model.PlayabilityStatus.PERMISSION_REQUIRED -> NeonAmber
         com.example.model.PlayabilityStatus.UNSUPPORTED_FORMAT -> DeckBPink
         com.example.model.PlayabilityStatus.DECODER_ERROR, com.example.model.PlayabilityStatus.CORRUPTED_FILE, com.example.model.PlayabilityStatus.INVALID_CONTAINER, com.example.model.PlayabilityStatus.READ_ERROR -> NeonRed
         else -> NeonAmber

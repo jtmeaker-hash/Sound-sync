@@ -40,6 +40,7 @@ import com.example.model.StorageSource
 import com.example.model.StorageSourceType
 import com.example.model.SyncState
 import com.example.model.Track
+import com.example.model.TrackLayoutMode
 import com.example.model.UpdateInfo
 import com.example.model.UpdateState
 import com.example.update.UpdateCheckWorker
@@ -1639,10 +1640,37 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         
         // Take persistable permission
         SafStorageManager.takePersistablePermissions(app, treeUri)
+
+        // Automatically reconcile any existing library tracks on this volume
+        viewModelScope.launch(Dispatchers.IO) {
+            com.example.storage.TrackSourceResolver.onRemovableStorageFolderGranted(app, treeUri, trackDao)
+        }
         
         // Launch DocumentFile background scanning service
         startBackgroundScanService(treeUri, folderName)
         showSnackbar("Starting background DocumentFile scanner for '$folderName'...")
+    }
+
+    fun onRemovableStorageFolderGranted(treeUri: Uri, retryTrack: Track? = null) {
+        val app = getApplication<Application>()
+        SafStorageManager.takePersistablePermissions(app, treeUri)
+        viewModelScope.launch {
+            showSnackbar("Reconciling removable storage audio tracks...")
+            val summary = com.example.storage.TrackSourceResolver.onRemovableStorageFolderGranted(app, treeUri, trackDao)
+            if (summary.reconciledCount > 0) {
+                showSnackbar("Successfully reconciled ${summary.reconciledCount} track(s) on removable volume!")
+                if (retryTrack != null) {
+                    val updatedEntity = trackDao.getTrackById(retryTrack.id)
+                    if (updatedEntity != null) {
+                        val updatedTrack = updatedEntity.toTrack()
+                        updateTrackInPlaybackQueue(updatedTrack)
+                        playTrack(updatedTrack)
+                    }
+                }
+            } else {
+                showSnackbar("Permission granted for volume. No existing tracks needed reconciliation.")
+            }
+        }
     }
 
     fun startBackgroundScanService(treeUri: Uri, label: String = "Audio Storage") {

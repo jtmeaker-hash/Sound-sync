@@ -149,12 +149,12 @@ interface TrackDao {
     suspend fun updatePlayabilityStatus(
         id: String,
         status: String,
-        errorCode: String?,
-        errorMessage: String?,
-        timestamp: Long,
-        resolvedUri: String?,
-        fileSize: Long,
-        fileModified: Long
+        errorCode: String? = null,
+        errorMessage: String? = null,
+        timestamp: Long = System.currentTimeMillis(),
+        resolvedUri: String? = null,
+        fileSize: Long = 0L,
+        fileModified: Long = 0L
     )
 
     @Query("UPDATE tracks SET playabilityStatus = :status, lastRepairAttempt = :timestamp, resolvedUri = :resolvedUri, filePath = CASE WHEN :newFilePath IS NOT NULL AND :newFilePath != '' THEN :newFilePath ELSE filePath END WHERE id = :id")

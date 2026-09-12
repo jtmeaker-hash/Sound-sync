@@ -79,7 +79,7 @@ object StorageAvailabilityHelper {
         if (root == null || root.contains("emulated")) return true
         return try {
             val dir = File(root)
-            dir.exists() && dir.canRead()
+            dir.exists()
         } catch (_: Throwable) {
             false
         }
@@ -146,26 +146,29 @@ object StorageAvailabilityHelper {
             val segments = uri.pathSegments
             val volumeId = segments.firstOrNull { it.matches(Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")) }
             if (volumeId != null) {
-                val volDir = File("/storage/$volumeId")
-                return !volDir.exists() || !volDir.canRead()
+                return !TrackSourceResolver.isRemovableStorageVolumeMounted(context, volumeId)
             }
             return false
         }
 
         // Direct file paths on external storage
         if (isExternalStorageTrack(track)) {
+            val volumeInfo = TrackSourceResolver.getStorageVolumeForPath(context, path)
+            if (volumeInfo != null) {
+                return !volumeInfo.isMounted
+            }
+
             val root = getStorageRoot(path.removePrefix("file://"))
             if (root != null && !root.contains("emulated")) {
                 val rootDir = File(root)
-                return !rootDir.exists() || !rootDir.canRead()
+                return !rootDir.exists()
             }
             // Check UUID volume format /storage/XXXX-XXXX
             val cleanPath = path.removePrefix("file://")
             val volumeMatch = Regex(".*/storage/([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})(/.*)?").find(cleanPath)
             if (volumeMatch != null) {
                 val vol = volumeMatch.groupValues[1]
-                val volDir = File("/storage/$vol")
-                return !volDir.exists() || !volDir.canRead()
+                return !TrackSourceResolver.isRemovableStorageVolumeMounted(context, vol)
             }
         }
         return false
@@ -177,8 +180,9 @@ object StorageAvailabilityHelper {
     fun isTrackPathAvailable(context: Context, filePath: String): Boolean {
         if (filePath.startsWith("demo://")) return true
         if (filePath.startsWith("content://")) {
+            val uri = Uri.parse(filePath)
+            TrackSourceResolver.contentUriPlayableCheckerForTesting?.let { return it(context, uri) }
             return try {
-                val uri = Uri.parse(filePath)
                 context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true }
                     ?: context.contentResolver.openFileDescriptor(uri, "r")?.use { true }
                     ?: context.contentResolver.openInputStream(uri)?.use { true }
@@ -188,14 +192,7 @@ object StorageAvailabilityHelper {
             }
         }
         val p = filePath.removePrefix("file://")
-        val root = getStorageRoot(p)
-        if (root != null && !root.contains("emulated")) {
-            val rootDir = File(root)
-            if (!rootDir.exists() || !rootDir.canRead()) {
-                return false
-            }
-        }
         val file = File(p)
-        return file.exists() && file.canRead()
+        return TrackSourceResolver.isGenuinelyRawReadable(file)
     }
 }

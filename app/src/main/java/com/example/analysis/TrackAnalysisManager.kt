@@ -368,6 +368,43 @@ class TrackAnalysisManager private constructor(
             return@withContext true
         }
 
+        var updatedTrack = track
+
+        // Pre-check playability and storage availability before opening media streams
+        val isPathAccessible = com.example.storage.StorageAvailabilityHelper.isTrackPathAvailable(context, track.filePath)
+        if (!isPathAccessible || track.hasPlaybackIssue ||
+            track.playability == com.example.model.PlayabilityStatus.VOLUME_UNAVAILABLE ||
+            track.playability == com.example.model.PlayabilityStatus.PERMISSION_REQUIRED ||
+            track.playability == com.example.model.PlayabilityStatus.PERMISSION_DENIED ||
+            track.playability == com.example.model.PlayabilityStatus.READ_ERROR ||
+            track.playability == com.example.model.PlayabilityStatus.MISSING_FILE
+        ) {
+            val playablePath = com.example.storage.TrackSelfHealingResolver.resolveAnyPlayablePath(context, track)
+            if (playablePath != null && playablePath != track.filePath) {
+                trackDao.updateFilePath(track.id, playablePath)
+                trackDao.updatePlayabilityStatus(track.id, com.example.model.PlayabilityStatus.PLAYABLE.name, null, null)
+                updatedTrack = track.copy(filePath = playablePath, resolvedUri = playablePath)
+            } else if (!isPathAccessible) {
+                val volInfo = com.example.storage.TrackSourceResolver.getStorageVolumeForPath(context, track.filePath)
+                val status = if (volInfo?.isMounted == false) {
+                    com.example.model.PlayabilityStatus.VOLUME_UNAVAILABLE.name
+                } else {
+                    track.playabilityStatus
+                }
+                val code = if (volInfo?.isMounted == false) "ERR_STORAGE_UNMOUNTED" else (track.playbackErrorCode ?: "ERR_SOURCE_INACCESSIBLE")
+                trackDao.updatePlayabilityStatus(track.id, status, code, "Storage file inaccessible during analysis")
+                trackDao.updateTrackAnalysisStatus(
+                    id = track.id,
+                    state = AnalysisState.FAILED.name,
+                    lastAnalysedAt = System.currentTimeMillis(),
+                    reason = "Source file inaccessible ($code)",
+                    retryCount = (track.analysisRetryCount + 1).coerceAtMost(5)
+                )
+                Log.d(TAG, "Track '${track.title}' source path is not accessible. Skipping analysis with backoff.")
+                return@withContext false
+            }
+        }
+
         trackDao.updateTrackAnalysisStatus(
             id = track.id,
             state = AnalysisState.ANALYSING.name,
@@ -375,8 +412,6 @@ class TrackAnalysisManager private constructor(
             reason = null,
             retryCount = track.analysisRetryCount
         )
-
-        var updatedTrack = track
 
         try {
             // 1. Read embedded tags for accurate local metadata if missing

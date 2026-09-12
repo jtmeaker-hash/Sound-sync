@@ -79,6 +79,13 @@ object TrackSelfHealingResolver {
 
         Log.i(TAG, "[TrackSelfHealing] Starting self-healing for '${track.title}' (id=${track.id}, stale path='$originalPath')")
 
+        // Strategy 0: Central TrackSourceResolver multi-tier resolution
+        val sourceResolution = TrackSourceResolver.resolveTrackSource(context, track, persistToDb = (trackDao != null), trackDao = trackDao)
+        if (sourceResolution.isPlayable && sourceResolution.resolvedUriOrPath != null && sourceResolution.resolvedUriOrPath != originalPath) {
+            Log.i(TAG, "[TrackSelfHealing] SUCCESS via TrackSourceResolver: healed '$originalPath' -> '${sourceResolution.resolvedUriOrPath}' (type=${sourceResolution.sourceType})")
+            return@withContext applyHealedPath(context, track, sourceResolution.resolvedUriOrPath, trackDao)
+        }
+
         // Strategy 1: MediaStore ID lookup
         val fromMediaStoreId = resolveFromMediaStoreId(context, track)
         if (fromMediaStoreId != null && StorageAvailabilityHelper.isTrackPathAvailable(context, fromMediaStoreId)) {
@@ -131,6 +138,19 @@ object TrackSelfHealingResolver {
     fun resolveAnyPlayablePath(context: Context, track: Track): String? {
         if (StorageAvailabilityHelper.isTrackPathAvailable(context, track.filePath)) {
             return track.filePath
+        }
+
+        // Fast lookups via TrackSourceResolver
+        if (!track.filePath.startsWith("content://") && !track.filePath.startsWith("demo://") && !track.filePath.startsWith("http")) {
+            val cleanPath = track.filePath.removePrefix("file://")
+            val mediaUri = TrackSourceResolver.findMediaStoreUriForPath(context, cleanPath)
+            if (mediaUri != null && isUriReadable(context, Uri.parse(mediaUri))) {
+                return mediaUri
+            }
+            val safUri = CanonicalStorageHelper.findAccessibleSafUriForPath(context, cleanPath)
+            if (safUri != null && isUriReadable(context, Uri.parse(safUri))) {
+                return safUri
+            }
         }
 
         // Try fast lookups
@@ -502,6 +522,7 @@ object TrackSelfHealingResolver {
     }
 
     private fun isUriReadable(context: Context, uri: Uri): Boolean {
+        TrackSourceResolver.contentUriPlayableCheckerForTesting?.let { return it(context, uri) }
         return try {
             context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true }
                 ?: context.contentResolver.openFileDescriptor(uri, "r")?.use { true }
@@ -532,32 +553,68 @@ object TrackSelfHealingResolver {
         val cleanPath = path.removePrefix("file://")
         val directFile = if (isDirectFile) File(cleanPath) else null
 
-        // 1. If direct file exists on disk, check structural integrity
+        // 1. If direct file exists on disk, check genuine raw readability and structural integrity
         if (directFile != null && directFile.exists()) {
-            val validation = AudioTagWriter.validateRewrittenAudio(directFile, directFile.extension, null)
-            if (validation is AudioValidationResult.Invalid) {
-                // Check if a restorable backup file exists
-                val parent = directFile.parentFile
-                val backupFile = parent?.listFiles { _, name ->
-                    name.startsWith(".${directFile.name}.") && name.endsWith(".bak")
-                }?.firstOrNull { it.length() > 0 }
+            if (TrackSourceResolver.isGenuinelyRawReadable(directFile)) {
+                val validation = AudioTagWriter.validateRewrittenAudio(directFile, directFile.extension, null)
+                if (validation is AudioValidationResult.Invalid) {
+                    // Check if a restorable backup file exists
+                    val parent = directFile.parentFile
+                    val backupFile = parent?.listFiles { _, name ->
+                        name.startsWith(".${directFile.name}.") && name.endsWith(".bak")
+                    }?.firstOrNull { it.length() > 0 }
 
+                    return PlaybackDiagnostic(
+                        trackId = track.id,
+                        issueType = PlaybackIssueType.CORRUPTED_FILE,
+                        message = "Audio file is corrupted (${validation.reason})",
+                        details = "The audio file container or stream was damaged during a previous write. Backup available: ${backupFile != null}.",
+                        canAutoRepair = backupFile != null
+                    )
+                }
+                // File is valid and playable
                 return PlaybackDiagnostic(
                     trackId = track.id,
-                    issueType = PlaybackIssueType.CORRUPTED_FILE,
-                    message = "Audio file is corrupted (${validation.reason})",
-                    details = "The audio file container or stream was damaged during a previous write. Backup available: ${backupFile != null}.",
-                    canAutoRepair = backupFile != null
+                    issueType = PlaybackIssueType.NONE,
+                    message = "Track is playable",
+                    details = "Direct file is intact and decodable.",
+                    canAutoRepair = false
                 )
+            } else {
+                // Direct file exists on filesystem but cannot be opened via FileInputStream (e.g. Scoped Storage on removable volume)
+                val isDisconnected = StorageAvailabilityHelper.isRootGenuinelyDisconnected(context, track)
+                if (isDisconnected) {
+                    return PlaybackDiagnostic(
+                        trackId = track.id,
+                        issueType = PlaybackIssueType.DISCONNECTED_STORAGE,
+                        message = "Storage device is disconnected",
+                        details = "The volume containing this audio file is currently not mounted.",
+                        canAutoRepair = false
+                    )
+                }
+                val mediaUri = TrackSourceResolver.findMediaStoreUriForPath(context, cleanPath)
+                if (mediaUri != null && isUriReadable(context, Uri.parse(mediaUri))) {
+                    return PlaybackDiagnostic(
+                        trackId = track.id,
+                        issueType = PlaybackIssueType.STALE_URI_AFTER_METADATA_REWRITE,
+                        message = "Raw file blocked by Scoped Storage; MediaStore URI available",
+                        details = "Raw filesystem access to external volume blocked, but track is indexed in MediaStore.",
+                        canAutoRepair = true,
+                        suggestedPath = mediaUri
+                    )
+                }
+                val safUri = CanonicalStorageHelper.findAccessibleSafUriForPath(context, cleanPath)
+                if (safUri != null && isUriReadable(context, Uri.parse(safUri))) {
+                    return PlaybackDiagnostic(
+                        trackId = track.id,
+                        issueType = PlaybackIssueType.STALE_URI_AFTER_METADATA_REWRITE,
+                        message = "Raw file blocked by Scoped Storage; SAF Document available",
+                        details = "Raw filesystem access blocked, but track is accessible via SAF permission grant.",
+                        canAutoRepair = true,
+                        suggestedPath = safUri
+                    )
+                }
             }
-            // File is valid and playable
-            return PlaybackDiagnostic(
-                trackId = track.id,
-                issueType = PlaybackIssueType.NONE,
-                message = "Track is playable",
-                details = "Direct file is intact and decodable.",
-                canAutoRepair = false
-            )
         }
 
         // 2. If content:// URI, check readability

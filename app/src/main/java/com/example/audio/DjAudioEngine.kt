@@ -1441,12 +1441,10 @@ class DjAudioEngine(private val context: Context) {
                     ?: context.contentResolver.openFileDescriptor(uri, "r")?.use { true }
                     ?: context.contentResolver.openInputStream(uri)?.use { true }
                     ?: false
-            } else if (uriOrPath.startsWith("file://")) {
-                val file = File(Uri.parse(uriOrPath).path ?: "")
-                file.exists() && file.canRead()
             } else {
-                val file = File(uriOrPath)
-                file.exists() && file.canRead()
+                val cleanPath = uriOrPath.removePrefix("file://")
+                val file = File(cleanPath)
+                com.example.storage.TrackSourceResolver.isGenuinelyRawReadable(file)
             }
         } catch (_: Throwable) {
             false
@@ -1454,28 +1452,59 @@ class DjAudioEngine(private val context: Context) {
     }
 
     private fun setExtractorDataSource(extractor: MediaExtractor, uriOrPath: String) {
-        if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
+        if (uriOrPath.startsWith("content://")) {
             val uri = Uri.parse(uriOrPath)
             try {
                 extractor.setDataSource(context, uri, null)
                 return
             } catch (_: Exception) {}
-            val cleanPath = uriOrPath.removePrefix("file://")
-            val file = File(cleanPath)
-            if (file.exists() && file.canRead()) {
-                extractor.setDataSource(cleanPath)
-                return
-            }
+            try {
+                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                    extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    return
+                }
+            } catch (_: Exception) {}
+            try {
+                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    extractor.setDataSource(pfd.fileDescriptor)
+                    return
+                }
+            } catch (_: Exception) {}
         }
+
         val cleanPath = uriOrPath.removePrefix("file://")
         val file = File(cleanPath)
-        if (file.exists() && file.canRead()) {
-            extractor.setDataSource(cleanPath)
-            return
+
+        if (com.example.storage.TrackSourceResolver.isGenuinelyRawReadable(file)) {
+            try {
+                extractor.setDataSource(cleanPath)
+                return
+            } catch (_: Exception) {}
         }
+
+        // Under scoped storage or unreadable raw paths, resolve via MediaStore or SAF
+        val mediaStoreUri = com.example.storage.TrackSourceResolver.findMediaStoreUriForPath(context, cleanPath)
+        if (mediaStoreUri != null) {
+            try {
+                extractor.setDataSource(context, Uri.parse(mediaStoreUri), null)
+                return
+            } catch (_: Exception) {}
+        }
+
+        val safUriStr = com.example.storage.CanonicalStorageHelper.findAccessibleSafUriForPath(context, cleanPath)
+        if (safUriStr != null) {
+            try {
+                extractor.setDataSource(context, Uri.parse(safUriStr), null)
+                return
+            } catch (_: Exception) {}
+        }
+
+        // Fallbacks
         if (uriOrPath.startsWith("file://")) {
-            extractor.setDataSource(context, Uri.parse(uriOrPath), null)
-            return
+            try {
+                extractor.setDataSource(context, Uri.parse(uriOrPath), null)
+                return
+            } catch (_: Exception) {}
         }
         extractor.setDataSource(uriOrPath)
     }
@@ -1537,23 +1566,51 @@ class DjAudioEngine(private val context: Context) {
         private var frameBuffer = ShortArray(0)
 
         init {
-            if (uriOrPath.startsWith("content://") || uriOrPath.startsWith("file://")) {
+            var dataSourceSet = false
+            if (uriOrPath.startsWith("content://")) {
                 val uri = Uri.parse(uriOrPath)
                 try {
                     extractor.setDataSource(context, uri, null)
-                } catch (_: Exception) {
-                    val cleanPath = uriOrPath.removePrefix("file://")
-                    extractor.setDataSource(cleanPath)
+                    dataSourceSet = true
+                } catch (_: Exception) {}
+            }
+            if (!dataSourceSet) {
+                val cleanPath = uriOrPath.removePrefix("file://")
+                val f = File(cleanPath)
+                if (com.example.storage.TrackSourceResolver.isGenuinelyRawReadable(f)) {
+                    try {
+                        extractor.setDataSource(cleanPath)
+                        dataSourceSet = true
+                    } catch (_: Exception) {}
                 }
-            } else {
-                val clean = uriOrPath.removePrefix("file://")
-                val f = File(clean)
-                if (f.exists() && f.canRead()) {
-                    extractor.setDataSource(clean)
-                } else if (uriOrPath.startsWith("file://")) {
-                    extractor.setDataSource(context, Uri.parse(uriOrPath), null)
-                } else {
-                    extractor.setDataSource(uriOrPath)
+                if (!dataSourceSet) {
+                    val mediaStoreUri = com.example.storage.TrackSourceResolver.findMediaStoreUriForPath(context, cleanPath)
+                    if (mediaStoreUri != null) {
+                        try {
+                            extractor.setDataSource(context, Uri.parse(mediaStoreUri), null)
+                            dataSourceSet = true
+                        } catch (_: Exception) {}
+                    }
+                }
+                if (!dataSourceSet) {
+                    val safUri = com.example.storage.CanonicalStorageHelper.findAccessibleSafUriForPath(context, cleanPath)
+                    if (safUri != null) {
+                        try {
+                            extractor.setDataSource(context, Uri.parse(safUri), null)
+                            dataSourceSet = true
+                        } catch (_: Exception) {}
+                    }
+                }
+                if (!dataSourceSet) {
+                    if (uriOrPath.startsWith("file://")) {
+                        try {
+                            extractor.setDataSource(context, Uri.parse(uriOrPath), null)
+                            dataSourceSet = true
+                        } catch (_: Exception) {}
+                    }
+                    if (!dataSourceSet) {
+                        extractor.setDataSource(uriOrPath)
+                    }
                 }
             }
             var audioIndex = -1

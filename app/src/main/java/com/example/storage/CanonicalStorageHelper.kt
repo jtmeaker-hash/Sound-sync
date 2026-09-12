@@ -176,7 +176,15 @@ object CanonicalStorageHelper {
             return canonical
         }
 
-        // 3. Reverse lookup: If given a filesystem path, can we find an accessible SAF URI?
+        // 3. MediaStore lookup for raw path
+        if (!pathOrUri.startsWith("content://")) {
+            val mediaStoreUri = TrackSourceResolver.findMediaStoreUriForPath(context, canonical)
+            if (mediaStoreUri != null && isReferenceReadable(context, mediaStoreUri.toString())) {
+                return mediaStoreUri.toString()
+            }
+        }
+
+        // 4. Reverse lookup: If given a filesystem path, can we find an accessible SAF URI?
         if (!pathOrUri.startsWith("content://")) {
             val safUri = findAccessibleSafUriForPath(context, canonical)
             if (safUri != null && isReferenceReadable(context, safUri)) {
@@ -229,7 +237,7 @@ object CanonicalStorageHelper {
         val cleanPath = pathOrUri.removePrefix("file://")
         return try {
             val f = File(cleanPath)
-            f.exists() && f.canRead()
+            TrackSourceResolver.isGenuinelyRawReadable(f)
         } catch (_: Exception) {
             false
         }

@@ -351,6 +351,12 @@ object LocalFileSystemScanner {
         val trackId = "usb_" + java.util.UUID.nameUUIDFromBytes(path.toByteArray()).toString()
         val dir = file.parent ?: "/"
 
+        val isRemovable = StorageAvailabilityHelper.isExternalStoragePath(path)
+        val mediaStoreUri = if (isRemovable || !TrackSourceResolver.isGenuinelyRawReadable(file)) {
+            TrackSourceResolver.findMediaStoreUriForPath(context, path)
+        } else null
+        val effectivePath = mediaStoreUri ?: path
+
         return Track(
             id = trackId,
             title = title,
@@ -367,7 +373,8 @@ object LocalFileSystemScanner {
             bitrateKbps = bitrateKbps,
             format = format,
             fileSizeMb = String.format(Locale.US, "%.1f", sizeMb).toDoubleOrNull() ?: sizeMb,
-            filePath = path,
+            filePath = effectivePath,
+            resolvedUri = effectivePath,
             directoryPath = dir,
             isOfflineReady = true,
             isAvailable = true,

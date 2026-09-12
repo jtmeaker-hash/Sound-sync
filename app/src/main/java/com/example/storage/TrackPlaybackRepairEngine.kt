@@ -53,7 +53,10 @@ object TrackPlaybackRepairEngine {
         // 1. First test if already accessible (e.g. permission was just granted or USB remounted)
         val initialValidation = PlayabilityValidator.validateTrack(context, track, forceFresh = true)
         if (initialValidation.status == PlayabilityStatus.PLAYABLE) {
+            val resolved = initialValidation.resolvedPath ?: originalPath
             val updated = track.copy(
+                filePath = resolved,
+                resolvedUri = resolved,
                 playabilityStatus = PlayabilityStatus.PLAYABLE.name,
                 playbackErrorCode = null,
                 playbackErrorMessage = null,
@@ -65,7 +68,7 @@ object TrackPlaybackRepairEngine {
                 success = true,
                 track = updated,
                 previousPath = originalPath,
-                newPath = originalPath,
+                newPath = resolved,
                 message = "Track audio file is now accessible and verified playable.",
                 diagnosticReport = initialValidation
             )
@@ -93,7 +96,7 @@ object TrackPlaybackRepairEngine {
                     filePath = healedPath,
                     directoryPath = dir,
                     storageRelativePath = resolvedStoragePath,
-                    playabilityStatus = PlayabilityStatus.REPAIRED.name,
+                    playabilityStatus = PlayabilityStatus.PLAYABLE.name,
                     playbackErrorCode = null,
                     playbackErrorMessage = null,
                     lastPlaybackValidation = System.currentTimeMillis(),
@@ -125,7 +128,7 @@ object TrackPlaybackRepairEngine {
             if (validation.status == PlayabilityStatus.PLAYABLE) {
                 val repairedTrack = track.copy(
                     filePath = canonicalPath,
-                    playabilityStatus = PlayabilityStatus.REPAIRED.name,
+                    playabilityStatus = PlayabilityStatus.PLAYABLE.name,
                     playbackErrorCode = null,
                     playbackErrorMessage = null,
                     lastPlaybackValidation = System.currentTimeMillis(),
@@ -246,5 +249,15 @@ object TrackPlaybackRepairEngine {
             totalFailed = failedCount,
             results = results
         )
+    }
+
+    /**
+     * Groups unplayable tracks by volume UUID when folder permission grant is required.
+     */
+    fun getAffectedVolumesNeedingPermission(
+        context: Context,
+        tracks: List<Track>
+    ): List<VolumePermissionGroup> {
+        return TrackSourceResolver.getAffectedVolumesNeedingPermission(context, tracks)
     }
 }

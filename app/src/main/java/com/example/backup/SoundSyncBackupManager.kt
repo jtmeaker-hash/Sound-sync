@@ -293,6 +293,34 @@ class SoundSyncBackupManager(
                 if (tracksToInsert.isNotEmpty()) {
                     database.trackDao().insertTracks(tracksToInsert)
                 }
+
+                // Reconcile restored tracks with current device storage sources
+                try {
+                    val allRestoredEntities = tracksToInsert + tracksToUpdate
+                    for (entity in allRestoredEntities) {
+                        if (!com.example.storage.StorageAvailabilityHelper.isTrackPathAvailable(context, entity.filePath)) {
+                            val track = entity.toTrack()
+                            val resolution = com.example.storage.TrackSourceResolver.resolveTrackSource(
+                                context,
+                                track,
+                                persistToDb = true,
+                                trackDao = database.trackDao()
+                            )
+                            if (!resolution.isPlayable && resolution.volumeUuid != null) {
+                                val volInfo = com.example.storage.TrackSourceResolver.getStorageVolumeForPath(context, entity.filePath)
+                                val status = if (volInfo?.isMounted == false) {
+                                    com.example.model.PlayabilityStatus.VOLUME_UNAVAILABLE.name
+                                } else if (resolution.requiresFolderAccess) {
+                                    com.example.model.PlayabilityStatus.PERMISSION_REQUIRED.name
+                                } else {
+                                    entity.playabilityStatus
+                                }
+                                val code = if (volInfo?.isMounted == false) "ERR_STORAGE_UNMOUNTED" else if (resolution.requiresFolderAccess) "ERR_SCOPED_STORAGE_RESTRICTION" else null
+                                database.trackDao().updatePlayabilityStatus(entity.id, status, code, null)
+                            }
+                        }
+                    }
+                } catch (_: Throwable) {}
             }
 
             _summaryFlow.value = loadSummary()

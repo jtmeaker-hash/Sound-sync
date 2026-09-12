@@ -18,13 +18,26 @@ import java.io.File
 object AlbumArtHelper {
 
     private const val TAG = "AlbumArtHelper"
-    private val memoryCache = mutableMapOf<String, Bitmap>()
+    private val maxMemoryKb = (Runtime.getRuntime().maxMemory() / 1024).toInt()
+    private val cacheSizeKb = (maxMemoryKb / 8).coerceIn(16 * 1024, 64 * 1024)
+    private val memoryCache = object : android.util.LruCache<String, Bitmap>(cacheSizeKb) {
+        override fun sizeOf(key: String, value: Bitmap): Int {
+            return (value.byteCount / 1024).coerceAtLeast(1)
+        }
+    }
+
+    /**
+     * Synchronously checks if artwork for [track] at [sizePx] is already resident in memory cache.
+     * Allows Composable cards to render immediately without any blank/flicker frames.
+     */
+    fun getCachedArtwork(track: Track, sizePx: Int = 512): Bitmap? {
+        val cacheKey = "${track.id}_${track.filePath.hashCode()}_$sizePx"
+        return memoryCache.get(cacheKey)
+    }
 
     suspend fun getArtworkForTrack(context: Context, track: Track, sizePx: Int = 512): Bitmap = withContext(Dispatchers.IO) {
-        val cacheKey = "${track.id}_${track.filePath.hashCode()}"
-        synchronized(memoryCache) {
-            memoryCache[cacheKey]?.let { return@withContext it }
-        }
+        val cacheKey = "${track.id}_${track.filePath.hashCode()}_$sizePx"
+        memoryCache.get(cacheKey)?.let { return@withContext it }
 
         // 1. Try cached artwork file if present
         val cachePath = track.artworkCachePath ?: track.artworkUrl?.takeIf { it.startsWith("/") || it.startsWith("file://") }
@@ -35,10 +48,7 @@ object AlbumArtHelper {
                 if (cachedFile.exists() && cachedFile.canRead()) {
                     val decoded = decodeFileToBitmap(cachedFile, sizePx)
                     if (decoded != null) {
-                        synchronized(memoryCache) {
-                            if (memoryCache.size > 50) memoryCache.clear()
-                            memoryCache[cacheKey] = decoded
-                        }
+                        memoryCache.put(cacheKey, decoded)
                         return@withContext decoded
                     }
                 }
@@ -56,10 +66,7 @@ object AlbumArtHelper {
             if (cachedFile != null && cachedFile.exists() && cachedFile.length() > 0) {
                 val decoded = decodeFileToBitmap(cachedFile, sizePx)
                 if (decoded != null) {
-                    synchronized(memoryCache) {
-                        if (memoryCache.size > 50) memoryCache.clear()
-                        memoryCache[cacheKey] = decoded
-                    }
+                    memoryCache.put(cacheKey, decoded)
                     return@withContext decoded
                 }
             }
@@ -72,10 +79,7 @@ object AlbumArtHelper {
             if (localResult != null && localResult.file.exists() && localResult.file.length() > 0) {
                 val decoded = decodeFileToBitmap(localResult.file, sizePx)
                 if (decoded != null) {
-                    synchronized(memoryCache) {
-                        if (memoryCache.size > 50) memoryCache.clear()
-                        memoryCache[cacheKey] = decoded
-                    }
+                    memoryCache.put(cacheKey, decoded)
                     return@withContext decoded
                 }
             }
@@ -84,20 +88,13 @@ object AlbumArtHelper {
         // 2b. Direct embedded picture extraction as safety fallback
         val embeddedBitmap = extractEmbeddedPicture(context, track.filePath, sizePx)
         if (embeddedBitmap != null) {
-            synchronized(memoryCache) {
-                if (memoryCache.size > 50) memoryCache.clear()
-                memoryCache[cacheKey] = embeddedBitmap
-            }
+            memoryCache.put(cacheKey, embeddedBitmap)
             return@withContext embeddedBitmap
         }
 
-
         // 3. Fallback: Generate a crisp, vibrant DJ vinyl record artwork Bitmap
         val generated = generateFallbackArtwork(track, sizePx)
-        synchronized(memoryCache) {
-            if (memoryCache.size > 50) memoryCache.clear()
-            memoryCache[cacheKey] = generated
-        }
+        memoryCache.put(cacheKey, generated)
         generated
     }
 
