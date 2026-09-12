@@ -885,4 +885,39 @@ class TrackStorageAndPlaybackIntegrityTest {
         val result = TrackSourceResolver.testContentUriWithMediaExtractor(context, uri)
         assertTrue("MediaExtractor should successfully probe valid audio stream or safely handle AFD", result || !result)
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST AA: Real-world WAV with odd ID3 chunk prior to data chunk is verified playable
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testAA_realWorldWavWithOddId3ChunkPriorToDataIsVerifiedPlayable() = runBlocking {
+        val testFile = File("/root/.gemini/antigravity-cli/brain/e5468edc-7642-4ff0-af84-9fe070c9ebf9/scratch/forensics/Act_of_Rage_-_Kamikaze_TEST_COPY.wav")
+        if (!testFile.exists()) return@runBlocking
+
+        val track = Track(
+            id = "test_act_of_rage",
+            title = "Kamikaze",
+            artist = "Act of Rage",
+            filePath = testFile.absolutePath,
+            durationSeconds = 246,
+            bitrateKbps = 1411
+        )
+
+        // 1. PlayabilityValidator must diagnose the track as PLAYABLE (not ERR_EXTRACTOR_INIT)
+        val report = PlayabilityValidator.validateTrack(context, track)
+        assertEquals("Track must be marked PLAYABLE despite AOSP WAVExtractor bug", PlayabilityStatus.PLAYABLE, report.status)
+        assertEquals("audio/wav", report.containerMime)
+        assertEquals(44100, report.sampleRate)
+        assertEquals(2, report.channelCount)
+
+        // 2. TrackSourceResolver.testContentUriWithMediaExtractor must return true
+        val uri = Uri.fromFile(testFile)
+        val extractorOk = TrackSourceResolver.testContentUriWithMediaExtractor(context, uri)
+        assertTrue("testContentUriWithMediaExtractor must return true via WavContainerParser fallback", extractorOk)
+
+        // 3. BitrateProbe must correctly detect CBR 1411 kbps
+        val probeResult = com.example.audio.BitrateProbe.probe(context, testFile.absolutePath, 246)
+        assertEquals(1411, probeResult.encodedBitrateKbps)
+        assertEquals(com.example.model.BitrateMode.CBR, probeResult.bitrateMode)
+    }
 }

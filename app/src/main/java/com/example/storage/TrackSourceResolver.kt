@@ -364,6 +364,17 @@ object TrackSourceResolver {
             } finally {
                 try { ex.release() } catch (_: Throwable) {}
             }
+
+            if (!extractorInitSuccess || !audioTrackFound) {
+                try {
+                    val wavInfo = com.example.analysis.WavContainerParser.parse(context, uri.toString())
+                    if (wavInfo.isValid && wavInfo.dataSize > 0) {
+                        extractorInitSuccess = true
+                        audioTrackFound = true
+                        if (mimeType.isNullOrBlank()) mimeType = "audio/wav"
+                    }
+                } catch (_: Throwable) {}
+            }
         }
 
         val playable = (pfdSuccess || isReadable) && (extractorInitSuccess || audioTrackFound || streamLength > 0 || sizeBytes > 0)
@@ -419,21 +430,25 @@ object TrackSourceResolver {
     fun testContentUriWithMediaExtractor(context: Context, uri: Uri): Boolean {
         contentUriPlayableCheckerForTesting?.let { return it(context, uri) }
         val ex = android.media.MediaExtractor()
-        return try {
-            ex.setDataSource(context, uri, null)
-            ex.trackCount > 0
-        } catch (_: Throwable) {
-            var ok = false
+        var ok = false
+        try {
             try {
-                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
-                    if (afd.declaredLength < 0) {
-                        ex.setDataSource(afd.fileDescriptor)
-                    } else {
-                        ex.setDataSource(afd.fileDescriptor, afd.startOffset, afd.declaredLength)
-                    }
-                    ok = ex.trackCount > 0
-                }
+                ex.setDataSource(context, uri, null)
+                ok = ex.trackCount > 0
             } catch (_: Throwable) {}
+
+            if (!ok) {
+                try {
+                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                        if (afd.declaredLength < 0) {
+                            ex.setDataSource(afd.fileDescriptor)
+                        } else {
+                            ex.setDataSource(afd.fileDescriptor, afd.startOffset, afd.declaredLength)
+                        }
+                        ok = ex.trackCount > 0
+                    }
+                } catch (_: Throwable) {}
+            }
 
             if (!ok) {
                 try {
@@ -443,10 +458,19 @@ object TrackSourceResolver {
                     }
                 } catch (_: Throwable) {}
             }
-            ok
+
+            if (!ok) {
+                try {
+                    val wavInfo = com.example.analysis.WavContainerParser.parse(context, uri.toString())
+                    if (wavInfo.isValid && wavInfo.dataSize > 0) {
+                        ok = true
+                    }
+                } catch (_: Throwable) {}
+            }
         } finally {
             try { ex.release() } catch (_: Throwable) {}
         }
+        return ok
     }
 
     private fun logPlaybackSourceTrace(

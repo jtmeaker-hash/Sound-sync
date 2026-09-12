@@ -169,6 +169,16 @@ object AudioQualityInspector {
             runCatching { extractor.release() }
         }
 
+        if (codecMime == "audio/unknown") {
+            val wavInfo = WavContainerParser.parse(context, track.filePath)
+            if (wavInfo.isValid && wavInfo.dataSize > 0) {
+                codecMime = "audio/raw"
+                sampleRate = wavInfo.sampleRate
+                channels = wavInfo.numChannels
+                bitDepth = wavInfo.bitsPerSample
+            }
+        }
+
         // 3. Spectral Cutoff Analysis via SpectrogramEngine
         var spectralCutoffKhz: Double? = null
         try {

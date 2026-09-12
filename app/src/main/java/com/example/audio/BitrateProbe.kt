@@ -46,8 +46,13 @@ object BitrateProbe {
             }
             probeExtractor(context, filePathOrUri, fallbackDurationSeconds)
         } catch (e: Exception) {
-            Log.w(TAG, "probe failed for '$filePathOrUri': ${e.message}")
-            Result(0, null, "probe_error")
+            val wav = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
+            if (wav.isValid && wav.dataSize > 0) {
+                Result(wav.bitrateKbps, BitrateMode.CBR, "wav_container")
+            } else {
+                Log.w(TAG, "probe failed for '$filePathOrUri': ${e.message}")
+                Result(0, null, "probe_error")
+            }
         }
     }
 
@@ -84,7 +89,13 @@ object BitrateProbe {
                     break
                 }
             }
-            format ?: return Result(0, null, "no_audio_track")
+            if (format == null) {
+                val wav = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
+                if (wav.isValid && wav.dataSize > 0) {
+                    return Result(wav.bitrateKbps, BitrateMode.CBR, "wav_container")
+                }
+                return Result(0, null, "no_audio_track")
+            }
 
             val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
                 format.getLong(MediaFormat.KEY_DURATION)

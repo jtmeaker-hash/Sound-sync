@@ -124,6 +124,10 @@ object AudioDecoder {
             }
 
             if (audioTrackIndex < 0 || audioFormat == null) {
+                val wavInfo = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
+                if (wavInfo.isValid && wavInfo.dataSize > 0) {
+                    return@withContext decodeWavWaveformPcm(context, track, filePathOrUri, wavInfo, targetBins, onProgress)
+                }
                 Log.w(TAG, "No audio track found in $filePathOrUri")
                 return@withContext null
             }
@@ -367,6 +371,10 @@ object AudioDecoder {
             Log.d(TAG, "decodeRealWaveformPcm cancelled for '${track.title}'")
             throw e
         } catch (e: Throwable) {
+            val wavInfo = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
+            if (wavInfo.isValid && wavInfo.dataSize > 0) {
+                return@withContext decodeWavWaveformPcm(context, track, filePathOrUri, wavInfo, targetBins, onProgress)
+            }
             Log.e(TAG, "decodeRealWaveformPcm error for '${track.title}': ${e.message}", e)
             null
         } finally {
@@ -374,6 +382,163 @@ object AudioDecoder {
             try { codec?.release() } catch (ignored: Exception) {}
             try { extractor.release() } catch (ignored: Exception) {}
         }
+    }
+
+    private fun decodeWavWaveformPcm(
+        context: Context,
+        track: Track,
+        filePathOrUri: String,
+        wavInfo: com.example.analysis.WavContainerInfo,
+        targetBins: Int,
+        onProgress: (percent: Int) -> Unit
+    ): WaveformData? {
+        val binCount = targetBins.coerceIn(600, 7200)
+        val maxPeakInBin = FloatArray(binCount)
+        val sumSqInBin = FloatArray(binCount)
+        val lowSumSqInBin = FloatArray(binCount)
+        val midSumSqInBin = FloatArray(binCount)
+        val highSumSqInBin = FloatArray(binCount)
+        val sampleCountInBin = IntArray(binCount)
+
+        val totalDurationUs = if (wavInfo.durationMs > 0) wavInfo.durationMs * 1000L else (track.durationSeconds.coerceAtLeast(10) * 1_000_000L)
+        val durationMs = totalDurationUs / 1000L
+        val sampleRate = wavInfo.sampleRate
+        val timePerSampleUs = 1_000_000.0 / sampleRate
+
+        var lowFilterState = 0.0f
+        var midFilterState = 0.0f
+        var decodedFrames = 0L
+
+        val pcmReader = com.example.analysis.WavPcmReader(context, filePathOrUri, wavInfo)
+        val chunkFrames = 4096
+        val stereoBuf = ShortArray(chunkFrames * 2)
+
+        pcmReader.use { reader ->
+            while (!reader.isEos) {
+                val framesRead = reader.readStereoFrames(stereoBuf, chunkFrames)
+                if (framesRead <= 0) break
+
+                val presentationTimeUs = (decodedFrames * 1_000_000L) / sampleRate
+
+                for (frameInBuf in 0 until framesRead) {
+                    val left = stereoBuf[frameInBuf * 2].toFloat() / 32768.0f
+                    val right = stereoBuf[frameInBuf * 2 + 1].toFloat() / 32768.0f
+                    val mono = (left + right) * 0.5f
+                    val absS = abs(mono)
+
+                    lowFilterState += 0.08f * (mono - lowFilterState)
+                    val lowSample = lowFilterState
+
+                    midFilterState += 0.25f * (mono - midFilterState)
+                    val midSample = midFilterState - lowFilterState
+
+                    val highSample = mono - midFilterState
+
+                    val currentSampleTimeUs = presentationTimeUs + (frameInBuf * timePerSampleUs).toLong()
+                    val bin = ((currentSampleTimeUs.toDouble() / totalDurationUs.toDouble()) * binCount)
+                        .toInt().coerceIn(0, binCount - 1)
+
+                    if (absS > maxPeakInBin[bin]) maxPeakInBin[bin] = absS
+                    sumSqInBin[bin] += mono * mono
+                    lowSumSqInBin[bin] += lowSample * lowSample
+                    midSumSqInBin[bin] += midSample * midSample
+                    highSumSqInBin[bin] += highSample * highSample
+                    sampleCountInBin[bin]++
+
+                    decodedFrames++
+                }
+
+                val progress = ((decodedFrames.toDouble() * 1_000_000.0 / (sampleRate.toDouble() * totalDurationUs.toDouble())) * 100.0)
+                    .toInt().coerceIn(0, 100)
+                onProgress(progress)
+            }
+        }
+
+        if (decodedFrames < 100) return null
+
+        val peaks = FloatArray(binCount)
+        val lowBand = FloatArray(binCount)
+        val midBand = FloatArray(binCount)
+        val highBand = FloatArray(binCount)
+        val rmsBand = FloatArray(binCount)
+
+        var globalMaxPeak = 0.0001f
+        var globalMaxLow = 0.0001f
+        var globalMaxMid = 0.0001f
+        var globalMaxHigh = 0.0001f
+        var globalMaxRms = 0.0001f
+
+        for (b in 0 until binCount) {
+            val count = sampleCountInBin[b]
+            if (count > 0) {
+                val rms = sqrt(sumSqInBin[b] / count)
+                val maxPeak = maxPeakInBin[b]
+                val transientPeak = max(rms * 0.55f + maxPeak * 0.45f, maxPeak * 0.85f)
+                val low = sqrt(lowSumSqInBin[b] / count)
+                val mid = sqrt(midSumSqInBin[b] / count)
+                val high = sqrt(highSumSqInBin[b] / count)
+
+                peaks[b] = transientPeak
+                rmsBand[b] = rms
+                lowBand[b] = low
+                midBand[b] = mid
+                highBand[b] = high
+
+                if (transientPeak > globalMaxPeak) globalMaxPeak = transientPeak
+                if (rms > globalMaxRms) globalMaxRms = rms
+                if (low > globalMaxLow) globalMaxLow = low
+                if (mid > globalMaxMid) globalMaxMid = mid
+                if (high > globalMaxHigh) globalMaxHigh = high
+            }
+        }
+
+        var lastValidPeak = 0.0f
+        var lastValidLow = 0.0f
+        var lastValidMid = 0.0f
+        var lastValidHigh = 0.0f
+        var lastValidRms = 0.0f
+        for (b in 0 until binCount) {
+            if (sampleCountInBin[b] == 0) {
+                peaks[b] = lastValidPeak * 0.9f
+                lowBand[b] = lastValidLow * 0.9f
+                midBand[b] = lastValidMid * 0.9f
+                highBand[b] = lastValidHigh * 0.9f
+                rmsBand[b] = lastValidRms * 0.9f
+            } else {
+                lastValidPeak = peaks[b]
+                lastValidLow = lowBand[b]
+                lastValidMid = midBand[b]
+                lastValidHigh = highBand[b]
+                lastValidRms = rmsBand[b]
+            }
+        }
+
+        val peakNorm = if (globalMaxPeak > 0f) globalMaxPeak else 1.0f
+        val lowNorm = if (globalMaxLow > 0f) globalMaxLow else 1.0f
+        val midNorm = if (globalMaxMid > 0f) globalMaxMid else 1.0f
+        val highNorm = if (globalMaxHigh > 0f) globalMaxHigh else 1.0f
+        val rmsNorm = if (globalMaxRms > 0f) globalMaxRms else 1.0f
+
+        for (b in 0 until binCount) {
+            peaks[b] = (peaks[b] / peakNorm).coerceIn(0.0f, 1.0f)
+            lowBand[b] = (lowBand[b] / lowNorm).coerceIn(0.0f, 1.0f)
+            midBand[b] = (midBand[b] / midNorm).coerceIn(0.0f, 1.0f)
+            highBand[b] = (highBand[b] / highNorm).coerceIn(0.0f, 1.0f)
+            rmsBand[b] = (rmsBand[b] / rmsNorm).coerceIn(0.0f, 1.0f)
+        }
+
+        return WaveformData(
+            trackId = track.id,
+            durationMs = durationMs,
+            samplePoints = binCount,
+            peaks = peaks,
+            lowBand = lowBand,
+            midBand = midBand,
+            highBand = highBand,
+            bpm = if (track.bpm > 0) track.bpm else 126.0,
+            isRealAudioData = true,
+            rms = rmsBand
+        )
     }
 
     /**
@@ -433,6 +598,21 @@ object AudioDecoder {
             }
 
             if (audioTrackIndex < 0 || audioFormat == null) {
+                val wavInfo = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
+                if (wavInfo.isValid && wavInfo.dataSize > 0) {
+                    val durationMs = if (wavInfo.durationMs > 0) wavInfo.durationMs else (maxDurationSeconds * 1000L)
+                    val maxSamples = (maxDurationSeconds * wavInfo.sampleRate).coerceAtLeast(1024)
+                    val reader = com.example.analysis.WavPcmReader(context, filePathOrUri, wavInfo)
+                    val monoFloats = reader.use { it.readMonoFloats(maxSamples) }
+                    if (monoFloats != null && monoFloats.isNotEmpty()) {
+                        return@withContext DecodedAudioData(
+                            samples = monoFloats,
+                            sampleRate = wavInfo.sampleRate,
+                            channelCount = 1,
+                            durationMs = durationMs
+                        )
+                    }
+                }
                 Log.w(TAG, "No audio track format found in $filePathOrUri")
                 return@withContext null
             }
@@ -559,6 +739,21 @@ object AudioDecoder {
             Log.d(TAG, "Decoder cancelled for: $filePathOrUri")
             throw e
         } catch (e: Throwable) {
+            val wavInfo = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
+            if (wavInfo.isValid && wavInfo.dataSize > 0) {
+                val durationMs = if (wavInfo.durationMs > 0) wavInfo.durationMs else (maxDurationSeconds * 1000L)
+                val maxSamples = (maxDurationSeconds * wavInfo.sampleRate).coerceAtLeast(1024)
+                val reader = com.example.analysis.WavPcmReader(context, filePathOrUri, wavInfo)
+                val monoFloats = reader.use { it.readMonoFloats(maxSamples) }
+                if (monoFloats != null && monoFloats.isNotEmpty()) {
+                    return@withContext DecodedAudioData(
+                        samples = monoFloats,
+                        sampleRate = wavInfo.sampleRate,
+                        channelCount = 1,
+                        durationMs = durationMs
+                    )
+                }
+            }
             Log.e(TAG, "Decoder error for '$filePathOrUri': ${e.message}", e)
             null
         } finally {

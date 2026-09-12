@@ -1455,16 +1455,9 @@ object AudioTagWriter {
             fos.write(fmtChunk.data)
             if (fmtChunk.data.size % 2 != 0) fos.write(0)
 
-            fos.write(id3ChunkBytes)
-            fos.write(listChunkBytes)
-
-            for (p in preservedChunks) {
-                fos.write(p.id.take(4).padEnd(4, ' ').toByteArray(StandardCharsets.US_ASCII))
-                writeLittleEndianInt(fos, p.data.size)
-                fos.write(p.data)
-                if (p.data.size % 2 != 0) fos.write(0)
-            }
-
+            // Write 'data' chunk immediately following 'fmt ' chunk
+            // This is the standard Broadcast WAVE (BWF) layout and avoids the AOSP MediaExtractor
+            // bug where odd-sized metadata chunks preceding 'data' cause desynchronization and ERR_EXTRACTOR_INIT.
             fos.write("data".toByteArray(StandardCharsets.US_ASCII))
             writeLittleEndianInt(fos, dataChunkSize)
 
@@ -1480,8 +1473,20 @@ object AudioTagWriter {
                 fos.write(copyBuf, 0, read)
                 bytesRemaining -= read
             }
+            audioIn.close()
             if (dataChunkSize % 2L != 0L) {
                 fos.write(0)
+            }
+
+            // Append metadata chunks (id3, LIST, preserved) after 'data'
+            fos.write(id3ChunkBytes)
+            fos.write(listChunkBytes)
+
+            for (p in preservedChunks) {
+                fos.write(p.id.take(4).padEnd(4, ' ').toByteArray(StandardCharsets.US_ASCII))
+                writeLittleEndianInt(fos, p.data.size)
+                fos.write(p.data)
+                if (p.data.size % 2 != 0) fos.write(0)
             }
             audioIn.close()
 
