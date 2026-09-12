@@ -190,6 +190,8 @@ class DjAudioEngine(private val context: Context) {
     @Volatile private var activeExtractor: MediaExtractor? = null
     @Volatile private var activeCodec: MediaCodec? = null
     @Volatile private var activeAudioTrack: AudioTrack? = null
+    @Volatile private var activePfd: android.os.ParcelFileDescriptor? = null
+    @Volatile private var activeAfd: android.content.res.AssetFileDescriptor? = null
     @Volatile private var activeSampleRate: Int = 44100
     @Volatile private var activeChannelCount: Int = 2
 
@@ -345,6 +347,14 @@ class DjAudioEngine(private val context: Context) {
         val session = generationGate.next()
         activeSessionId = session
         Log.d(TAG, "loadTrack(track='${track?.title}', autoPlay=$autoPlay, initialSec=$initialPositionSec, session=$session)")
+        if (track != null) {
+            val targetSource = if (!track.resolvedUri.isNullOrBlank() && com.example.storage.TrackSourceResolver.isMediaStoreUri(track.resolvedUri)) {
+                track.resolvedUri
+            } else {
+                track.filePath
+            }
+            Log.i(TAG, "PLAYBACK_SOURCE_TRACE: DB_SOURCE='${track.filePath}', ORIGINAL_SOURCE='${track.filePath}', RESOLVED_SOURCE='${track.resolvedUri ?: track.filePath}', TARGET_SOURCE='$targetSource'")
+        }
 
         // 2. Immediately cut off previous audio and cancel any background jobs
         prepareJob?.cancel()
@@ -683,7 +693,11 @@ class DjAudioEngine(private val context: Context) {
             if (!generationGate.isCurrent(session) || isEngineReleased) return
 
             val track = _currentTrack.value ?: return
-            val uriOrPath = track.filePath
+            val uriOrPath = if (!track.resolvedUri.isNullOrBlank() && com.example.storage.TrackSourceResolver.isMediaStoreUri(track.resolvedUri)) {
+                track.resolvedUri
+            } else {
+                track.filePath
+            }
 
             val ex = MediaExtractor()
             extractor = ex
@@ -1129,6 +1143,10 @@ class DjAudioEngine(private val context: Context) {
             if (activeExtractor === extractor) {
                 runCatching { extractor?.release() }
                 activeExtractor = null
+                activePfd?.let { runCatching { it.close() } }
+                activePfd = null
+                activeAfd?.let { runCatching { it.close() } }
+                activeAfd = null
             }
             if (activeCodec === codec) {
                 runCatching { codec?.stop() }
@@ -1207,6 +1225,10 @@ class DjAudioEngine(private val context: Context) {
                 at.flush()
             }
         }
+        activePfd?.let { runCatching { it.close() } }
+        activePfd = null
+        activeAfd?.let { runCatching { it.close() } }
+        activeAfd = null
         releaseSynthesisTrack()
     }
 
@@ -1219,6 +1241,10 @@ class DjAudioEngine(private val context: Context) {
 
         activeExtractor?.let { ex -> runCatching { ex.release() } }
         activeExtractor = null
+        activePfd?.let { runCatching { it.close() } }
+        activePfd = null
+        activeAfd?.let { runCatching { it.close() } }
+        activeAfd = null
         activeCodec?.let { c ->
             runCatching { c.stop() }
             runCatching { c.release() }
@@ -1459,13 +1485,19 @@ class DjAudioEngine(private val context: Context) {
                 return
             } catch (_: Exception) {}
             try {
-                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                val afd = context.contentResolver.openAssetFileDescriptor(uri, "r")
+                if (afd != null) {
+                    activeAfd?.let { runCatching { it.close() } }
+                    activeAfd = afd
                     extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
                     return
                 }
             } catch (_: Exception) {}
             try {
-                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                if (pfd != null) {
+                    activePfd?.let { runCatching { it.close() } }
+                    activePfd = pfd
                     extractor.setDataSource(pfd.fileDescriptor)
                     return
                 }
@@ -1485,9 +1517,19 @@ class DjAudioEngine(private val context: Context) {
         // Under scoped storage or unreadable raw paths, resolve via MediaStore or SAF
         val mediaStoreUri = com.example.storage.TrackSourceResolver.findMediaStoreUriForPath(context, cleanPath)
         if (mediaStoreUri != null) {
+            val msUri = Uri.parse(mediaStoreUri)
             try {
-                extractor.setDataSource(context, Uri.parse(mediaStoreUri), null)
+                extractor.setDataSource(context, msUri, null)
                 return
+            } catch (_: Exception) {}
+            try {
+                val pfd = context.contentResolver.openFileDescriptor(msUri, "r")
+                if (pfd != null) {
+                    activePfd?.let { runCatching { it.close() } }
+                    activePfd = pfd
+                    extractor.setDataSource(pfd.fileDescriptor)
+                    return
+                }
             } catch (_: Exception) {}
         }
 

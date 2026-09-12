@@ -479,17 +479,33 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun autoRepairAllUnplayableTracks() {
         viewModelScope.launch {
+            // First run bulk recovery for tracks erroneously converted to SAF
+            val recoveredFromSaf = com.example.storage.TrackPlaybackRepairEngine.recoverIncorrectlyRepairedTracks(getApplication(), trackDao)
+
             val issues = trackDao.getTracksWithPlaybackIssues().map { it.toTrack() }
             if (issues.isEmpty()) {
-                showSnackbar("No tracks currently have playback issues.")
+                if (recoveredFromSaf > 0) {
+                    showSnackbar("Recovered $recoveredFromSaf track(s) back to MediaStore!")
+                } else {
+                    showSnackbar("No tracks currently have playback issues.")
+                }
                 return@launch
             }
+
             showSnackbar("Starting automatic repair for ${issues.size} broken track(s)...")
             val summary = com.example.storage.TrackPlaybackRepairEngine.autoRepairAll(getApplication(), issues, trackDao)
-            if (summary.totalRepaired > 0) {
-                showSnackbar("Repaired ${summary.totalRepaired} track(s)! (${summary.totalFailed} unresolved)")
+            val totalFixed = summary.totalRepaired + recoveredFromSaf
+            if (totalFixed > 0 || summary.alreadyValidCount > 0) {
+                val parts = mutableListOf<String>()
+                if (totalFixed > 0) parts.add("Repaired $totalFixed track(s)")
+                if (summary.alreadyValidCount > 0) parts.add("${summary.alreadyValidCount} already valid")
+                if (summary.permissionRequiredCount > 0) parts.add("${summary.permissionRequiredCount} need permission")
+                if (summary.missingCount > 0) parts.add("${summary.missingCount} missing")
+                if (summary.formatOrExtractorErrorCount > 0) parts.add("${summary.formatOrExtractorErrorCount} format/extractor issues")
+                if (summary.totalFailed > 0) parts.add("${summary.totalFailed} unresolved")
+                showSnackbar(parts.joinToString(", "))
             } else {
-                showSnackbar("Could not resolve tracks automatically. Try manually locating missing files.")
+                showSnackbar("Could not resolve tracks automatically (${summary.totalFailed} unresolved). Try manually locating missing files.")
             }
         }
     }

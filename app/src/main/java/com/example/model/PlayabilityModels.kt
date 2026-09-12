@@ -30,7 +30,42 @@ enum class PlayabilityStatus(
     VOLUME_UNAVAILABLE("Volume Disconnected", "Unmounted", false, true),
     PERMISSION_REQUIRED("Permission Required", "Need Permission", false, true),
     SOURCE_STALE("Stale Media Source", "Source Stale", false, true),
-    RELOCATED("Track Relocated", "Relocated", false, true)
+    RELOCATED("Track Relocated", "Relocated", false, true),
+    EXTRACTOR_ERROR("Extractor Initialization Error", "Extractor Error", false, true),
+    FORMAT_UNRECOGNIZED("Unrecognized Audio Format", "Unrecognized", false, true)
+}
+
+/**
+ * Standard playback error codes differentiating source accessibility from playback/decoding issues.
+ */
+object PlaybackErrorCodes {
+    const val ERR_SOURCE_PERMISSION = "ERR_SOURCE_PERMISSION"
+    const val ERR_SOURCE_MISSING = "ERR_SOURCE_MISSING"
+    const val ERR_SOURCE_IO = "ERR_SOURCE_IO"
+    const val ERR_FORMAT_UNRECOGNIZED = "ERR_FORMAT_UNRECOGNIZED"
+    const val ERR_EXTRACTOR_INIT = "ERR_EXTRACTOR_INIT"
+    const val ERR_DECODER_INIT = "ERR_DECODER_INIT"
+    const val ERR_AUDIO_CORRUPT = "ERR_AUDIO_CORRUPT"
+    const val ERR_MEDIASTORE_STALE = "ERR_MEDIASTORE_STALE"
+    const val ERR_SAF_PERMISSION = "ERR_SAF_PERMISSION"
+    const val ERR_STORAGE_UNMOUNTED = "ERR_STORAGE_UNMOUNTED"
+    const val ERR_SCOPED_STORAGE_RESTRICTION = "ERR_SCOPED_STORAGE_RESTRICTION"
+}
+
+/**
+ * Hierarchical health rating for audio media sources in SoundSync.
+ * Ensures verified playback sources are never replaced with inferior candidates.
+ */
+enum class SourceHealthTier(val score: Int) {
+    VERIFIED_PLAYABLE(100),
+    VERIFIED_READABLE(70),
+    UNVERIFIED(50),
+    PERMISSION_REQUIRED(30),
+    STALE(10),
+    INVALID(0);
+
+    fun isBetterThan(other: SourceHealthTier): Boolean = this.score > other.score
+    fun isAtLeast(other: SourceHealthTier): Boolean = this.score >= other.score
 }
 
 /**
@@ -95,7 +130,9 @@ data class PlayabilityDiagnosticReport(
             PlayabilityStatus.PERMISSION_REQUIRED -> PlayabilityCategory.PERMISSION_PROBLEMS
 
             PlayabilityStatus.UNSUPPORTED_FORMAT,
+            PlayabilityStatus.FORMAT_UNRECOGNIZED,
             PlayabilityStatus.DECODER_ERROR,
+            PlayabilityStatus.EXTRACTOR_ERROR,
             PlayabilityStatus.ZERO_AUDIO_STREAMS -> PlayabilityCategory.UNSUPPORTED_AUDIO
 
             PlayabilityStatus.CORRUPTED_FILE,

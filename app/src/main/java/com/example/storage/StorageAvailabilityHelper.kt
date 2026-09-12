@@ -182,14 +182,35 @@ object StorageAvailabilityHelper {
         if (filePath.startsWith("content://")) {
             val uri = Uri.parse(filePath)
             TrackSourceResolver.contentUriPlayableCheckerForTesting?.let { return it(context, uri) }
-            return try {
-                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true }
-                    ?: context.contentResolver.openFileDescriptor(uri, "r")?.use { true }
-                    ?: context.contentResolver.openInputStream(uri)?.use { true }
-                    ?: false
-            } catch (_: Exception) {
-                false
-            }
+            try {
+                val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                if (pfd != null) {
+                    val valid = pfd.fileDescriptor.valid()
+                    pfd.close()
+                    if (valid) return true
+                }
+            } catch (_: Throwable) {}
+
+            try {
+                val afd = context.contentResolver.openAssetFileDescriptor(uri, "r")
+                if (afd != null) {
+                    val valid = afd.fileDescriptor.valid()
+                    afd.close()
+                    if (valid) return true
+                }
+            } catch (_: Throwable) {}
+
+            try {
+                val stream = context.contentResolver.openInputStream(uri)
+                if (stream != null) {
+                    val buf = ByteArray(1)
+                    val r = stream.read(buf)
+                    stream.close()
+                    if (r >= 0) return true
+                }
+            } catch (_: Throwable) {}
+
+            return false
         }
         val p = filePath.removePrefix("file://")
         val file = File(p)

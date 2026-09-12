@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import com.example.model.PlayabilityDiagnosticReport
 import com.example.model.PlayabilityStatus
+import com.example.model.PlaybackErrorCodes
 import com.example.model.RepairActionType
 import com.example.model.Track
 import com.example.storage.CanonicalStorageHelper
@@ -233,8 +234,10 @@ object PlayabilityValidator {
         val targetPathOrUri = resolvedPlayableUri ?: path
         val extractor = MediaExtractor()
         var pfd: android.os.ParcelFileDescriptor? = null
+        var afd: android.content.res.AssetFileDescriptor? = null
         fun cleanupResources() {
             try { pfd?.close() } catch (_: Throwable) {}
+            try { afd?.close() } catch (_: Throwable) {}
             try { extractor.release() } catch (_: Throwable) {}
         }
         var audioTrackIndex = -1
@@ -267,11 +270,28 @@ object PlayabilityValidator {
                 try {
                     extractor.setDataSource(context, uri, null)
                 } catch (_: Exception) {
-                    val openedPfd = context.contentResolver.openFileDescriptor(uri, "r")
-                    if (openedPfd != null) {
-                        pfd = openedPfd
-                        extractor.setDataSource(openedPfd.fileDescriptor)
-                    } else {
+                    var opened = false
+                    try {
+                        val openedPfd = context.contentResolver.openFileDescriptor(uri, "r")
+                        if (openedPfd != null) {
+                            pfd = openedPfd
+                            extractor.setDataSource(openedPfd.fileDescriptor)
+                            opened = true
+                        }
+                    } catch (_: Exception) {}
+
+                    if (!opened) {
+                        try {
+                            val openedAfd = context.contentResolver.openAssetFileDescriptor(uri, "r")
+                            if (openedAfd != null) {
+                                afd = openedAfd
+                                extractor.setDataSource(openedAfd.fileDescriptor, openedAfd.startOffset, openedAfd.length)
+                                opened = true
+                            }
+                        } catch (_: Exception) {}
+                    }
+
+                    if (!opened) {
                         extractor.setDataSource(context, uri, null)
                     }
                 }
@@ -587,10 +607,28 @@ object PlayabilityValidator {
                         listOf(RepairActionType.REQUEST_PERMISSION, RepairActionType.FIX_AUTOMATICALLY, RepairActionType.LOCATE_FILE)
                     )
                 }
+                ioe.message?.contains("Failed to instantiate extractor", ignoreCase = true) == true -> {
+                    val sniff = AudioFormatSniffer.sniffFormat(context, targetPathOrUri)
+                    if (sniff.isRecognizedAudio) {
+                        listOf(
+                            PlayabilityStatus.EXTRACTOR_ERROR,
+                            PlaybackErrorCodes.ERR_EXTRACTOR_INIT,
+                            "Android media extractor failed to instantiate container for ${sniff.containerFormat ?: "audio"} stream: ${ioe.message}",
+                            listOf(RepairActionType.FIX_AUTOMATICALLY, RepairActionType.LOCATE_FILE, RepairActionType.RESCAN_TRACK)
+                        )
+                    } else {
+                        listOf(
+                            PlayabilityStatus.FORMAT_UNRECOGNIZED,
+                            PlaybackErrorCodes.ERR_FORMAT_UNRECOGNIZED,
+                            "Android media extractor failed to instantiate container: unrecognized audio format (${sniff.headerHex}).",
+                            listOf(RepairActionType.FIX_AUTOMATICALLY, RepairActionType.LOCATE_FILE, RepairActionType.RESCAN_TRACK)
+                        )
+                    }
+                }
                 ioe.message?.contains("0x80000000") == true || ioe.message?.contains("unsupported", ignoreCase = true) == true -> {
                     listOf(
                         PlayabilityStatus.INVALID_CONTAINER,
-                        "ERR_CONTAINER_UNSUPPORTED",
+                        PlaybackErrorCodes.ERR_AUDIO_CORRUPT,
                         "Media container format is corrupted or unsupported by device decoders.",
                         listOf(RepairActionType.FIX_AUTOMATICALLY, RepairActionType.LOCATE_FILE, RepairActionType.RESCAN_TRACK)
                     )
@@ -598,7 +636,7 @@ object PlayabilityValidator {
                 ioe.message?.contains("EIO", ignoreCase = true) == true || ioe.message?.contains("device", ignoreCase = true) == true -> {
                     listOf(
                         PlayabilityStatus.READ_ERROR,
-                        "ERR_IO_DEVICE_ERROR",
+                        PlaybackErrorCodes.ERR_SOURCE_IO,
                         "A hardware I/O device error occurred reading from the storage medium.",
                         listOf(RepairActionType.FIX_AUTOMATICALLY, RepairActionType.LOCATE_FILE, RepairActionType.RESCAN_TRACK)
                     )
@@ -606,7 +644,7 @@ object PlayabilityValidator {
                 else -> {
                     listOf(
                         PlayabilityStatus.READ_ERROR,
-                        "ERR_IO_READ",
+                        PlaybackErrorCodes.ERR_SOURCE_IO,
                         "SoundSync encountered an I/O read error opening the file stream: ${ioe.message}",
                         listOf(RepairActionType.FIX_AUTOMATICALLY, RepairActionType.LOCATE_FILE, RepairActionType.RESCAN_TRACK)
                     )

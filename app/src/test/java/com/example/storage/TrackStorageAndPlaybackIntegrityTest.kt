@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.test.core.app.ApplicationProvider
+import com.example.analysis.AudioFormatSniffer
 import com.example.analysis.PlayabilityValidator
 import com.example.analysis.TrackAnalysisManager
 import com.example.backup.SoundSyncBackupManager
@@ -18,7 +19,9 @@ import com.example.model.AnalysisState
 import com.example.model.AudioQualityRating
 import com.example.model.MusicPlatform
 import com.example.model.PlayabilityStatus
+import com.example.model.PlaybackErrorCodes
 import com.example.model.RepairActionType
+import com.example.model.SourceHealthTier
 import com.example.model.SyncState
 import com.example.model.Track
 import kotlinx.coroutines.runBlocking
@@ -108,6 +111,7 @@ class TrackStorageAndPlaybackIntegrityTest {
                     null
                 }
                 "getAllTracksSync" -> memoryDb.values.toList()
+                "getTracksWithPlaybackIssues" -> memoryDb.values.filter { it.playabilityStatus != "PLAYABLE" && it.playabilityStatus != "REPAIRED" }
                 else -> null
             }
         } as TrackDao
@@ -594,5 +598,205 @@ class TrackStorageAndPlaybackIntegrityTest {
         val rawPath = "/storage/AA44-8296/The Assassinz Archives/Act of Rage - Kamikaze.wav"
         val isAvail = StorageAvailabilityHelper.isTrackPathAvailable(context, rawPath)
         assertFalse("Raw path on disconnected volume must be detected as unavailable", isAvail)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST R: Valid MediaStore URI is retained and NEVER converted to SAF (Priority 1)
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testR_validMediaStoreUriRetainedAndNeverConvertedToSaf() = runBlocking {
+        val mediaStorePath = "content://media/aa44-8296/audio/media/1000038010"
+        val track = buildSampleTrack(
+            id = "track_party_till_we_die",
+            title = "Party Till We Die",
+            artist = "MAKJ & Timmy Trumpet",
+            filePath = mediaStorePath
+        )
+        val candidateSafUri = Uri.parse("content://com.android.externalstorage.documents/document/AA44-8296%3AParty%20Till%20We%20Die.mp3")
+
+        // Both MediaStore and SAF are technically readable in test environment
+        TrackSourceResolver.safDocumentUriFinderForTesting = { _, _ -> candidateSafUri }
+        TrackSourceResolver.contentUriPlayableCheckerForTesting = { _, uri ->
+            uri.toString() == mediaStorePath || uri == candidateSafUri
+        }
+
+        val resolution = TrackSourceResolver.resolveTrackSource(context, track)
+
+        assertTrue("Track with valid MediaStore URI must resolve as playable", resolution.isPlayable)
+        assertEquals("Source type must strictly be MEDIASTORE under Priority 1", ResolvedSourceType.MEDIASTORE, resolution.sourceType)
+        assertEquals("Must retain original MediaStore URI and NOT convert to SAF", mediaStorePath, resolution.resolvedUriOrPath)
+        assertEquals("Source health tier must be VERIFIED_PLAYABLE", SourceHealthTier.VERIFIED_PLAYABLE, resolution.healthTier)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST S: Stale MediaStore URI falls back to valid SAF document URI
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testS_staleMediaStoreUriFallsBackToSaf() = runBlocking {
+        val staleMediaStorePath = "content://media/aa44-8296/audio/media/9999999"
+        val track = buildSampleTrack(
+            id = "track_stale_ms",
+            title = "Stale Track",
+            artist = "Artist",
+            filePath = staleMediaStorePath
+        )
+        val validSafUri = Uri.parse("content://com.android.externalstorage.documents/document/AA44-8296%3AStale%20Track.wav")
+
+        TrackSourceResolver.safDocumentUriFinderForTesting = { _, _ -> validSafUri }
+        // MediaStore is NOT playable, but SAF is playable
+        TrackSourceResolver.contentUriPlayableCheckerForTesting = { _, uri ->
+            uri == validSafUri
+        }
+
+        val resolution = TrackSourceResolver.resolveTrackSource(context, track)
+
+        assertTrue("Resolution must succeed via playable fallback", resolution.isPlayable)
+        assertEquals("Source type should fall back to SAF_DOCUMENT", ResolvedSourceType.SAF_DOCUMENT, resolution.sourceType)
+        assertEquals("Resolved URI should be the valid SAF URI", validSafUri.toString(), resolution.resolvedUriOrPath)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST T: SAF candidate failing MediaExtractor is rejected
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testT_safCandidateFailingMediaExtractorIsRejected() = runBlocking {
+        val brokenRawPath = "/storage/AA44-8296/Music/Song.mp3"
+        val track = buildSampleTrack(filePath = brokenRawPath)
+        val brokenSafUri = Uri.parse("content://com.android.externalstorage.documents/document/AA44-8296%3AMusic%2FSong.mp3")
+
+        TrackSourceResolver.safDocumentUriFinderForTesting = { _, _ -> brokenSafUri }
+        // Checker returns false (extractor instantiation failure)
+        TrackSourceResolver.contentUriPlayableCheckerForTesting = { _, uri ->
+            false
+        }
+
+        val resolution = TrackSourceResolver.resolveTrackSource(context, track)
+
+        assertFalse("Resolution must not succeed with broken SAF candidate", resolution.isPlayable)
+        assertFalse("Must not resolve to broken SAF candidate", resolution.resolvedUriOrPath == brokenSafUri.toString())
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST U: Audio format sniffer differentiates audio from unrecognized headers
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testU_formatSniffingDifferentiatesAudioFromUnrecognized() {
+        // 1. WAV
+        val wavBytes = createValidWavBytes()
+        val wavResult = AudioFormatSniffer.sniffStream(wavBytes.inputStream(), wavBytes.size.toLong())
+        assertTrue("WAV bytes must be recognized as audio", wavResult.isRecognizedAudio)
+        assertEquals("Container format must be WAV", "WAV", wavResult.containerFormat)
+        assertEquals("MIME must be audio/wav", "audio/wav", wavResult.detectedMime)
+
+        // 2. MP3 ID3 header
+        val mp3Bytes = byteArrayOf('I'.code.toByte(), 'D'.code.toByte(), '3'.code.toByte(), 3, 0, 0, 0, 0, 0, 10)
+        val mp3Result = AudioFormatSniffer.sniffStream(mp3Bytes.inputStream(), mp3Bytes.size.toLong())
+        assertTrue("MP3 ID3 bytes must be recognized", mp3Result.isRecognizedAudio)
+        assertEquals("Container format must be MP3", "MP3", mp3Result.containerFormat)
+
+        // 3. FLAC header
+        val flacBytes = byteArrayOf('f'.code.toByte(), 'L'.code.toByte(), 'a'.code.toByte(), 'C'.code.toByte(), 0, 0, 0, 34)
+        val flacResult = AudioFormatSniffer.sniffStream(flacBytes.inputStream(), flacBytes.size.toLong())
+        assertTrue("FLAC bytes must be recognized", flacResult.isRecognizedAudio)
+        assertEquals("Container format must be FLAC", "FLAC", flacResult.containerFormat)
+
+        // 4. Random corrupt / non-audio bytes
+        val garbageBytes = byteArrayOf(0x00, 0x11, 0x22, 0x33, 0x44, 0x55)
+        val garbageResult = AudioFormatSniffer.sniffStream(garbageBytes.inputStream(), garbageBytes.size.toLong())
+        assertFalse("Garbage bytes must not be recognized as audio", garbageResult.isRecognizedAudio)
+        assertNull("Container format must be null for unrecognized", garbageResult.containerFormat)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST V: autoRepairAll guarantees 100% progress even when individual tracks throw
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testV_autoRepairAllGuarantees100PercentProgressEvenWithExceptions() = runBlocking {
+        val goodTrack = buildSampleTrack(
+            id = "good_1",
+            title = "Good Track",
+            filePath = "/storage/AA44-8296/good.wav",
+            playabilityStatus = PlayabilityStatus.READ_ERROR,
+            errorCode = "ERR_IO_READ"
+        )
+        val throwTrack = buildSampleTrack(
+            id = "throw_2",
+            title = "Throw Track",
+            filePath = "/storage/AA44-8296/throw.wav",
+            playabilityStatus = PlayabilityStatus.READ_ERROR,
+            errorCode = "ERR_IO_READ"
+        )
+        val tracks = listOf(goodTrack, throwTrack)
+
+        val progressReports = mutableListOf<Pair<Int, Int>>()
+        val validUri = Uri.parse("content://media/external/audio/media/8001")
+
+        TrackSourceResolver.mediaStoreUriFinderForTesting = { _, t ->
+            if (t.id == "throw_2") {
+                throw RuntimeException("Simulated unexpected crash during track probe")
+            }
+            if (t.id == "good_1") validUri else null
+        }
+        TrackSourceResolver.contentUriPlayableCheckerForTesting = { _, uri -> uri == validUri }
+
+        val summary = TrackPlaybackRepairEngine.autoRepairAll(
+            context = context,
+            tracks = tracks,
+            trackDao = trackDao,
+            onProgress = { cur, total -> progressReports.add(cur to total) }
+        )
+
+        assertEquals("Total processed must equal total tracks", 2, summary.totalProcessed)
+        assertFalse("Progress reports must not be empty", progressReports.isEmpty())
+        val lastProgress = progressReports.last()
+        assertEquals("Progress must complete to 100% (2 of 2)", 2 to 2, lastProgress)
+        assertEquals("Total results count must be 2", 2, summary.results.size)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST W: recoverIncorrectlyRepairedTracks restores tracks back to MediaStore
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testW_recoverIncorrectlyRepairedTracksRestoresMediaStore() = runBlocking {
+        val safPath = "content://com.android.externalstorage.documents/document/AA44-8296%3AParty%20Till%20We%20Die.mp3"
+        val originalTrack = buildSampleTrack(
+            id = "track_saf_corrupted",
+            title = "Party Till We Die",
+            artist = "MAKJ & Timmy Trumpet",
+            filePath = safPath,
+            bpm = 128.0,
+            camelotKey = "8A",
+            hotCues = listOf(0, 32, 64),
+            rating = 5,
+            playabilityStatus = PlayabilityStatus.READ_ERROR,
+            errorCode = "ERR_IO_READ"
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(originalTrack))
+
+        val realMediaStoreUri = Uri.parse("content://media/aa44-8296/audio/media/1000038010")
+        TrackSourceResolver.mediaStoreUriFinderForTesting = { _, t ->
+            if (t.id == "track_saf_corrupted" || t.title == "Party Till We Die") realMediaStoreUri else null
+        }
+        TrackSourceResolver.contentUriPlayableCheckerForTesting = { _, uri ->
+            uri == realMediaStoreUri
+        }
+
+        val recovered = TrackPlaybackRepairEngine.recoverIncorrectlyRepairedTracks(context, trackDao)
+        assertEquals("Must recover 1 track back to MediaStore", 1, recovered)
+
+        val updatedEntity = trackDao.getTrackById("track_saf_corrupted")
+        assertNotNull("Track must exist in database", updatedEntity)
+        assertEquals("File path must be restored to MediaStore URI", realMediaStoreUri.toString(), updatedEntity?.filePath)
+        assertEquals("Resolved URI must match MediaStore URI", realMediaStoreUri.toString(), updatedEntity?.resolvedUri)
+        assertEquals("Status must be PLAYABLE", PlayabilityStatus.PLAYABLE.name, updatedEntity?.playabilityStatus)
+        assertNull("Error code must be cleared", updatedEntity?.playbackErrorCode)
+
+        // Metadata preservation check
+        assertEquals("BPM must be preserved", 128.0, updatedEntity?.bpm ?: 0.0, 0.001)
+        assertEquals("Camelot key must be preserved", "8A", updatedEntity?.camelotKey)
+        assertEquals("Rating must be preserved", 5, updatedEntity?.rating)
+        assertEquals("Hot cues must be preserved", listOf(0, 32, 64), updatedEntity?.toTrack()?.hotCues)
+        assertEquals("Title must be preserved", "Party Till We Die", updatedEntity?.title)
+        assertEquals("Artist must be preserved", "MAKJ & Timmy Trumpet", updatedEntity?.artist)
     }
 }

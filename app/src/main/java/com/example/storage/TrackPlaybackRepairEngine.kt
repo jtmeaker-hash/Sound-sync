@@ -8,6 +8,7 @@ import com.example.data.TrackDao
 import com.example.data.TrackEntity
 import com.example.model.PlayabilityDiagnosticReport
 import com.example.model.PlayabilityStatus
+import com.example.model.SourceHealthTier
 import com.example.model.Track
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,7 +37,11 @@ object TrackPlaybackRepairEngine {
         val totalProcessed: Int,
         val totalRepaired: Int,
         val totalFailed: Int,
-        val results: List<RepairResult>
+        val alreadyValidCount: Int = 0,
+        val permissionRequiredCount: Int = 0,
+        val missingCount: Int = 0,
+        val formatOrExtractorErrorCount: Int = 0,
+        val results: List<RepairResult> = emptyList()
     )
 
     /**
@@ -74,7 +79,48 @@ object TrackPlaybackRepairEngine {
             )
         }
 
-        // 2. Multi-tier self-healing pipeline via TrackSelfHealingResolver
+        // 2. Multi-tier resolution via central TrackSourceResolver (Strict 8-tier priority)
+        val resolution = TrackSourceResolver.resolveTrackSource(context, track)
+        if (resolution.isPlayable && resolution.resolvedUriOrPath != null && resolution.resolvedUriOrPath != originalPath) {
+            val candidatePath = resolution.resolvedUriOrPath
+            val testTrack = track.copy(filePath = candidatePath, resolvedUri = candidatePath)
+            val validation = PlayabilityValidator.validateTrack(context, testTrack, forceFresh = true)
+            if (validation.status == PlayabilityStatus.PLAYABLE) {
+                val dir = if (candidatePath.contains("/")) candidatePath.substringBeforeLast("/") else "/Music"
+                val resolvedStoragePath = if (candidatePath.contains("/storage/emulated/0/")) {
+                    candidatePath.substringAfter("/storage/emulated/0/").trimStart('/')
+                } else if (candidatePath.startsWith("/")) {
+                    candidatePath.trimStart('/')
+                } else {
+                    track.storageRelativePath
+                }
+
+                val repairedTrack = track.copy(
+                    filePath = candidatePath,
+                    directoryPath = dir,
+                    storageRelativePath = resolvedStoragePath,
+                    playabilityStatus = PlayabilityStatus.PLAYABLE.name,
+                    playbackErrorCode = null,
+                    playbackErrorMessage = null,
+                    lastPlaybackValidation = System.currentTimeMillis(),
+                    lastRepairAttempt = System.currentTimeMillis(),
+                    resolvedUri = candidatePath
+                )
+                trackDao.updateTrack(TrackEntity.fromTrack(repairedTrack))
+                Log.i(TAG, "SUCCESS via TrackSourceResolver: repaired '${track.title}' -> '$candidatePath' (${resolution.sourceType})")
+
+                return@withContext RepairResult(
+                    success = true,
+                    track = repairedTrack,
+                    previousPath = originalPath,
+                    newPath = candidatePath,
+                    message = "Successfully reconnected track to '$candidatePath'.",
+                    diagnosticReport = validation
+                )
+            }
+        }
+
+        // 3. Multi-tier self-healing pipeline via TrackSelfHealingResolver
         val healedPath = TrackSelfHealingResolver.resolveAnyPlayablePath(context, track)
 
         if (healedPath != null && healedPath != originalPath) {
@@ -223,7 +269,61 @@ object TrackPlaybackRepairEngine {
     }
 
     /**
+     * Bulk recovers tracks that were previously incorrectly repaired to SAF document URIs
+     * back to verified Android MediaStore content URIs.
+     *
+     * Returns the count of tracks successfully restored to MediaStore.
+     */
+    suspend fun recoverIncorrectlyRepairedTracks(
+        context: Context,
+        trackDao: TrackDao
+    ): Int = withContext(Dispatchers.IO) {
+        var recoveredCount = 0
+        val allTracks = try {
+            trackDao.getAllTracksSync().map { it.toTrack() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching tracks for MediaStore recovery: ${e.message}")
+            return@withContext 0
+        }
+
+        for (track in allTracks) {
+            try {
+                val isSaf = track.filePath.startsWith("content://com.android.externalstorage.documents") ||
+                        track.filePath.startsWith("content://com.android.providers.downloads") ||
+                        (track.resolvedUri?.startsWith("content://com.android.externalstorage.documents") == true)
+
+                if (!isSaf) continue
+
+                // Check if a valid MediaStore URI exists for this track
+                val mediaStoreUri = TrackSourceResolver.findMediaStoreUriForTrack(context, track)
+                if (mediaStoreUri != null) {
+                    val probe = TrackSourceResolver.testMediaStoreUri(context, mediaStoreUri)
+                    if (probe.isPlayable && TrackSourceResolver.testContentUriWithMediaExtractor(context, mediaStoreUri)) {
+                        val uriStr = mediaStoreUri.toString()
+                        val updated = track.copy(
+                            filePath = uriStr,
+                            resolvedUri = uriStr,
+                            playabilityStatus = PlayabilityStatus.PLAYABLE.name,
+                            playbackErrorCode = null,
+                            playbackErrorMessage = null,
+                            lastPlaybackValidation = System.currentTimeMillis(),
+                            lastRepairAttempt = System.currentTimeMillis()
+                        )
+                        trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                        recoveredCount++
+                        Log.i(TAG, "RECOVERED: Restored track '${track.title}' from SAF URI to MediaStore URI: $uriStr")
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Exception during MediaStore recovery for track '${track.title}': ${t.message}")
+            }
+        }
+        recoveredCount
+    }
+
+    /**
      * Batch repairs all unplayable tracks in the library non-destructively.
+     * Guarantees 100% progress completion by isolating per-track exceptions.
      */
     suspend fun autoRepairAll(
         context: Context,
@@ -235,18 +335,74 @@ object TrackPlaybackRepairEngine {
         val results = mutableListOf<RepairResult>()
         var repairedCount = 0
         var failedCount = 0
+        var alreadyValidCount = 0
+        var permissionRequiredCount = 0
+        var missingCount = 0
+        var formatOrExtractorCount = 0
 
         unplayable.forEachIndexed { index, track ->
-            onProgress(index + 1, unplayable.size)
-            val result = autoRepairTrack(context, track, trackDao)
-            results.add(result)
-            if (result.success) repairedCount++ else failedCount++
+            try {
+                onProgress(index + 1, unplayable.size)
+                val result = autoRepairTrack(context, track, trackDao)
+                results.add(result)
+                if (result.success) {
+                    if (result.previousPath == result.newPath) {
+                        alreadyValidCount++
+                    } else {
+                        repairedCount++
+                    }
+                } else {
+                    failedCount++
+                    when (result.diagnosticReport.status) {
+                        PlayabilityStatus.PERMISSION_DENIED,
+                        PlayabilityStatus.PERMISSION_REQUIRED -> permissionRequiredCount++
+                        PlayabilityStatus.MISSING_FILE,
+                        PlayabilityStatus.VOLUME_UNAVAILABLE -> missingCount++
+                        PlayabilityStatus.EXTRACTOR_ERROR,
+                        PlayabilityStatus.FORMAT_UNRECOGNIZED,
+                        PlayabilityStatus.UNSUPPORTED_FORMAT,
+                        PlayabilityStatus.DECODER_ERROR,
+                        PlayabilityStatus.INVALID_CONTAINER -> formatOrExtractorCount++
+                        else -> {}
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Uncaught exception repairing track '${track.title}': ${t.message}", t)
+                failedCount++
+                val fallbackReport = PlayabilityDiagnosticReport(
+                    trackId = track.id,
+                    status = PlayabilityStatus.UNKNOWN_PLAYBACK_ERROR,
+                    errorCode = "ERR_REPAIR_EXCEPTION",
+                    errorMessage = "Exception during repair: ${t.message}",
+                    problemDescription = "Repair attempt encountered an unexpected error.",
+                    lastKnownLocation = track.filePath
+                )
+                results.add(
+                    RepairResult(
+                        success = false,
+                        track = track,
+                        previousPath = track.filePath,
+                        newPath = null,
+                        message = "Error during repair: ${t.message}",
+                        diagnosticReport = fallbackReport
+                    )
+                )
+            }
+        }
+
+        // Guarantee final progress reaches 100%
+        if (unplayable.isNotEmpty()) {
+            onProgress(unplayable.size, unplayable.size)
         }
 
         BatchRepairSummary(
             totalProcessed = unplayable.size,
             totalRepaired = repairedCount,
             totalFailed = failedCount,
+            alreadyValidCount = alreadyValidCount,
+            permissionRequiredCount = permissionRequiredCount,
+            missingCount = missingCount,
+            formatOrExtractorErrorCount = formatOrExtractorCount,
             results = results
         )
     }

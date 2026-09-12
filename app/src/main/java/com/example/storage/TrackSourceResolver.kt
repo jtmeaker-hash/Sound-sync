@@ -125,6 +125,7 @@ data class TrackSourceResolution(
     val resolvedUriOrPath: String?,
     val sourceType: ResolvedSourceType,
     val isPlayable: Boolean,
+    val healthTier: com.example.model.SourceHealthTier = com.example.model.SourceHealthTier.UNVERIFIED,
     val volumeUuid: String? = null,
     val isRemovable: Boolean = false,
     val requiresFolderAccess: Boolean = false,
@@ -168,12 +169,276 @@ object TrackSourceResolver {
     private const val TAG = "SoundSyncStorageResolver"
 
     /**
+     * Checks if a path or URI string is an Android MediaStore content URI.
+     */
+    fun isMediaStoreUri(uriOrPath: String): Boolean {
+        if (!uriOrPath.startsWith("content://")) return false
+        val uri = try { Uri.parse(uriOrPath) } catch (_: Throwable) { return false }
+        val authority = uri.authority ?: return false
+        return authority == "media" || authority.equals(MediaStore.AUTHORITY, ignoreCase = true)
+    }
+
+    /**
+     * Detailed diagnostic probe report for an Android MediaStore content URI.
+     */
+    data class MediaStoreProbeReport(
+        val uriString: String,
+        val isPlayable: Boolean,
+        val isReadable: Boolean,
+        val authority: String,
+        val volume: String,
+        val mediaStoreId: Long,
+        val mimeType: String?,
+        val displayName: String?,
+        val sizeBytes: Long,
+        val durationMs: Long,
+        val relativePath: String?,
+        val dataPath: String?,
+        val pfdSuccess: Boolean,
+        val isSeekable: Boolean,
+        val streamLength: Long,
+        val extractorInitSuccess: Boolean,
+        val audioTrackFound: Boolean,
+        val exactException: String? = null
+    )
+
+    /**
+     * Tests an original or candidate MediaStore content URI independently of SAF.
+     * Logs all 13 probe attributes to ensure full visibility into MediaStore validity.
+     */
+    fun testMediaStoreUri(context: Context, uri: Uri): MediaStoreProbeReport {
+        contentUriPlayableCheckerForTesting?.let { checker ->
+            val playable = checker(context, uri)
+            return MediaStoreProbeReport(
+                uriString = uri.toString(),
+                isPlayable = playable,
+                isReadable = playable,
+                authority = uri.authority.orEmpty(),
+                volume = "test-volume",
+                mediaStoreId = 1L,
+                mimeType = "audio/wav",
+                displayName = "test.wav",
+                sizeBytes = 1000L,
+                durationMs = 1000L,
+                relativePath = "Music/",
+                dataPath = null,
+                pfdSuccess = playable,
+                isSeekable = playable,
+                streamLength = 1000L,
+                extractorInitSuccess = playable,
+                audioTrackFound = playable,
+                exactException = null
+            )
+        }
+
+        val authority = uri.authority.orEmpty()
+        val segments = uri.pathSegments
+        val volume = if (segments.isNotEmpty()) segments[0] else "unknown"
+        val mediaStoreId = try { ContentUris.parseId(uri) } catch (_: Throwable) { -1L }
+
+        var mimeType: String? = null
+        var displayName: String? = null
+        var sizeBytes: Long = 0L
+        var durationMs: Long = 0L
+        var relativePath: String? = null
+        var dataPath: String? = null
+        var exactException: String? = null
+
+        // 1. Query MediaStore table columns
+        try {
+            val proj = mutableListOf(
+                MediaStore.Audio.Media._ID,
+                MediaStore.Audio.Media.DISPLAY_NAME,
+                MediaStore.Audio.Media.SIZE,
+                MediaStore.Audio.Media.MIME_TYPE,
+                MediaStore.Audio.Media.DURATION,
+                MediaStore.Audio.Media.DATA
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                proj.add(MediaStore.Audio.Media.RELATIVE_PATH)
+            }
+            context.contentResolver.query(uri, proj.toTypedArray(), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    val dnIdx = c.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
+                    if (dnIdx != -1) displayName = c.getString(dnIdx)
+                    val szIdx = c.getColumnIndex(MediaStore.Audio.Media.SIZE)
+                    if (szIdx != -1) sizeBytes = c.getLong(szIdx)
+                    val durIdx = c.getColumnIndex(MediaStore.Audio.Media.DURATION)
+                    if (durIdx != -1) durationMs = c.getLong(durIdx)
+                    val mimeIdx = c.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+                    if (mimeIdx != -1) mimeType = c.getString(mimeIdx)
+                    val dataIdx = c.getColumnIndex(MediaStore.Audio.Media.DATA)
+                    if (dataIdx != -1) dataPath = try { c.getString(dataIdx) } catch (_: Throwable) { null }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val relIdx = c.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+                        if (relIdx != -1) relativePath = c.getString(relIdx)
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            exactException = "Query failed: ${t.javaClass.simpleName}: ${t.message}"
+        }
+
+        // 2. Test ParcelFileDescriptor
+        var pfdSuccess = false
+        var isSeekable = false
+        var streamLength = 0L
+        try {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                pfdSuccess = pfd.fileDescriptor.valid()
+                streamLength = pfd.statSize
+                isSeekable = pfd.statSize > 0
+            }
+        } catch (t: Throwable) {
+            if (exactException == null) exactException = "openFileDescriptor: ${t.javaClass.simpleName}: ${t.message}"
+        }
+
+        // 3. Test InputStream
+        var isReadable = pfdSuccess
+        if (!isReadable) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { s ->
+                    val buf = ByteArray(16)
+                    val r = s.read(buf)
+                    isReadable = r >= 0
+                }
+            } catch (t: Throwable) {
+                if (exactException == null) exactException = "openInputStream: ${t.javaClass.simpleName}: ${t.message}"
+            }
+        }
+
+        // 4. Test MediaExtractor preparation
+        var extractorInitSuccess = false
+        var audioTrackFound = false
+        if (pfdSuccess || isReadable) {
+            val ex = android.media.MediaExtractor()
+            try {
+                ex.setDataSource(context, uri, null)
+                extractorInitSuccess = true
+                for (i in 0 until ex.trackCount) {
+                    val f = ex.getTrackFormat(i)
+                    val m = f.getString(android.media.MediaFormat.KEY_MIME) ?: ""
+                    if (m.startsWith("audio/")) {
+                        audioTrackFound = true
+                        if (mimeType.isNullOrBlank()) mimeType = m
+                        break
+                    }
+                }
+            } catch (t: Throwable) {
+                if (exactException == null) exactException = "extractor.setDataSource: ${t.javaClass.simpleName}: ${t.message}"
+                try {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        ex.setDataSource(pfd.fileDescriptor)
+                        extractorInitSuccess = true
+                        for (i in 0 until ex.trackCount) {
+                            val f = ex.getTrackFormat(i)
+                            val m = f.getString(android.media.MediaFormat.KEY_MIME) ?: ""
+                            if (m.startsWith("audio/")) {
+                                audioTrackFound = true
+                                break
+                            }
+                        }
+                    }
+                } catch (_: Throwable) {}
+            } finally {
+                try { ex.release() } catch (_: Throwable) {}
+            }
+        }
+
+        val playable = (pfdSuccess || isReadable) && (extractorInitSuccess || audioTrackFound || streamLength > 0 || sizeBytes > 0)
+
+        val report = MediaStoreProbeReport(
+            uriString = uri.toString(),
+            isPlayable = playable,
+            isReadable = pfdSuccess || isReadable,
+            authority = authority,
+            volume = volume,
+            mediaStoreId = mediaStoreId,
+            mimeType = mimeType,
+            displayName = displayName,
+            sizeBytes = if (sizeBytes > 0) sizeBytes else streamLength,
+            durationMs = durationMs,
+            relativePath = relativePath,
+            dataPath = dataPath,
+            pfdSuccess = pfdSuccess,
+            isSeekable = isSeekable,
+            streamLength = streamLength,
+            extractorInitSuccess = extractorInitSuccess,
+            audioTrackFound = audioTrackFound,
+            exactException = exactException
+        )
+
+        Log.i(TAG, """
+            [MediaStore Probe] URI: $uri
+            - URI authority: $authority
+            - MediaStore volume: $volume
+            - MediaStore ID: $mediaStoreId
+            - MIME type: $mimeType
+            - DISPLAY_NAME: $displayName
+            - SIZE: ${report.sizeBytes}
+            - DURATION: $durationMs
+            - RELATIVE_PATH: $relativePath
+            - DATA: $dataPath
+            - file descriptor success: $pfdSuccess
+            - seekability: $isSeekable
+            - file length: $streamLength
+            - extractor init success: $extractorInitSuccess
+            - audio track found: $audioTrackFound
+            - isPlayable: $playable
+            - exact exception: $exactException
+        """.trimIndent())
+
+        return report
+    }
+
+    /**
+     * Tests whether a content URI can be opened and parsed by MediaExtractor without throwing
+     * "Failed to instantiate extractor".
+     */
+    fun testContentUriWithMediaExtractor(context: Context, uri: Uri): Boolean {
+        contentUriPlayableCheckerForTesting?.let { return it(context, uri) }
+        val ex = android.media.MediaExtractor()
+        return try {
+            ex.setDataSource(context, uri, null)
+            ex.trackCount > 0
+        } catch (_: Throwable) {
+            try {
+                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    ex.setDataSource(pfd.fileDescriptor)
+                    ex.trackCount > 0
+                } ?: false
+            } catch (_: Throwable) {
+                false
+            }
+        } finally {
+            try { ex.release() } catch (_: Throwable) {}
+        }
+    }
+
+    private fun logPlaybackSourceTrace(
+        dbSource: String,
+        originalSource: String,
+        resolvedSource: String?,
+        targetSource: String?
+    ) {
+        Log.i(
+            TAG,
+            "PLAYBACK_SOURCE_TRACE: DB_SOURCE='$dbSource', ORIGINAL_SOURCE='$originalSource', RESOLVED_SOURCE='$resolvedSource', TARGET_SOURCE='$targetSource'"
+        )
+    }
+
+    /**
      * Resolves a stored audio track to an accessible Android media source.
      *
-     * @param context Android context for StorageManager, ContentResolver, MediaStore.
-     * @param track The audio track to resolve.
-     * @param persistToDb If true and trackDao is provided, automatically updates the database when healed.
-     * @param trackDao Optional DAO for persisting healed paths.
+     * Adheres to strict 8-step resolution hierarchy:
+     *  1. Existing MediaStore URI if readable / playable (Never replaced by SAF)
+     *  2. Existing SAF document URI if readable / playable
+     *  3. Existing legitimate raw file path if readable
+     *  4. Re-query MediaStore across all mounted collections
+     *  5. Resolve through an authorized SAF tree
+     *  6. Relocation search across mounted volumes
+     *  7. Request user folder permission
+     *  8. Unavailable
      */
     suspend fun resolveTrackSource(
         context: Context,
@@ -193,29 +458,13 @@ object TrackSourceResolver {
                 resolvedUriOrPath = originalPath,
                 sourceType = ResolvedSourceType.RAW_FILE_PATH,
                 isPlayable = true,
+                healthTier = com.example.model.SourceHealthTier.VERIFIED_PLAYABLE,
                 diagnostics = diag
             )
         }
 
         // Run full 18-point diagnostic probe
         val diag = runDiagnosticProbe(context, track)
-
-        // Case A: Content URI already provided
-        if (originalPath.startsWith("content://")) {
-            val uri = Uri.parse(originalPath)
-            if (isContentUriPlayable(context, uri)) {
-                val isMediaStore = originalPath.startsWith("content://media/")
-                return@withContext TrackSourceResolution(
-                    trackId = trackId,
-                    originalPath = originalPath,
-                    resolvedUriOrPath = originalPath,
-                    sourceType = if (isMediaStore) ResolvedSourceType.MEDIASTORE else ResolvedSourceType.SAF_DOCUMENT,
-                    isPlayable = true,
-                    diagnostics = diag
-                )
-            }
-            // If content URI is stale, fall through to multi-step resolution
-        }
 
         val volumeInfo = getStorageVolumeForPath(context, originalPath)
         val isRemovable = volumeInfo?.isRemovable ?: StorageAvailabilityHelper.isExternalStoragePath(originalPath)
@@ -224,60 +473,80 @@ object TrackSourceResolver {
         val cleanPath = originalPath.removePrefix("file://")
         val directFile = File(cleanPath)
 
-        // STEP 1: Search MediaStore for the same audio file across all mounted collections
-        val mediaStoreUri = findMediaStoreUriForTrack(context, track)
-        if (mediaStoreUri != null && isContentUriPlayable(context, mediaStoreUri)) {
-            val uriString = mediaStoreUri.toString()
-            Log.i(TAG, "STEP 1 SUCCESS: Resolved raw path to MediaStore URI: '$originalPath' -> '$uriString'")
-            persistHealedPathIfRequested(track, uriString, persistToDb, trackDao)
-            return@withContext TrackSourceResolution(
-                trackId = trackId,
-                originalPath = originalPath,
-                resolvedUriOrPath = uriString,
-                sourceType = ResolvedSourceType.MEDIASTORE,
-                isPlayable = true,
-                volumeUuid = volumeUuid,
-                isRemovable = isRemovable,
-                diagnostics = diag.copy(
-                    mediaStoreAware = true,
-                    mediaStoreUri = uriString,
-                    detectedFailureMode = "Raw path resolved via MediaStore content URI.",
-                    recommendedResolution = uriString
+        // =========================================================================
+        // PRIORITY 1: Existing MediaStore URI if readable / playable
+        // =========================================================================
+        if (isMediaStoreUri(originalPath)) {
+            val uri = Uri.parse(originalPath)
+            val probe = testMediaStoreUri(context, uri)
+            if (probe.isPlayable) {
+                Log.i(TAG, "PRIORITY 1 SUCCESS: Existing MediaStore URI is verified playable: '$originalPath'. Retaining MediaStore source directly without SAF conversion.")
+                logPlaybackSourceTrace(originalPath, originalPath, originalPath, originalPath)
+                return@withContext TrackSourceResolution(
+                    trackId = trackId,
+                    originalPath = originalPath,
+                    resolvedUriOrPath = originalPath,
+                    sourceType = ResolvedSourceType.MEDIASTORE,
+                    isPlayable = true,
+                    healthTier = com.example.model.SourceHealthTier.VERIFIED_PLAYABLE,
+                    volumeUuid = volumeUuid,
+                    isRemovable = isRemovable,
+                    diagnostics = diag.copy(
+                        mediaStoreAware = true,
+                        mediaStoreUri = originalPath,
+                        detectedFailureMode = "None (Existing MediaStore URI verified playable)",
+                        recommendedResolution = originalPath
+                    )
                 )
-            )
+            } else {
+                Log.w(TAG, "PRIORITY 1: Existing MediaStore URI '$originalPath' failed playback test: ${probe.exactException}. Falling back to multi-step resolution.")
+            }
         }
 
-        // STEP 2: Check if the file belongs to an SAF-authorised directory / tree
-        val safDocUri = findSafDocumentUriForTrack(context, track)
-        if (safDocUri != null && isContentUriPlayable(context, safDocUri)) {
-            val uriString = safDocUri.toString()
-            Log.i(TAG, "STEP 2 SUCCESS: Resolved raw path to SAF Document URI: '$originalPath' -> '$uriString'")
-            persistHealedPathIfRequested(track, uriString, persistToDb, trackDao)
-            return@withContext TrackSourceResolution(
-                trackId = trackId,
-                originalPath = originalPath,
-                resolvedUriOrPath = uriString,
-                sourceType = ResolvedSourceType.SAF_DOCUMENT,
-                isPlayable = true,
-                volumeUuid = volumeUuid,
-                isRemovable = isRemovable,
-                diagnostics = diag.copy(
-                    hasSafTreeGrant = true,
-                    detectedFailureMode = "Raw path resolved via granted SAF directory tree.",
-                    recommendedResolution = uriString
-                )
-            )
+        // =========================================================================
+        // PRIORITY 2: Existing SAF document URI if readable / playable
+        // =========================================================================
+        if (originalPath.startsWith("content://") && !isMediaStoreUri(originalPath)) {
+            val uri = Uri.parse(originalPath)
+            if (isContentUriPlayable(context, uri)) {
+                val extractorOk = testContentUriWithMediaExtractor(context, uri)
+                if (extractorOk) {
+                    Log.i(TAG, "PRIORITY 2 SUCCESS: Existing SAF document URI verified playable: '$originalPath'")
+                    logPlaybackSourceTrace(originalPath, originalPath, originalPath, originalPath)
+                    return@withContext TrackSourceResolution(
+                        trackId = trackId,
+                        originalPath = originalPath,
+                        resolvedUriOrPath = originalPath,
+                        sourceType = ResolvedSourceType.SAF_DOCUMENT,
+                        isPlayable = true,
+                        healthTier = com.example.model.SourceHealthTier.VERIFIED_PLAYABLE,
+                        volumeUuid = volumeUuid,
+                        isRemovable = isRemovable,
+                        diagnostics = diag.copy(
+                            hasSafTreeGrant = true,
+                            detectedFailureMode = "None (Existing SAF Document URI verified playable)",
+                            recommendedResolution = originalPath
+                        )
+                    )
+                } else {
+                    Log.w(TAG, "PRIORITY 2: Existing SAF document URI '$originalPath' failed MediaExtractor test. Attempting MediaStore resolution.")
+                }
+            }
         }
 
-        // STEP 3: Genuine raw filesystem readability check (both FileInputStream & ParcelFileDescriptor)
-        if (isGenuinelyRawReadable(directFile)) {
-            Log.d(TAG, "STEP 3 SUCCESS: File is genuinely readable through raw path: $cleanPath")
+        // =========================================================================
+        // PRIORITY 3: Existing legitimate raw file path if readable
+        // =========================================================================
+        if (!originalPath.startsWith("content://") && isGenuinelyRawReadable(directFile)) {
+            Log.i(TAG, "PRIORITY 3 SUCCESS: File is genuinely readable through raw filesystem path: $cleanPath")
+            logPlaybackSourceTrace(originalPath, originalPath, cleanPath, cleanPath)
             return@withContext TrackSourceResolution(
                 trackId = trackId,
                 originalPath = originalPath,
                 resolvedUriOrPath = cleanPath,
                 sourceType = if (isRemovable) ResolvedSourceType.REMOVABLE_STORAGE_PATH else ResolvedSourceType.RAW_FILE_PATH,
                 isPlayable = true,
+                healthTier = com.example.model.SourceHealthTier.VERIFIED_PLAYABLE,
                 volumeUuid = volumeUuid,
                 isRemovable = isRemovable,
                 diagnostics = diag.copy(
@@ -287,17 +556,82 @@ object TrackSourceResolver {
             )
         }
 
-        // STEP 4: Relocate / Reinserted volume check
+        // =========================================================================
+        // PRIORITY 4: Re-query MediaStore across all mounted collections
+        // =========================================================================
+        val mediaStoreUri = findMediaStoreUriForTrack(context, track)
+        if (mediaStoreUri != null) {
+            val probe = testMediaStoreUri(context, mediaStoreUri)
+            if (probe.isPlayable) {
+                val uriString = mediaStoreUri.toString()
+                Log.i(TAG, "PRIORITY 4 SUCCESS: Resolved track to MediaStore URI: '$originalPath' -> '$uriString'")
+                persistHealedPathIfRequested(track, uriString, persistToDb, trackDao)
+                logPlaybackSourceTrace(originalPath, originalPath, uriString, uriString)
+                return@withContext TrackSourceResolution(
+                    trackId = trackId,
+                    originalPath = originalPath,
+                    resolvedUriOrPath = uriString,
+                    sourceType = ResolvedSourceType.MEDIASTORE,
+                    isPlayable = true,
+                    healthTier = com.example.model.SourceHealthTier.VERIFIED_PLAYABLE,
+                    volumeUuid = volumeUuid,
+                    isRemovable = isRemovable,
+                    diagnostics = diag.copy(
+                        mediaStoreAware = true,
+                        mediaStoreUri = uriString,
+                        detectedFailureMode = "Resolved via MediaStore content URI.",
+                        recommendedResolution = uriString
+                    )
+                )
+            }
+        }
+
+        // =========================================================================
+        // PRIORITY 5: Resolve through an authorised SAF directory tree
+        // =========================================================================
+        val safDocUri = findSafDocumentUriForTrack(context, track)
+        if (safDocUri != null && isContentUriPlayable(context, safDocUri)) {
+            val extractorOk = testContentUriWithMediaExtractor(context, safDocUri)
+            if (extractorOk) {
+                val uriString = safDocUri.toString()
+                Log.i(TAG, "PRIORITY 5 SUCCESS: Resolved track to SAF Document URI: '$originalPath' -> '$uriString'")
+                persistHealedPathIfRequested(track, uriString, persistToDb, trackDao)
+                logPlaybackSourceTrace(originalPath, originalPath, uriString, uriString)
+                return@withContext TrackSourceResolution(
+                    trackId = trackId,
+                    originalPath = originalPath,
+                    resolvedUriOrPath = uriString,
+                    sourceType = ResolvedSourceType.SAF_DOCUMENT,
+                    isPlayable = true,
+                    healthTier = com.example.model.SourceHealthTier.VERIFIED_PLAYABLE,
+                    volumeUuid = volumeUuid,
+                    isRemovable = isRemovable,
+                    diagnostics = diag.copy(
+                        hasSafTreeGrant = true,
+                        detectedFailureMode = "Resolved via granted SAF directory tree.",
+                        recommendedResolution = uriString
+                    )
+                )
+            } else {
+                Log.w(TAG, "PRIORITY 5: SAF Document candidate '$safDocUri' failed MediaExtractor validation (Failed to instantiate extractor). Rejecting SAF fallback.")
+            }
+        }
+
+        // =========================================================================
+        // PRIORITY 6: Relocation / Reinserted volume check
+        // =========================================================================
         val reinserted = findReinsertedVolumeForTrack(context, track)
         if (reinserted != null && isGenuinelyRawReadable(reinserted.second)) {
             val newPath = reinserted.second.absolutePath
             persistHealedPathIfRequested(track, newPath, persistToDb, trackDao)
+            logPlaybackSourceTrace(originalPath, originalPath, newPath, newPath)
             return@withContext TrackSourceResolution(
                 trackId = trackId,
                 originalPath = originalPath,
                 resolvedUriOrPath = newPath,
                 sourceType = ResolvedSourceType.REMOVABLE_STORAGE_PATH,
                 isPlayable = true,
+                healthTier = com.example.model.SourceHealthTier.VERIFIED_PLAYABLE,
                 volumeUuid = reinserted.first.uuid,
                 isRemovable = true,
                 diagnostics = diag.copy(
@@ -308,17 +642,20 @@ object TrackSourceResolver {
             )
         }
 
-        // STEP 5: Removable storage handling (Permission required vs Volume unmounted)
+        // =========================================================================
+        // PRIORITY 7: Removable storage handling (Permission required vs Volume unmounted)
+        // =========================================================================
         if (isRemovable) {
             val isMounted = volumeInfo?.isMounted ?: isRemovableStorageVolumeMounted(context, volumeUuid ?: "")
             if (!isMounted) {
-                Log.w(TAG, "STEP 5: Storage volume '$volumeUuid' containing track '${track.title}' is disconnected or unmounted.")
+                Log.w(TAG, "PRIORITY 7: Storage volume '$volumeUuid' containing track '${track.title}' is disconnected or unmounted.")
                 return@withContext TrackSourceResolution(
                     trackId = trackId,
                     originalPath = originalPath,
                     resolvedUriOrPath = null,
                     sourceType = ResolvedSourceType.REMOVABLE_STORAGE_PATH,
                     isPlayable = false,
+                    healthTier = com.example.model.SourceHealthTier.STALE,
                     volumeUuid = volumeUuid,
                     isRemovable = true,
                     requiresFolderAccess = false,
@@ -329,13 +666,14 @@ object TrackSourceResolver {
                 )
             } else {
                 val folderRoot = if (volumeUuid != null) "/storage/$volumeUuid" else directFile.parent ?: ""
-                Log.w(TAG, "STEP 5: Removable storage track requires user folder permission for '$folderRoot'.")
+                Log.w(TAG, "PRIORITY 7: Removable storage track requires user folder permission for '$folderRoot'.")
                 return@withContext TrackSourceResolution(
                     trackId = trackId,
                     originalPath = originalPath,
                     resolvedUriOrPath = null,
                     sourceType = ResolvedSourceType.REMOVABLE_STORAGE_PATH,
                     isPlayable = false,
+                    healthTier = com.example.model.SourceHealthTier.PERMISSION_REQUIRED,
                     volumeUuid = volumeUuid,
                     isRemovable = true,
                     requiresFolderAccess = true,
@@ -349,14 +687,17 @@ object TrackSourceResolver {
             }
         }
 
-        // STEP 6: Missing file
-        Log.w(TAG, "Track '$originalPath' could not be resolved by any media source tier.")
+        // =========================================================================
+        // PRIORITY 8: Missing / unavailable
+        // =========================================================================
+        Log.w(TAG, "PRIORITY 8: Track '$originalPath' could not be resolved by any media source tier.")
         TrackSourceResolution(
             trackId = trackId,
             originalPath = originalPath,
             resolvedUriOrPath = null,
             sourceType = ResolvedSourceType.UNKNOWN,
             isPlayable = false,
+            healthTier = com.example.model.SourceHealthTier.INVALID,
             volumeUuid = volumeUuid,
             isRemovable = false,
             requiresFolderAccess = false,
@@ -569,7 +910,7 @@ object TrackSourceResolver {
                 "${track.title}.${track.format.lowercase(Locale.ROOT).ifBlank { "wav" }}"
             } else ""
         }
-        val volumeUuid = extractVolumeUuid(path)
+        val volumeUuid = extractVolumeUuid(path) ?: extractVolumeUuid(track.resolvedUri.orEmpty())
         val contentResolver = context.contentResolver
 
         // Build list of volume collection URIs to search across all mounted collections
@@ -585,6 +926,11 @@ object TrackSourceResolver {
                 collections.add(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL))
             } catch (_: Exception) {
                 collections.add(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+            }
+            volumeUuid?.let { uuid ->
+                try {
+                    collections.add(MediaStore.Audio.Media.getContentUri(uuid.lowercase(Locale.ROOT)))
+                } catch (_: Exception) {}
             }
         } else {
             collections.add(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
@@ -604,6 +950,30 @@ object TrackSourceResolver {
             projectionList.add(MediaStore.Audio.Media.RELATIVE_PATH)
         }
         val projection = projectionList.toTypedArray()
+
+        // Strategy 0: Direct MediaStore ID lookup if path or resolvedUri contains an ID
+        val potentialIdStr = sequenceOf(path, track.resolvedUri.orEmpty())
+            .mapNotNull { candidate ->
+                Regex("""content://media/[^/]+/audio/media/(\d+)""", RegexOption.IGNORE_CASE).find(candidate)?.groupValues?.get(1)
+            }
+            .firstOrNull()
+
+        if (potentialIdStr != null) {
+            for (collectionUri in collections.distinct()) {
+                try {
+                    contentResolver.query(
+                        collectionUri,
+                        projection,
+                        "${MediaStore.Audio.Media._ID} = ?",
+                        arrayOf(potentialIdStr),
+                        null
+                    )?.use { cursor ->
+                        val uri = verifyAndExtractPlayableUri(context, cursor, collectionUri)
+                        if (uri != null) return uri
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
 
         val relPath = CanonicalStorageHelper.toStorageRelativePath(path).ifBlank { track.storageRelativePath }
         val parentDir = if (relPath.contains('/')) relPath.substringBeforeLast('/') + "/" else ""
@@ -703,6 +1073,11 @@ object TrackSourceResolver {
         return findMediaStoreUriForTrack(context, dummyTrack)?.toString()
     }
 
+    private fun isSafDocPlayable(context: Context, doc: DocumentFile?): Boolean {
+        if (doc == null || !doc.exists() || !doc.canRead() || doc.isDirectory) return false
+        return isContentUriPlayable(context, doc.uri) && testContentUriWithMediaExtractor(context, doc.uri)
+    }
+
     /**
      * Searches persisted SAF directory trees for a matching DocumentFile.
      */
@@ -716,8 +1091,8 @@ object TrackSourceResolver {
 
         // Fast lookup via SafStorageManager
         val fastDoc = SafStorageManager.findDocumentForPathOrName(context, path, relPath)
-        if (fastDoc != null && fastDoc.exists() && fastDoc.canRead() && isContentUriPlayable(context, fastDoc.uri)) {
-            return fastDoc.uri
+        if (isSafDocPlayable(context, fastDoc)) {
+            return fastDoc!!.uri
         }
 
         val persistedTrees = SafStorageManager.getPersistedWriteFolderUris(context)
@@ -737,23 +1112,23 @@ object TrackSourceResolver {
             // 1. Try matching by adjusted relative path
             if (adjustedRelPath.isNotBlank()) {
                 val doc = SafStorageManager.findDocumentByRelativePath(rootDoc, adjustedRelPath)
-                if (doc != null && doc.exists() && doc.canRead() && isContentUriPlayable(context, doc.uri)) {
-                    return doc.uri
+                if (isSafDocPlayable(context, doc)) {
+                    return doc!!.uri
                 }
             }
 
             // 2. Try direct child file match in rootDoc
             if (fileName.isNotBlank()) {
                 val directDoc = rootDoc.findFile(fileName)
-                if (directDoc != null && directDoc.exists() && directDoc.canRead() && isContentUriPlayable(context, directDoc.uri)) {
-                    return directDoc.uri
+                if (isSafDocPlayable(context, directDoc)) {
+                    return directDoc!!.uri
                 }
             }
 
             // 3. Try matching by filename within shallow tree
             val docByName = SafStorageManager.findDocumentByName(rootDoc, fileName, maxDepth = 4)
-            if (docByName != null && docByName.exists() && docByName.canRead() && isContentUriPlayable(context, docByName.uri)) {
-                return docByName.uri
+            if (isSafDocPlayable(context, docByName)) {
+                return docByName!!.uri
             }
         }
         return null
@@ -1005,6 +1380,10 @@ object TrackSourceResolver {
 
     fun extractVolumeUuid(pathOrUri: String): String? {
         if (pathOrUri.isBlank()) return null
+        val mediaMatch = Regex("""content://media/([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})(/.*)?""", RegexOption.IGNORE_CASE).find(pathOrUri)
+        if (mediaMatch != null) {
+            return mediaMatch.groupValues[1]
+        }
         val match = Regex("""/storage/([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})(/.*)?""").find(pathOrUri)
         if (match != null) {
             return match.groupValues[1]
@@ -1033,18 +1412,35 @@ object TrackSourceResolver {
 
     private fun isContentUriPlayable(context: Context, uri: Uri): Boolean {
         contentUriPlayableCheckerForTesting?.let { return it(context, uri) }
-        return try {
-            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
-                afd.fileDescriptor.valid()
-            } ?: context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                pfd.fileDescriptor.valid()
-            } ?: context.contentResolver.openInputStream(uri)?.use { stream ->
+        try {
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            if (pfd != null) {
+                val valid = pfd.fileDescriptor.valid()
+                pfd.close()
+                if (valid) return true
+            }
+        } catch (_: Throwable) {}
+
+        try {
+            val afd = context.contentResolver.openAssetFileDescriptor(uri, "r")
+            if (afd != null) {
+                val valid = afd.fileDescriptor.valid()
+                afd.close()
+                if (valid) return true
+            }
+        } catch (_: Throwable) {}
+
+        try {
+            val stream = context.contentResolver.openInputStream(uri)
+            if (stream != null) {
                 val buf = ByteArray(1)
-                stream.read(buf) >= 0
-            } ?: false
-        } catch (_: Throwable) {
-            false
-        }
+                val r = stream.read(buf)
+                stream.close()
+                if (r >= 0) return true
+            }
+        } catch (_: Throwable) {}
+
+        return false
     }
 
     private fun getUriLength(context: Context, uri: Uri): Long {
