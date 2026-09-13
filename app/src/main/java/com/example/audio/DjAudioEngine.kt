@@ -1198,25 +1198,25 @@ class DjAudioEngine(private val context: Context) {
                 decoderShouldPause = true
             }
             runCatching { crossfadeNextDecoder?.close() }
+            runCatching { extractor?.release() }
             if (activeExtractor === extractor) {
-                runCatching { extractor?.release() }
                 activeExtractor = null
                 activePfd?.let { runCatching { it.close() } }
                 activePfd = null
                 activeAfd?.let { runCatching { it.close() } }
                 activeAfd = null
             }
+            runCatching { codec?.stop() }
+            runCatching { codec?.release() }
             if (activeCodec === codec) {
-                runCatching { codec?.stop() }
-                runCatching { codec?.release() }
                 activeCodec = null
             }
+            runCatching {
+                if (audioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING) audioTrack?.pause()
+                audioTrack?.flush()
+                audioTrack?.release()
+            }
             if (activeAudioTrack === audioTrack) {
-                runCatching {
-                    if (audioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING) audioTrack?.pause()
-                    audioTrack?.flush()
-                    audioTrack?.release()
-                }
                 activeAudioTrack = null
             }
         }
@@ -1587,12 +1587,12 @@ class DjAudioEngine(private val context: Context) {
             }
             runCatching { crossfadeNextDecoder?.close() }
             runCatching { reader?.close() }
+            runCatching {
+                if (audioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING) audioTrack?.pause()
+                audioTrack?.flush()
+                audioTrack?.release()
+            }
             if (activeAudioTrack === audioTrack) {
-                runCatching {
-                    if (audioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING) audioTrack?.pause()
-                    audioTrack?.flush()
-                    audioTrack?.release()
-                }
                 activeAudioTrack = null
             }
         }
@@ -2037,6 +2037,8 @@ class DjAudioEngine(private val context: Context) {
         private var wavReader: com.example.analysis.WavPcmReader? = null
         private var extractor: MediaExtractor? = null
         private var codec: MediaCodec? = null
+        private var openedAfd: android.content.res.AssetFileDescriptor? = null
+        private var openedPfd: android.os.ParcelFileDescriptor? = null
         val sampleRate: Int
         private val channelCount: Int
         private var inputEos = false
@@ -2057,7 +2059,9 @@ class DjAudioEngine(private val context: Context) {
                 } catch (_: Exception) {}
                 if (!dataSourceSet) {
                     try {
-                        context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                        val afd = context.contentResolver.openAssetFileDescriptor(uri, "r")
+                        if (afd != null) {
+                            openedAfd = afd
                             if (afd.declaredLength < 0) {
                                 ex.setDataSource(afd.fileDescriptor)
                             } else {
@@ -2069,7 +2073,9 @@ class DjAudioEngine(private val context: Context) {
                 }
                 if (!dataSourceSet) {
                     try {
-                        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                        if (pfd != null) {
+                            openedPfd = pfd
                             ex.setDataSource(pfd.fileDescriptor)
                             dataSourceSet = true
                         }
@@ -2230,6 +2236,8 @@ class DjAudioEngine(private val context: Context) {
             runCatching { codec?.stop() }
             runCatching { codec?.release() }
             runCatching { extractor?.release() }
+            runCatching { openedAfd?.close() }
+            runCatching { openedPfd?.close() }
         }
     }
 }

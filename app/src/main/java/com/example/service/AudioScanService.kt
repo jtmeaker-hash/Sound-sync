@@ -130,14 +130,21 @@ class AudioScanService : Service() {
         )
 
         val notification = buildNotification("Starting scan on $label...", 0, 0, false)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "AudioScanService startForeground error: ${e.message}", e)
+            try {
+                notificationManager.notify(NOTIFICATION_ID, notification)
+            } catch (_: Exception) {}
         }
 
         scanJob = serviceScope.launch {
@@ -787,38 +794,54 @@ class AudioScanService : Service() {
         val scanState: StateFlow<AudioScanState> = _scanState.asStateFlow()
 
         fun startScan(context: Context, treeUri: Uri, label: String, sourceId: String = "saf_folder") {
-            val intent = Intent(context, AudioScanService::class.java).apply {
-                action = ACTION_START
-                putExtra(EXTRA_TREE_URI, treeUri.toString())
-                putExtra(EXTRA_SOURCE_LABEL, label)
-                putExtra(EXTRA_SOURCE_ID, sourceId)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                val intent = Intent(context, AudioScanService::class.java).apply {
+                    action = ACTION_START
+                    putExtra(EXTRA_TREE_URI, treeUri.toString())
+                    putExtra(EXTRA_SOURCE_LABEL, label)
+                    putExtra(EXTRA_SOURCE_ID, sourceId)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not start AudioScanService: ${e.message}")
             }
         }
 
         fun pauseScan(context: Context) {
-            val intent = Intent(context, AudioScanService::class.java).apply {
-                action = ACTION_PAUSE
+            try {
+                val intent = Intent(context, AudioScanService::class.java).apply {
+                    action = ACTION_PAUSE
+                }
+                context.startService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not pause AudioScanService: ${e.message}")
             }
-            context.startService(intent)
         }
 
         fun resumeScan(context: Context) {
-            val intent = Intent(context, AudioScanService::class.java).apply {
-                action = ACTION_RESUME
+            try {
+                val intent = Intent(context, AudioScanService::class.java).apply {
+                    action = ACTION_RESUME
+                }
+                context.startService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not resume AudioScanService: ${e.message}")
             }
-            context.startService(intent)
         }
 
         fun cancelScan(context: Context) {
-            val intent = Intent(context, AudioScanService::class.java).apply {
-                action = ACTION_CANCEL
+            try {
+                val intent = Intent(context, AudioScanService::class.java).apply {
+                    action = ACTION_CANCEL
+                }
+                context.startService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not cancel AudioScanService: ${e.message}")
             }
-            context.startService(intent)
         }
     }
 }

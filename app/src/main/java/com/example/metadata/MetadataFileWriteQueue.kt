@@ -312,15 +312,17 @@ class MetadataFileWriteQueue private constructor(
             }
 
             val pathKey = track.filePath.ifBlank { track.id }
-            while (!activeWritingFiles.add(pathKey)) {
-                delay(50)
-            }
-
-            activeCount.incrementAndGet()
-            _activeWritesCount.value = activeCount.get()
-            _isWriting.value = true
-
+            var lockAcquired = false
             try {
+                while (!activeWritingFiles.add(pathKey)) {
+                    delay(50)
+                }
+                lockAcquired = true
+
+                activeCount.incrementAndGet()
+                _activeWritesCount.value = activeCount.get()
+                _isWriting.value = true
+
                 var currentTrack = track
                 val dbTrack = trackDao?.getTrackById(track.id)
                 if (dbTrack != null && dbTrack.analysisState != "ANALYSING") {
@@ -333,11 +335,13 @@ class MetadataFileWriteQueue private constructor(
 
                 onComplete?.invoke(result)
             } finally {
-                activeWritingFiles.remove(pathKey)
-                val current = activeCount.decrementAndGet()
-                _activeWritesCount.value = current
-                if (current <= 0) {
-                    _isWriting.value = false
+                if (lockAcquired) {
+                    activeWritingFiles.remove(pathKey)
+                    val current = activeCount.decrementAndGet().coerceAtLeast(0)
+                    _activeWritesCount.value = current
+                    if (current <= 0) {
+                        _isWriting.value = false
+                    }
                 }
             }
         }
@@ -352,15 +356,19 @@ class MetadataFileWriteQueue private constructor(
         artworkMimeType: String = "image/jpeg"
     ): MetadataWriteResult {
         val pathKey = track.filePath.ifBlank { track.id }
-        while (!activeWritingFiles.add(pathKey)) {
-            delay(50)
-        }
+        var lockAcquired = false
         return try {
+            while (!activeWritingFiles.add(pathKey)) {
+                delay(50)
+            }
+            lockAcquired = true
             semaphore.withPermit {
                 fileWriter.writeAsync(track, artworkBytes, artworkMimeType)
             }
         } finally {
-            activeWritingFiles.remove(pathKey)
+            if (lockAcquired) {
+                activeWritingFiles.remove(pathKey)
+            }
         }
     }
 
@@ -645,11 +653,13 @@ class MetadataFileWriteQueue private constructor(
 
                 // Acquire per-file lock to prevent concurrent writes to the same audio file
                 val pathKey = track.filePath.ifBlank { track.id }
+                var fileLockAcquired = false
                 while (!activeWritingFiles.add(pathKey)) {
                     delay(50)
                     if (isCancelRequested || !coroutineContext.isActive) break
                 }
                 if (isCancelRequested || !coroutineContext.isActive) break
+                fileLockAcquired = true
 
                 try {
                     // Prevent race condition with TrackAnalysisManager
@@ -812,7 +822,9 @@ class MetadataFileWriteQueue private constructor(
                     }
                     // Step 12: Continue to next track
                 } finally {
-                    activeWritingFiles.remove(pathKey)
+                    if (fileLockAcquired) {
+                        activeWritingFiles.remove(pathKey)
+                    }
                 }
             }
         } catch (e: CancellationException) {

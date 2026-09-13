@@ -655,13 +655,26 @@ class TrackAnalysisManager private constructor(
                 }
             }
 
-            // 4. Quick acoustic quality rating if unrated
+            // 4. Lightweight container & bitrate quality rating probe if unrated
             if (updatedTrack.qualityRating == AudioQualityRating.UNKNOWN_BITRATE) {
                 try {
-                    val specAnalysis = SpectrogramEngine.analyzeTrack(context, updatedTrack)
-                    updatedTrack = updatedTrack.copy(qualityRating = specAnalysis.qualityRating)
+                    val bitrateInfo = com.example.audio.BitrateProbe.probe(context, updatedTrack.filePath, updatedTrack.durationSeconds)
+                    val lowerPath = updatedTrack.filePath.lowercase()
+                    val rating = when {
+                        lowerPath.endsWith(".flac") -> AudioQualityRating.TRUE_LOSSLESS
+                        lowerPath.endsWith(".wav") -> AudioQualityRating.TRUE_LOSSLESS
+                        lowerPath.endsWith(".aiff") || lowerPath.endsWith(".aif") || lowerPath.endsWith(".alac") -> AudioQualityRating.TRUE_LOSSLESS
+                        bitrateInfo.encodedBitrateKbps >= 310 -> AudioQualityRating.TRUE_320
+                        bitrateInfo.encodedBitrateKbps >= 240 -> AudioQualityRating.TRUE_256
+                        bitrateInfo.encodedBitrateKbps >= 160 -> AudioQualityRating.TRUE_256
+                        bitrateInfo.encodedBitrateKbps > 0 -> AudioQualityRating.LOW_128
+                        else -> AudioQualityRating.UNKNOWN_BITRATE
+                    }
+                    if (rating != AudioQualityRating.UNKNOWN_BITRATE) {
+                        updatedTrack = updatedTrack.copy(qualityRating = rating)
+                    }
                 } catch (e: Exception) {
-                    Log.d(TAG, "Spectrogram acoustic rating non-fatal error for '${track.title}': ${e.message}")
+                    Log.d(TAG, "Quality rating probe non-fatal error for '${track.title}': ${e.message}")
                 }
             }
 

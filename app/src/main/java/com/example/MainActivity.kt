@@ -287,9 +287,18 @@ class MainActivity : ComponentActivity() {
                 com.example.service.MediaPlaybackService.stopService(applicationContext)
             }
         }
+        activeViewModel = null
     }
 
     private fun logHistoricalProcessExitReasons() {
+        try {
+            val crashFile = java.io.File(filesDir, "crashes/last_crash.txt")
+            if (crashFile.exists() && crashFile.canRead()) {
+                val dump = crashFile.readText()
+                Log.e(TAG, "PREVIOUS FATAL CRASH DUMP FOUND:\n$dump")
+            }
+        } catch (_: Exception) {}
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager

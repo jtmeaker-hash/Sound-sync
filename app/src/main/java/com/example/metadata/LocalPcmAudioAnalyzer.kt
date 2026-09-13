@@ -22,7 +22,7 @@ class LocalPcmAudioAnalyzer(
         val decoded = AudioDecoder.decodeToMonoPcm(
             context = context,
             filePathOrUri = track.filePath,
-            maxDurationSeconds = 180
+            maxDurationSeconds = 45
         ) ?: return AudioAnalysisResult()
         if (decoded.samples.size < decoded.sampleRate * 8) return AudioAnalysisResult()
 

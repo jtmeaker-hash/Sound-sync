@@ -28,9 +28,11 @@ import com.example.R
 import com.example.audio.DjAudioEngine
 import com.example.model.Track
 import com.example.util.AlbumArtHelper
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -47,7 +49,10 @@ class MediaPlaybackService : Service() {
     private lateinit var audioEngine: DjAudioEngine
     private lateinit var statsTracker: PlaybackStatsTracker
 
-    private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
+    private val serviceExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(TAG, "MediaPlaybackService uncaught coroutine error: ${throwable.message}", throwable)
+    }
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + serviceExceptionHandler)
     private var progressJob: Job? = null
     private var currentArtwork: Bitmap? = null
     private var lastNotifiedPlaying: Boolean? = null
@@ -132,22 +137,26 @@ class MediaPlaybackService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        MediaButtonReceiver.handleIntent(mediaSession, intent)
+        try {
+            MediaButtonReceiver.handleIntent(mediaSession, intent)
 
-        if (!isForegroundActive && intent?.action != ACTION_STOP) {
-            startForegroundWithNotification(buildInitialNotification())
-        }
-
-        when (intent?.action) {
-            ACTION_PLAY -> audioEngine.play()
-            ACTION_PAUSE -> audioEngine.pause()
-            ACTION_TOGGLE_PLAY_PAUSE -> audioEngine.togglePlayPause()
-            ACTION_NEXT -> audioEngine.onNextTrackCallback?.invoke()
-            ACTION_PREVIOUS -> audioEngine.onPreviousTrackCallback?.invoke()
-            ACTION_STOP -> {
-                audioEngine.pause()
-                stopForegroundService()
+            if (!isForegroundActive && intent?.action != ACTION_STOP) {
+                startForegroundWithNotification(buildInitialNotification())
             }
+
+            when (intent?.action) {
+                ACTION_PLAY -> audioEngine.play()
+                ACTION_PAUSE -> audioEngine.pause()
+                ACTION_TOGGLE_PLAY_PAUSE -> audioEngine.togglePlayPause()
+                ACTION_NEXT -> audioEngine.onNextTrackCallback?.invoke()
+                ACTION_PREVIOUS -> audioEngine.onPreviousTrackCallback?.invoke()
+                ACTION_STOP -> {
+                    audioEngine.pause()
+                    stopForegroundService()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onStartCommand: ${e.message}", e)
         }
 
         return START_NOT_STICKY
@@ -208,23 +217,30 @@ class MediaPlaybackService : Service() {
     }
 
     private fun startForegroundWithNotification(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            isForegroundActive = true
+        } catch (e: Exception) {
+            Log.w(TAG, "startForegroundWithNotification warning: ${e.message}", e)
+            try {
+                notificationManager.notify(NOTIFICATION_ID, notification)
+            } catch (_: Exception) {}
         }
-        isForegroundActive = true
     }
 
     private suspend fun updateTrackMetadata(track: Track) {
         if (lastArtworkTrackId != track.id) {
             lastArtworkTrackId = track.id
             currentArtwork = withContext(Dispatchers.IO) {
-                AlbumArtHelper.getArtworkForTrack(applicationContext, track, sizePx = 512)
+                AlbumArtHelper.getArtworkForTrack(applicationContext, track, sizePx = 256)
             }
         }
 
@@ -242,11 +258,28 @@ class MediaPlaybackService : Service() {
         }.getOrNull()
 
         if (art != null) {
-            metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
-            metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, art)
+            // Downsample thumbnail for IPC parcel safety to strictly prevent TransactionTooLargeException (>1MB limit)
+            val thumbnail = runCatching {
+                if (art.width > 128 || art.height > 128) {
+                    Bitmap.createScaledBitmap(art, 128, 128, true)
+                } else {
+                    art
+                }
+            }.getOrNull() ?: art
+            metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, thumbnail)
         }
 
-        mediaSession.setMetadata(metadataBuilder.build())
+        val artUri = track.artworkUrl ?: track.artworkCachePath
+        if (!artUri.isNullOrBlank()) {
+            metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, artUri)
+            metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_ART_URI, artUri)
+        }
+
+        runCatching {
+            mediaSession.setMetadata(metadataBuilder.build())
+        }.onFailure { e ->
+            Log.w(TAG, "Failed to update MediaSession metadata: ${e.message}")
+        }
 
         val isPlaying = audioEngine.isPlaying.value
         updatePlaybackState(isPlaying, audioEngine.currentPositionMs.value)
@@ -277,7 +310,11 @@ class MediaPlaybackService : Service() {
             .setActions(actions)
             .setState(state, positionMs, speed)
 
-        mediaSession.setPlaybackState(stateBuilder.build())
+        runCatching {
+            mediaSession.setPlaybackState(stateBuilder.build())
+        }.onFailure { e ->
+            Log.w(TAG, "Failed to update MediaSession playback state: ${e.message}")
+        }
     }
 
     private fun buildInitialNotification(): Notification {
@@ -488,10 +525,14 @@ class MediaPlaybackService : Service() {
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, MediaPlaybackService::class.java).apply {
-                action = ACTION_STOP
+            try {
+                val intent = Intent(context, MediaPlaybackService::class.java).apply {
+                    action = ACTION_STOP
+                }
+                context.startService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not stop MediaPlaybackService: ${e.message}")
             }
-            context.startService(intent)
         }
     }
 }
