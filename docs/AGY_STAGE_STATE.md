@@ -6,8 +6,8 @@
 - Last completed stage: `1`
 - Current stage: `2`
 - Stage status: `READY`
-- Last successful push: _pending_
-- Last CI run: _pending_
+- Last successful push: `c2a27f2`
+- Last CI run: _queued/in-progress on GitHub Actions_
 
 ## Resume rules
 
