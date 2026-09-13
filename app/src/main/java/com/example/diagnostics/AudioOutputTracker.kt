@@ -126,6 +126,11 @@ class AudioOutputTracker private constructor(private val context: Context) {
             "AUDIO_DEVICE_DISCONNECTED",
             "Audio output device disconnected: $deviceName (auto-pause=$didAutoPause)"
         )
+        if (didAutoPause) {
+            runCatching {
+                com.example.audio.DjAudioEngine.getInstance(context).pause()
+            }
+        }
         refresh()
     }
 
@@ -148,6 +153,9 @@ class AudioOutputTracker private constructor(private val context: Context) {
             "BECOMING_NOISY",
             "Audio becoming noisy intent received: head/earphones disconnected"
         )
+        runCatching {
+            com.example.audio.DjAudioEngine.getInstance(context).pause()
+        }
         refresh()
     }
 

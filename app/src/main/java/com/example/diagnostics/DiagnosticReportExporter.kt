@@ -43,6 +43,38 @@ object DiagnosticReportExporter {
         sb.appendLine("=================================================================")
         sb.appendLine()
 
+        // 0. EXECUTIVE SUMMARY
+        val brain = LibraryBrain.getInstance(context)
+        val brainSummary = brain.brainSummary.value
+        val doctorPrefs = com.example.doctor.LibraryDoctorPreferences.getInstance(context)
+        val ignoredDoctorIssues = doctorPrefs.getIgnoredCount()
+        val selfTestState = SelfTestRunner.getLastSuiteState()
+        val doctorReport = try {
+            com.example.doctor.LibraryDoctorAuditor(context).auditReportFlow.value
+        } catch (_: Exception) { null }
+
+        sb.appendLine("── EXECUTIVE SUMMARY ───────────────────────────────────────────")
+        val appHealth = if (selfTestState?.overallHealth == OverallHealth.CRITICAL || selfTestState?.overallHealth == OverallHealth.DEGRADED) "DEGRADED" else "STABLE"
+        sb.appendLine("Overall App Status: $appHealth")
+        if (selfTestState != null) {
+            sb.appendLine("Self-Test Health  : ${selfTestState.overallHealth.name} (${selfTestState.completedCount}/${SelfTestRunner.ALL_MODULES.size} modules)")
+        } else {
+            sb.appendLine("Self-Test Health  : Not run in current session")
+        }
+        if (doctorReport != null && doctorReport.summary.totalTracks > 0) {
+            sb.appendLine("Library Health    : ${doctorReport.summary.healthScore}% (${doctorReport.summary.totalIssues} issues, ${doctorReport.summary.safeAutoRepairCount} safe repairs)")
+        } else {
+            sb.appendLine("Library Health    : ${brainSummary.completeCount} / ${brainSummary.totalTracks} analyzed")
+        }
+        sb.appendLine("Central Brain     : ${if (brainSummary.isRunning) "RUNNING" else if (brainSummary.isPaused) "PAUSED" else "IDLE"}")
+        sb.appendLine("Total Tracks      : ${brainSummary.totalTracks}")
+        sb.appendLine("Completed Analysis: ${brainSummary.completeCount} / ${brainSummary.totalTracks}")
+        sb.appendLine("Pending Queue     : ${brainSummary.pendingCount}")
+        sb.appendLine("Failed Background : ${brainSummary.failedCount}")
+        sb.appendLine("Missing Audio File: ${brainSummary.missingFilesCount}")
+        sb.appendLine("Doctor Decisions  : $ignoredDoctorIssues issues ignored")
+        sb.appendLine()
+
         // 1. APPLICATION & SYSTEM ENVIRONMENT
         sb.appendLine("── 1. APPLICATION & ENVIRONMENT ──────────────────────────────────")
         sb.appendLine("App Version       : v${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})")
@@ -165,8 +197,6 @@ object DiagnosticReportExporter {
 
         // 8. LIBRARY BRAIN
         sb.appendLine("── 8. LIBRARY BRAIN ─────────────────────────────────────────────")
-        val brain = LibraryBrain.getInstance(context)
-        val brainSummary = brain.brainSummary.value
         sb.appendLine("Worker State      : ${if (brainSummary.isRunning) "RUNNING" else if (brainSummary.isPaused) "PAUSED" else "IDLE"}")
         sb.appendLine("Total Tracks      : ${brainSummary.totalTracks}")
         sb.appendLine("Completed Tracks  : ${brainSummary.completeCount}")
@@ -179,14 +209,28 @@ object DiagnosticReportExporter {
         sb.appendLine("Queue Length      : ${brainSummary.queueLength}")
         sb.appendLine()
 
-        // 9. METADATA & ENRICHMENT
-        sb.appendLine("── 9. METADATA & ENRICHMENT ─────────────────────────────────────")
+        // 9. METADATA & LIBRARY DOCTOR AUDIT
+        sb.appendLine("── 9. METADATA & LIBRARY DOCTOR AUDIT ───────────────────────────")
         sb.appendLine("Last Provider     : Apple iTunes Search API / TheAudioDB / Embedded ID3")
         sb.appendLine("Artwork Source    : ${currentTrack?.artworkSource ?: "None"}")
         sb.appendLine("User Confirmed    : ${currentTrack?.userConfirmedMetadata ?: false}")
+        if (doctorReport != null && doctorReport.summary.totalTracks > 0) {
+            sb.appendLine("Library Health    : ${doctorReport.summary.healthScore}%")
+            sb.appendLine("Total Issues      : ${doctorReport.summary.totalIssues}")
+            sb.appendLine("Safe Auto-Repair  : ${doctorReport.summary.safeAutoRepairCount}")
+            sb.appendLine("Needs Manual Review: ${doctorReport.summary.needsReviewCount}")
+            for ((cat, count) in doctorReport.summary.categoryCounts) {
+                sb.appendLine("  - ${cat.displayName}: $count")
+            }
+        } else {
+            sb.appendLine("Library Health    : Evaluated from Library Brain")
+            sb.appendLine("Complete Tracks   : ${brainSummary.completeCount}")
+            sb.appendLine("Incomplete / Pending: ${brainSummary.pendingCount}")
+            sb.appendLine("Missing Files     : ${brainSummary.missingFilesCount}")
+        }
         sb.appendLine()
 
-        // 10. RECENT DIAGNOSTIC ERRORS
+        // 10. RECENT DIAGNOSTIC LOGS
         sb.appendLine("── 10. RECENT DIAGNOSTIC LOGS (Newest First) ───────────────────")
         val logger = DiagnosticLogger.getInstance()
         val entries = logger.getEntries()
@@ -234,52 +278,176 @@ object DiagnosticReportExporter {
         root.put("buildType", BuildConfig.BUILD_TYPE)
         root.put("schemaVersion", 18)
 
+        val brain = LibraryBrain.getInstance(context)
+        val brainSummary = brain.brainSummary.value
+        val doctorPrefs = com.example.doctor.LibraryDoctorPreferences.getInstance(context)
+        val doctorReport = try {
+            com.example.doctor.LibraryDoctorAuditor(context).auditReportFlow.value
+        } catch (_: Exception) { null }
+        val selfTestState = SelfTestRunner.getLastSuiteState()
+
+        // 1. SUMMARY
+        val summaryObj = JSONObject()
+        summaryObj.put("overallAppHealth", if (selfTestState?.overallHealth == OverallHealth.CRITICAL || selfTestState?.overallHealth == OverallHealth.DEGRADED) "DEGRADED" else "STABLE")
+        if (selfTestState != null) {
+            val stObj = JSONObject()
+            stObj.put("overallHealth", selfTestState.overallHealth.name)
+            stObj.put("completedCount", selfTestState.completedCount)
+            stObj.put("totalModules", SelfTestRunner.ALL_MODULES.size)
+            stObj.put("isRunning", selfTestState.isRunning)
+            summaryObj.put("selfTest", stObj)
+        }
+        val lhObj = JSONObject()
+        lhObj.put("healthScore", doctorReport?.summary?.healthScore ?: 100)
+        lhObj.put("totalIssues", doctorReport?.summary?.totalIssues ?: 0)
+        lhObj.put("safeAutoRepairCount", doctorReport?.summary?.safeAutoRepairCount ?: 0)
+        lhObj.put("needsReviewCount", doctorReport?.summary?.needsReviewCount ?: 0)
+        summaryObj.put("libraryHealth", lhObj)
+        summaryObj.put("ignoredDoctorDecisions", doctorPrefs.getIgnoredCount())
+        root.put("summary", summaryObj)
+
+        // 2. PLAYBACK
+        val engine = audioEngine ?: DjAudioEngine.getInstance(context)
+        val diag = engine.getPlaybackDiagnostics()
+        val currentTrack = diag.currentTrack
+        val isPlaying = diag.isPlaying
+        val playbackObj = JSONObject()
+        playbackObj.put("playbackState", if (isPlaying) "PLAYING" else if (currentTrack != null) "PAUSED" else "IDLE")
+        playbackObj.put("currentTrackId", currentTrack?.id)
+        playbackObj.put("title", currentTrack?.title)
+        playbackObj.put("artist", currentTrack?.artist)
+        val p = currentTrack?.filePath?.let { if (redactFilePaths) redactPath(it) else it }
+        playbackObj.put("filePath", p)
+        playbackObj.put("decoder", diag.decoderName)
+        playbackObj.put("format", diag.containerFormat)
+        playbackObj.put("mime", diag.mimeType)
+        playbackObj.put("sampleRate", diag.sampleRate)
+        playbackObj.put("bitDepth", diag.bitDepth)
+        playbackObj.put("channelCount", diag.channelCount)
+        playbackObj.put("bitrateKbps", diag.bitrateKbps)
+        playbackObj.put("positionMs", diag.positionMs)
+        val durationMs = currentTrack?.durationSeconds?.toLong()?.times(1000L) ?: 0L
+        playbackObj.put("durationMs", durationMs)
+        playbackObj.put("playbackSpeed", diag.playbackSpeed)
+        playbackObj.put("audioSessionId", diag.audioSessionId)
+        playbackObj.put("hasAudioFocus", diag.hasAudioFocus)
+
+        val queue = viewModel?.playbackQueue?.value ?: emptyList()
+        val queueIdx = viewModel?.queueIndex?.value ?: 0
+        val queueObj = JSONObject()
+        queueObj.put("size", queue.size)
+        queueObj.put("currentIndex", queueIdx)
+        queueObj.put("currentItemTitle", queue.getOrNull(queueIdx)?.title)
+        queueObj.put("previousItemTitle", queue.getOrNull(queueIdx - 1)?.title)
+        queueObj.put("nextItemTitle", queue.getOrNull(queueIdx + 1)?.title)
+        queueObj.put("isShuffleEnabled", viewModel?.isShuffleEnabled?.value ?: false)
+        queueObj.put("repeatMode", viewModel?.repeatMode?.value?.name ?: "OFF")
+        playbackObj.put("queue", queueObj)
+        root.put("playback", playbackObj)
+
+        // 3. LIBRARY BRAIN
+        val brainObj = JSONObject()
+        brainObj.put("workerState", if (brainSummary.isRunning) "RUNNING" else if (brainSummary.isPaused) "PAUSED" else "IDLE")
+        brainObj.put("totalTracks", brainSummary.totalTracks)
+        brainObj.put("completeCount", brainSummary.completeCount)
+        brainObj.put("pendingCount", brainSummary.pendingCount)
+        brainObj.put("failedCount", brainSummary.failedCount)
+        brainObj.put("needsReviewCount", brainSummary.needsReviewCount)
+        brainObj.put("missingFilesCount", brainSummary.missingFilesCount)
+        brainObj.put("queueLength", brainSummary.queueLength)
+        brainObj.put("currentJobDescription", brainSummary.currentJobDescription)
+        brainObj.put("activeTrackTitle", brainSummary.currentTrackTitle)
+        root.put("libraryBrain", brainObj)
+
+        // 4. LIBRARY & DOCTOR AUDIT
+        val libObj = JSONObject()
+        libObj.put("totalTracks", brainSummary.totalTracks)
+        libObj.put("completeTracks", brainSummary.completeCount)
+        libObj.put("missingFiles", brainSummary.missingFilesCount)
+        libObj.put("incompleteAnalysis", brainSummary.pendingCount)
+        if (doctorReport != null) {
+            libObj.put("healthScore", doctorReport.summary.healthScore)
+            libObj.put("totalIssues", doctorReport.summary.totalIssues)
+            libObj.put("safeAutoRepairCount", doctorReport.summary.safeAutoRepairCount)
+            libObj.put("needsReviewCount", doctorReport.summary.needsReviewCount)
+            val catCounts = JSONObject()
+            for ((cat, count) in doctorReport.summary.categoryCounts) {
+                catCounts.put(cat.name, count)
+            }
+            libObj.put("categoryCounts", catCounts)
+        }
+        root.put("library", libObj)
+
+        // 5. SYSTEM
+        val sysObj = JSONObject()
         val deviceObj = JSONObject()
         deviceObj.put("androidRelease", Build.VERSION.RELEASE)
         deviceObj.put("sdkInt", Build.VERSION.SDK_INT)
         deviceObj.put("manufacturer", Build.MANUFACTURER)
         deviceObj.put("model", Build.MODEL)
-        root.put("device", deviceObj)
+        deviceObj.put("board", Build.BOARD)
+        sysObj.put("device", deviceObj)
 
         val rt = Runtime.getRuntime()
         val memObj = JSONObject()
         memObj.put("usedHeapMb", (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024))
         memObj.put("maxHeapMb", rt.maxMemory() / (1024 * 1024))
         memObj.put("nativeHeapMb", android.os.Debug.getNativeHeapAllocatedSize() / (1024 * 1024))
+        sysObj.put("memory", memObj)
+
+        val statFs = try { StatFs(Environment.getDataDirectory().path) } catch (_: Exception) { null }
+        val storageObj = JSONObject()
+        storageObj.put("availableMb", statFs?.let { it.availableBlocksLong * it.blockSizeLong / (1024 * 1024) } ?: -1L)
+        storageObj.put("totalMb", statFs?.let { it.blockCountLong * it.blockSizeLong / (1024 * 1024) } ?: -1L)
+        storageObj.put("cacheDirWritable", context.cacheDir.canWrite())
+        storageObj.put("filesDirWritable", context.filesDir.canWrite())
+        sysObj.put("storage", storageObj)
+
+        val mediaAudioPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_MEDIA_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        val notifPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else true
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        val permObj = JSONObject()
+        permObj.put("mediaAudioAccess", mediaAudioPerm)
+        permObj.put("notificationPerm", notifPerm)
+        permObj.put("batteryOptimizedIgnored", pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false)
+        sysObj.put("permissions", permObj)
+
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+        val net = cm?.activeNetwork
+        val caps = cm?.getNetworkCapabilities(net)
+        val netObj = JSONObject()
+        netObj.put("hasInternet", caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true)
+        netObj.put("isWifi", caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true)
+        netObj.put("isCellular", caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true)
+        sysObj.put("network", netObj)
+
+        root.put("system", sysObj)
+        root.put("device", deviceObj)
         root.put("memory", memObj)
 
-        val engine = audioEngine ?: DjAudioEngine.getInstance(context)
-        val diag = engine.getPlaybackDiagnostics()
-        val playbackObj = JSONObject()
-        playbackObj.put("isPlaying", diag.isPlaying)
-        playbackObj.put("currentTrackId", diag.currentTrack?.id)
-        playbackObj.put("trackTitle", diag.currentTrack?.title)
-        val p = diag.currentTrack?.filePath?.let { if (redactFilePaths) redactPath(it) else it }
-        playbackObj.put("filePath", p)
-        playbackObj.put("decoder", diag.decoderName)
-        playbackObj.put("format", diag.containerFormat)
-        playbackObj.put("mime", diag.mimeType)
-        playbackObj.put("sampleRate", diag.sampleRate)
-        playbackObj.put("bitrateKbps", diag.bitrateKbps)
-        playbackObj.put("channels", diag.channelCount)
-        playbackObj.put("positionMs", diag.positionMs)
-        playbackObj.put("audioSessionId", diag.audioSessionId)
-        playbackObj.put("hasAudioFocus", diag.hasAudioFocus)
-        root.put("playback", playbackObj)
+        // 6. BLUETOOTH & AUDIO OUTPUT
+        val audioTracker = AudioOutputTracker.getInstance(context)
+        val audioDiag = audioTracker.buildSnapshot()
+        val btObj = JSONObject()
+        btObj.put("bluetoothState", audioDiag.bluetoothState)
+        btObj.put("activeRoute", audioDiag.activeRoute)
+        val devArr = JSONArray()
+        audioDiag.connectedDevices.forEach { devArr.put(it) }
+        btObj.put("connectedDevices", devArr)
+        btObj.put("lastConnectEvent", audioDiag.lastConnectEvent)
+        btObj.put("lastDisconnectEvent", audioDiag.lastDisconnectEvent)
+        btObj.put("autoPauseOnDisconnectFired", audioDiag.autoPauseOnDisconnectFired)
+        btObj.put("lastAudioFocusEvent", audioDiag.lastAudioFocusEvent)
+        btObj.put("lastNoisyEvent", audioDiag.lastNoisyEvent)
+        root.put("audioOutput", btObj)
 
-        val brain = LibraryBrain.getInstance(context)
-        val brainSummary = brain.brainSummary.value
-        val brainObj = JSONObject()
-        brainObj.put("isRunning", brainSummary.isRunning)
-        brainObj.put("isPaused", brainSummary.isPaused)
-        brainObj.put("totalTracks", brainSummary.totalTracks)
-        brainObj.put("completeCount", brainSummary.completeCount)
-        brainObj.put("failedCount", brainSummary.failedCount)
-        brainObj.put("pendingCount", brainSummary.pendingCount)
-        brainObj.put("needsReviewCount", brainSummary.needsReviewCount)
-        brainObj.put("currentJobDescription", brainSummary.currentJobDescription)
-        root.put("libraryBrain", brainObj)
-
+        // 7. RECENT LOGS / ERRORS
         val logsArr = JSONArray()
         val entries = DiagnosticLogger.getInstance().getEntries()
         for (e in entries) {
@@ -290,6 +458,10 @@ object DiagnosticReportExporter {
             o.put("code", e.code)
             o.put("message", e.message)
             if (e.trackId != null) o.put("trackId", e.trackId)
+            if (e.filePath != null) {
+                val pathStr = if (redactFilePaths) redactPath(e.filePath) else e.filePath
+                o.put("filePath", pathStr)
+            }
             logsArr.put(o)
         }
         root.put("recentLogs", logsArr)

@@ -111,6 +111,35 @@ class LibraryDoctorPreferences(context: Context) {
     }
 
     @Synchronized
+    fun getAllIgnored(): Set<String> {
+        return prefs.getStringSet(KEY_IGNORED, emptySet()) ?: emptySet()
+    }
+
+    @Synchronized
+    fun getAllReviewed(): Set<String> {
+        return prefs.getStringSet(KEY_REVIEWED, emptySet()) ?: emptySet()
+    }
+
+    @Synchronized
+    fun getAllFixed(): Set<String> {
+        return prefs.getStringSet(KEY_FIXED, emptySet()) ?: emptySet()
+    }
+
+    @Synchronized
+    fun restoreIgnored(issueIds: Collection<String>) {
+        val current = (prefs.getStringSet(KEY_IGNORED, emptySet()) ?: emptySet()).toMutableSet()
+        current.addAll(issueIds)
+        prefs.edit().putStringSet(KEY_IGNORED, current).apply()
+    }
+
+    @Synchronized
+    fun restoreReviewed(issueIds: Collection<String>) {
+        val current = (prefs.getStringSet(KEY_REVIEWED, emptySet()) ?: emptySet()).toMutableSet()
+        current.addAll(issueIds)
+        prefs.edit().putStringSet(KEY_REVIEWED, current).apply()
+    }
+
+    @Synchronized
     fun clearAllPreferences() {
         prefs.edit().clear().apply()
     }

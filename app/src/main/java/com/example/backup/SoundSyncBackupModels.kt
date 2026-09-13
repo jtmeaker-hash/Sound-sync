@@ -17,10 +17,12 @@ data class SoundSyncBackup(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val songFinds: List<SongFindBackupItem> = emptyList(),
-    val tracks: List<TrackBackupItem> = emptyList()
+    val tracks: List<TrackBackupItem> = emptyList(),
+    val doctorIgnoredIssues: List<String> = emptyList(),
+    val doctorReviewedIssues: List<String> = emptyList()
 ) {
     companion object {
-        const val CURRENT_BACKUP_VERSION = 1
+        const val CURRENT_BACKUP_VERSION = 2
     }
 }
 

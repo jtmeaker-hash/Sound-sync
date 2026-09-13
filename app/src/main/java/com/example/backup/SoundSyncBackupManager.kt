@@ -144,6 +144,9 @@ class SoundSyncBackupManager(
         try {
             val tracks = database.trackDao().getAllTracksSync()
             val songFinds = database.songFindDao().getAllSongFindsSync()
+            val doctorPrefs = com.example.doctor.LibraryDoctorPreferences.getInstance(context)
+            val ignoredIssues = doctorPrefs.getAllIgnored().toList()
+            val reviewedIssues = doctorPrefs.getAllReviewed().toList()
 
             val backup = SoundSyncBackup(
                 backupVersion = SoundSyncBackup.CURRENT_BACKUP_VERSION,
@@ -151,7 +154,9 @@ class SoundSyncBackupManager(
                 createdAt = prefs.getLong(KEY_LAST_BACKUP_TIME, System.currentTimeMillis()),
                 updatedAt = System.currentTimeMillis(),
                 songFinds = songFinds.map { SongFindBackupItem.fromEntity(it) },
-                tracks = tracks.map { TrackBackupItem.fromEntity(it) }
+                tracks = tracks.map { TrackBackupItem.fromEntity(it) },
+                doctorIgnoredIssues = ignoredIssues,
+                doctorReviewedIssues = reviewedIssues
             )
 
             val jsonString = serializeBackup(backup)
@@ -327,6 +332,19 @@ class SoundSyncBackupManager(
                         }
                     }
                 } catch (_: Throwable) {}
+
+                // 3. Restore Doctor review and ignore states
+                try {
+                    val doctorPrefs = com.example.doctor.LibraryDoctorPreferences.getInstance(context)
+                    if (backup.doctorIgnoredIssues.isNotEmpty()) {
+                        doctorPrefs.restoreIgnored(backup.doctorIgnoredIssues)
+                    }
+                    if (backup.doctorReviewedIssues.isNotEmpty()) {
+                        doctorPrefs.restoreReviewed(backup.doctorReviewedIssues)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to restore doctor preferences", e)
+                }
             }
 
             _summaryFlow.value = loadSummary()
@@ -379,6 +397,18 @@ class SoundSyncBackupManager(
                 tracks.add(TrackBackupItem.fromJson(tracksArray.getJSONObject(i)))
             }
 
+            val ignoredArray = root.optJSONArray("doctorIgnoredIssues") ?: JSONArray()
+            val doctorIgnored = mutableListOf<String>()
+            for (i in 0 until ignoredArray.length()) {
+                doctorIgnored.add(ignoredArray.getString(i))
+            }
+
+            val reviewedArray = root.optJSONArray("doctorReviewedIssues") ?: JSONArray()
+            val doctorReviewed = mutableListOf<String>()
+            for (i in 0 until reviewedArray.length()) {
+                doctorReviewed.add(reviewedArray.getString(i))
+            }
+
             ValidationResult.Valid(
                 SoundSyncBackup(
                     backupVersion = version,
@@ -386,7 +416,9 @@ class SoundSyncBackupManager(
                     createdAt = createdAt,
                     updatedAt = updatedAt,
                     songFinds = songFinds,
-                    tracks = tracks
+                    tracks = tracks,
+                    doctorIgnoredIssues = doctorIgnored,
+                    doctorReviewedIssues = doctorReviewed
                 )
             )
         } catch (e: Exception) {
@@ -493,6 +525,14 @@ class SoundSyncBackupManager(
             val tracksArray = JSONArray()
             backup.tracks.forEach { tracksArray.put(it.toJson()) }
             put("tracks", tracksArray)
+
+            val doctorIgnoredArray = JSONArray()
+            backup.doctorIgnoredIssues.forEach { doctorIgnoredArray.put(it) }
+            put("doctorIgnoredIssues", doctorIgnoredArray)
+
+            val doctorReviewedArray = JSONArray()
+            backup.doctorReviewedIssues.forEach { doctorReviewedArray.put(it) }
+            put("doctorReviewedIssues", doctorReviewedArray)
         }
         return root.toString()
     }

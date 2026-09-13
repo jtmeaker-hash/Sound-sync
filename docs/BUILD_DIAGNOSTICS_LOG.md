@@ -25,6 +25,37 @@ as unavailable by the backfill.
 
 ## Automated CI run log
 
+### Stage 4 — Integration, Polish, Backup Compatibility & Regression Gate
+- **Date**: 2026-09-13T21:24:00Z
+- **Branch**: `Debug`
+- **Target**: Stage 4 Completion
+
+#### Issues Discovered:
+- Exported diagnostic report lacked consolidated executive summaries and library doctor audit telemetry in plain text and JSON outputs.
+- Bluetooth disconnection and wired audio becoming noisy events did not trigger automatic audio engine pause callbacks.
+- SoundSync persistent backup schema (version 1) did not retain Library Doctor user ignore and review preferences across app reinstallations.
+- Diagnostic report exporter had conflicting local variable declarations and referenced non-existent `OverallHealth.FAILED` enum constant instead of `CRITICAL`/`DEGRADED`.
+- JSON diagnostic exporter nested device and memory blocks exclusively inside the `system` object, breaking root-level consumers expecting top-level keys.
+
+#### Changes Made:
+- Enhanced `DiagnosticReportExporter` with comprehensive executive summary and library doctor audit sections in both formatted plain text and structured JSON reports.
+- Hardened failure recovery by wiring automatic audio pause in `AudioOutputTracker` (`recordDisconnect`, `recordNoisyEvent`) and `BluetoothCarReceiver` (`ACTION_ACL_DISCONNECTED`).
+- Upgraded `SoundSyncBackup` schema to version 2, incorporating `doctorIgnoredIssues` and `doctorReviewedIssues` while maintaining full backward compatibility for version 1 backups.
+- Integrated `LibraryDoctorPreferences` persistence methods (`getAllIgnored`, `getAllReviewed`, `restoreIgnored`, `restoreReviewed`) into `SoundSyncBackupManager` create and restore flows.
+- Extended `SelfTestRunner` with `lastKnownState` companion tracking to allow immediate diagnostics export access to the latest test suite metrics.
+- Added unit tests in `SoundSyncBackupAndRestoreTest` covering v1/v2 schema validation and Doctor preference restoration.
+
+#### Fixes Applied:
+- Resolved brace nesting issue in `SoundSyncBackupManager.restoreBackup` storage reconciliation block.
+- Aligned `OverallHealth` status mapping in `DiagnosticReportExporter` with valid enum values (`CRITICAL`, `DEGRADED`, `WARNING`, `GOOD`).
+- Preserved top-level `device` and `memory` JSON properties in `DiagnosticReportExporter.generateJsonReport` alongside the unified `system` object.
+- Reunified section numbering in plain text report to preserve `10. RECENT DIAGNOSTIC LOGS` test contract.
+
+#### Test Results:
+- Unit tests: 400+ tests passed (0 failures) via `./gradlew testDebugUnitTest`
+- Debug APK: SUCCESS (`app-debug.apk`, 27MB) via `./gradlew assembleDebug`
+- Release APK: SKIPPED (non-release branch push per repository rule)
+
 ### Stage 3 — Library Doctor
 - **Date**: 2026-09-13T20:44:00Z
 - **Branch**: `Debug`

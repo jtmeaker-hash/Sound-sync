@@ -66,6 +66,11 @@ class SelfTestRunner(private val context: Context) {
             MOD_LIBRARY_BRAIN,
             MOD_ERROR_REPORTING
         )
+
+        @Volatile
+        private var lastKnownState: SelfTestSuiteState? = null
+
+        fun getLastSuiteState(): SelfTestSuiteState? = lastKnownState
     }
 
     private val _suiteState = MutableStateFlow(
@@ -92,6 +97,7 @@ class SelfTestRunner(private val context: Context) {
             completedCount = 0,
             progress = 0f
         )
+        lastKnownState = _suiteState.value
 
         for ((index, moduleName) in ALL_MODULES.withIndex()) {
             // Mark current module as RUNNING
@@ -105,6 +111,7 @@ class SelfTestRunner(private val context: Context) {
                 results = currentResults.toMap(),
                 progress = index.toFloat() / ALL_MODULES.size.toFloat()
             )
+            lastKnownState = _suiteState.value
 
             // Run individual test safely
             val result = runModuleTestInternal(moduleName)
@@ -116,6 +123,7 @@ class SelfTestRunner(private val context: Context) {
                 progress = (index + 1).toFloat() / ALL_MODULES.size.toFloat(),
                 overallHealth = computeOverallHealth(currentResults.values)
             )
+            lastKnownState = _suiteState.value
         }
 
         _suiteState.value = _suiteState.value.copy(
@@ -123,6 +131,7 @@ class SelfTestRunner(private val context: Context) {
             overallHealth = computeOverallHealth(currentResults.values),
             progress = 1.0f
         )
+        lastKnownState = _suiteState.value
     }
 
     /**
@@ -147,6 +156,7 @@ class SelfTestRunner(private val context: Context) {
             results = currentResults.toMap(),
             overallHealth = computeOverallHealth(currentResults.values)
         )
+        lastKnownState = _suiteState.value
     }
 
     private suspend fun runModuleTestInternal(moduleName: String): SelfTestResult {

@@ -47,6 +47,9 @@ class BluetoothCarReceiver : BroadcastReceiver() {
                 runCatching {
                     com.example.diagnostics.AudioOutputTracker.getInstance(context).recordDisconnect(device.address)
                 }
+                runCatching {
+                    com.example.audio.DjAudioEngine.getInstance(context).pause()
+                }
                 carManager.onBluetoothDeviceDisconnected(device)
             }
         }
