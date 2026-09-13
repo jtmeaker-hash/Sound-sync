@@ -252,6 +252,20 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         prefs.edit().putString("library_density", density.name).apply()
     }
 
+    private val _isTrackGridView = MutableStateFlow(
+        prefs.getBoolean("library_track_grid_view", false)
+    )
+    val isTrackGridView: StateFlow<Boolean> = _isTrackGridView.asStateFlow()
+
+    fun setTrackGridView(enabled: Boolean) {
+        _isTrackGridView.value = enabled
+        prefs.edit().putBoolean("library_track_grid_view", enabled).apply()
+    }
+
+    fun toggleTrackGridView() {
+        setTrackGridView(!_isTrackGridView.value)
+    }
+
     private val _selectedTab = MutableStateFlow(DjTab.LOCAL)
     val selectedTab = _selectedTab.asStateFlow()
 

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
@@ -49,7 +50,9 @@ import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.Warning
+import com.example.ui.components.TrackGridView
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -129,6 +132,8 @@ fun SongsScreen(
     isPlaying: Boolean,
     hideUnavailableTracks: Boolean = false,
     onToggleHideUnavailable: () -> Unit = {},
+    isTrackGridView: Boolean = false,
+    onToggleTrackGridView: () -> Unit = {},
     onPlayTrack: (Track) -> Unit,
     onPlayAll: (List<Track>, Boolean) -> Unit,
     onAddToPlaylist: (Track) -> Unit,
@@ -256,6 +261,23 @@ fun SongsScreen(
                     .height(48.dp),
                 testTag = "songs_search_input"
             )
+
+            IconButton(
+                onClick = onToggleTrackGridView,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(theme.cornerSmall))
+                    .background(theme.surfaceRaised)
+                    .border(1.dp, theme.divider, RoundedCornerShape(theme.cornerSmall))
+                    .testTag("songs_view_mode_toggle")
+            ) {
+                Icon(
+                    imageVector = if (isTrackGridView) Icons.Default.ViewList else Icons.Default.GridView,
+                    contentDescription = if (isTrackGridView) "Switch to List View" else "Switch to Grid View",
+                    tint = if (isTrackGridView) theme.accent else theme.textSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
 
             Box {
                 IconButton(
@@ -494,6 +516,32 @@ fun SongsScreen(
                     }
                 }
             }
+        } else if (isTrackGridView) {
+            TrackGridView(
+                tracks = filteredTracks,
+                currentPlayingTrack = currentPlayingTrack,
+                isPlaying = isPlaying,
+                isSelectionMode = selectedTrackIds.isNotEmpty(),
+                selectedTrackIds = selectedTrackIds,
+                onToggleSelection = { track ->
+                    selectedTrackIds = if (selectedTrackIds.contains(track.id)) {
+                        selectedTrackIds - track.id
+                    } else {
+                        selectedTrackIds + track.id
+                    }
+                },
+                onPlayTrack = onPlayTrack,
+                onAddToPlaylist = onAddToPlaylist,
+                onQueueTrack = onQueueTrack,
+                onInspectProperties = onInspectProperties,
+                onInspectSpectrogram = onInspectSpectrogram,
+                onMixWithThis = onMixWithThis,
+                onInspectQuality = onInspectQuality,
+                onOpenLyrics = onOpenLyrics,
+                onOpenTrackIntelligence = onOpenTrackIntelligence,
+                onOpenPlaybackIssueSheet = onOpenPlaybackIssueSheet,
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
         } else {
             val isPro = SoundSyncTheme.isPro
             if (isPro) {

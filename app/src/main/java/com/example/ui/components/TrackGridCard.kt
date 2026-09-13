@@ -120,6 +120,14 @@ fun TrackGridCard(
         }
     }
 
+    LaunchedEffect(track.id) {
+        AlbumArtHelper.artworkInvalidationFlow.collect { invalidatedTrackId ->
+            if (invalidatedTrackId == track.id) {
+                artworkBitmap = AlbumArtHelper.getArtworkForTrack(context, track, 320)
+            }
+        }
+    }
+
     val cardCorner = theme.cornerMedium.coerceAtLeast(10.dp)
 
     Card(

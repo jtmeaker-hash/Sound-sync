@@ -24,12 +24,15 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Queue
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.ViewList
+import com.example.ui.components.TrackGridView
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -75,6 +78,8 @@ fun FolderDetailScreen(
     folder: TrackFolder,
     currentPlayingTrack: Track?,
     isPlaying: Boolean,
+    isTrackGridView: Boolean = false,
+    onToggleTrackGridView: () -> Unit = {},
     onBack: () -> Unit,
     onPlayTrack: (Track) -> Unit,
     onPlayAll: (List<Track>, Boolean) -> Unit,
@@ -131,154 +136,65 @@ fun FolderDetailScreen(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
+
+            // View mode toggle button
+            IconButton(
+                onClick = onToggleTrackGridView,
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(DjSurfaceDark)
+                    .testTag("folder_view_mode_toggle")
+            ) {
+                Icon(
+                    imageVector = if (isTrackGridView) Icons.Default.ViewList else Icons.Default.GridView,
+                    contentDescription = if (isTrackGridView) "Switch to List View" else "Switch to Grid View",
+                    tint = DeckACyan,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 96.dp)
-        ) {
-            // Folder Header Card
-            item {
-                Surface(
-                    color = DjSurfaceDark,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(DjSurfaceElevated),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Folder,
-                                    contentDescription = null,
-                                    tint = DeckACyan,
-                                    modifier = Modifier.size(36.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(14.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = folder.name,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                Text(
-                                    text = folder.path,
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = TextMuted,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                Text(
-                                    text = "${folder.trackCount} tracks · $formattedTotalDuration",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = DeckACyan
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // Action Buttons: Play All, Shuffle, Add to Playlist
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(
-                                onClick = { onPlayAll(folder.tracks, false) },
-                                colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = null,
-                                    tint = DjObsidian,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Play All",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = DjObsidian
-                                )
-                            }
-
-                            OutlinedButton(
-                                onClick = { onPlayAll(folder.tracks, true) },
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Shuffle,
-                                    contentDescription = null,
-                                    tint = DeckBPink,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Shuffle",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary
-                                )
-                            }
-
-                            OutlinedButton(
-                                onClick = { onAddFolderToPlaylist(folder.tracks) },
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PlaylistAdd,
-                                    contentDescription = null,
-                                    tint = NeonGreen,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Playlist",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary
-                                )
-                            }
-                        }
-                    }
-                }
+        if (isTrackGridView) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                FolderHeaderCard(
+                    folder = folder,
+                    formattedTotalDuration = formattedTotalDuration,
+                    onPlayAll = onPlayAll,
+                    onAddFolderToPlaylist = onAddFolderToPlaylist
+                )
+                TrackGridView(
+                    tracks = folder.tracks,
+                    currentPlayingTrack = currentPlayingTrack,
+                    isPlaying = isPlaying,
+                    onPlayTrack = onPlayTrack,
+                    onQueueTrack = onQueueTrack,
+                    onAddToPlaylist = onAddTrackToPlaylist,
+                    onInspectSpectrogram = onInspectSpectrogram,
+                    onInspectProperties = onInspectProperties,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 96.dp)
+            ) {
+                // Folder Header Card
+                item {
+                    FolderHeaderCard(
+                        folder = folder,
+                        formattedTotalDuration = formattedTotalDuration,
+                        onPlayAll = onPlayAll,
+                        onAddFolderToPlaylist = onAddFolderToPlaylist
+                    )
+                }
 
-            // Track List Items
-            itemsIndexed(folder.tracks, key = { _, track -> track.id }) { index, track ->
-                val isAvailable = track.isAvailable
-                val isCurrentlyPlaying = currentPlayingTrack?.id == track.id
-                var showTrackMenu by remember { mutableStateOf(false) }
+                // Track List Items
+                itemsIndexed(folder.tracks, key = { _, track -> track.id }) { index, track ->
+                    val isAvailable = track.isAvailable
+                    val isCurrentlyPlaying = currentPlayingTrack?.id == track.id
+                    var showTrackMenu by remember { mutableStateOf(false) }
 
                 Surface(
                     color = if (isCurrentlyPlaying) DjSurfaceElevated else DjSurfaceCard.copy(alpha = if (isAvailable) 1f else 0.45f),
@@ -508,6 +424,149 @@ fun FolderDetailScreen(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+}
+
+@Composable
+private fun FolderHeaderCard(
+    folder: TrackFolder,
+    formattedTotalDuration: String,
+    onPlayAll: (List<Track>, Boolean) -> Unit,
+    onAddFolderToPlaylist: (List<Track>) -> Unit
+) {
+    Surface(
+        color = DjSurfaceDark,
+        border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(DjSurfaceElevated),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = null,
+                        tint = DeckACyan,
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(14.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = folder.name,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = folder.path,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextMuted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = "${folder.trackCount} tracks · $formattedTotalDuration",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = DeckACyan
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Action Buttons: Play All, Shuffle, Add to Playlist
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = { onPlayAll(folder.tracks, false) },
+                    colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = DjObsidian,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Play All",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DjObsidian
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { onPlayAll(folder.tracks, true) },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Shuffle,
+                        contentDescription = null,
+                        tint = DeckBPink,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Shuffle",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { onAddFolderToPlaylist(folder.tracks) },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlaylistAdd,
+                        contentDescription = null,
+                        tint = NeonGreen,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Playlist",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
+                    )
                 }
             }
         }

@@ -103,6 +103,7 @@ fun LocalLibraryScreen(
     val isLoadingLyrics by viewModel.lyricsManager.isLoadingLyrics.collectAsState()
     val playbackPositionMs by viewModel.audioEngine.currentPositionMs.collectAsState()
     val unplayableTracks by viewModel.unplayableTracks.collectAsState()
+    val isTrackGridView by viewModel.isTrackGridView.collectAsState()
 
     // Add to Playlist bottom sheet
     if (showAddToPlaylistSheet != null) {
@@ -314,6 +315,8 @@ fun LocalLibraryScreen(
                     folder = selectedFolder!!,
                     currentPlayingTrack = currentPlayingTrack,
                     isPlaying = isPlaying,
+                    isTrackGridView = isTrackGridView,
+                    onToggleTrackGridView = { viewModel.toggleTrackGridView() },
                     onBack = { viewModel.closeFolder() },
                     onPlayTrack = { track -> viewModel.playTrack(track) },
                     onPlayAll = { tracks, shuffle -> viewModel.playTrackList(tracks, shuffle) },
@@ -347,6 +350,8 @@ fun LocalLibraryScreen(
                             isPlaying = isPlaying,
                             hideUnavailableTracks = hideUnavailableTracks,
                             onToggleHideUnavailable = { viewModel.toggleHideUnavailableTracks() },
+                            isTrackGridView = isTrackGridView,
+                            onToggleTrackGridView = { viewModel.toggleTrackGridView() },
                             onPlayTrack = { track -> viewModel.playTrack(track) },
                             onPlayAll = { tracks, shuffle -> viewModel.playTrackList(tracks, shuffle) },
                             onAddToPlaylist = { track -> viewModel.openAddToPlaylist(track) },
