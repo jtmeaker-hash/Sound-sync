@@ -836,6 +836,10 @@ class DjAudioEngine(private val context: Context) {
 
             // DSP engine
             val dspEq = ParametricEq(sampleRate)
+            var lastAppliedEqVer = -1
+            var lastAppliedLow = Float.NaN
+            var lastAppliedMid = Float.NaN
+            var lastAppliedHigh = Float.NaN
             val bufferInfo = MediaCodec.BufferInfo()
             var inputEos = false
             var outputEos = false
@@ -1008,11 +1012,22 @@ class DjAudioEngine(private val context: Context) {
 
                                 // ── Apply DSP chain ────────────────────
                                 if (_eqEnabled.value && parametricEqManager.isEqEnabled.value) {
-                                    dspEq.lowGain = _eqLow.value
-                                    dspEq.midGain = _eqMid.value
-                                    dspEq.highGain = _eqHigh.value
-                                    dspEq.setBands(parametricEqManager.currentBands.value)
-                                    dspEq.preampDb = parametricEqManager.preampDb.value
+                                    val eqVer = parametricEqManager.version.get()
+                                    val curLow = _eqLow.value
+                                    val curMid = _eqMid.value
+                                    val curHigh = _eqHigh.value
+                                    if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh) {
+                                        lastAppliedEqVer = eqVer
+                                        lastAppliedLow = curLow
+                                        lastAppliedMid = curMid
+                                        lastAppliedHigh = curHigh
+                                        dspEq.lowGain = curLow
+                                        dspEq.midGain = curMid
+                                        dspEq.highGain = curHigh
+                                        dspEq.preampDb = parametricEqManager.preampDb.value
+                                        dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
+                                        dspEq.setBands(parametricEqManager.currentBands.value)
+                                    }
                                     dspEq.processStereo(pcmStereo, 0, filled)
                                 }
                                 if (haasEffect.isActive) {
@@ -1094,11 +1109,22 @@ class DjAudioEngine(private val context: Context) {
                     if (nextFrames > 0) {
                         System.arraycopy(nextPcm!!, 0, pcmStereo, 0, nextFrames * 2)
                         if (_eqEnabled.value && parametricEqManager.isEqEnabled.value) {
-                            dspEq.lowGain = _eqLow.value
-                            dspEq.midGain = _eqMid.value
-                            dspEq.highGain = _eqHigh.value
-                            dspEq.setBands(parametricEqManager.currentBands.value)
-                            dspEq.preampDb = parametricEqManager.preampDb.value
+                            val eqVer = parametricEqManager.version.get()
+                            val curLow = _eqLow.value
+                            val curMid = _eqMid.value
+                            val curHigh = _eqHigh.value
+                            if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh) {
+                                lastAppliedEqVer = eqVer
+                                lastAppliedLow = curLow
+                                lastAppliedMid = curMid
+                                lastAppliedHigh = curHigh
+                                dspEq.lowGain = curLow
+                                dspEq.midGain = curMid
+                                dspEq.highGain = curHigh
+                                dspEq.preampDb = parametricEqManager.preampDb.value
+                                dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
+                                dspEq.setBands(parametricEqManager.currentBands.value)
+                            }
                             dspEq.processStereo(pcmStereo, 0, nextFrames)
                         }
                         if (haasEffect.isActive) haasEffect.process(pcmStereo, 0, nextFrames, sampleRate)
@@ -1274,6 +1300,10 @@ class DjAudioEngine(private val context: Context) {
             var crossfadeDecoderPrepared = false
 
             val dspEq = ParametricEq(sampleRate)
+            var lastAppliedEqVer = -1
+            var lastAppliedLow = Float.NaN
+            var lastAppliedMid = Float.NaN
+            var lastAppliedHigh = Float.NaN
             var iterations = 0L
 
             while (!isEngineReleased && generationGate.isCurrent(session)) {
@@ -1387,11 +1417,22 @@ class DjAudioEngine(private val context: Context) {
                     }
 
                     if (_eqEnabled.value && parametricEqManager.isEqEnabled.value) {
-                        dspEq.lowGain = _eqLow.value
-                        dspEq.midGain = _eqMid.value
-                        dspEq.highGain = _eqHigh.value
-                        dspEq.setBands(parametricEqManager.currentBands.value)
-                        dspEq.preampDb = parametricEqManager.preampDb.value
+                        val eqVer = parametricEqManager.version.get()
+                        val curLow = _eqLow.value
+                        val curMid = _eqMid.value
+                        val curHigh = _eqHigh.value
+                        if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh) {
+                            lastAppliedEqVer = eqVer
+                            lastAppliedLow = curLow
+                            lastAppliedMid = curMid
+                            lastAppliedHigh = curHigh
+                            dspEq.lowGain = curLow
+                            dspEq.midGain = curMid
+                            dspEq.highGain = curHigh
+                            dspEq.preampDb = parametricEqManager.preampDb.value
+                            dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
+                            dspEq.setBands(parametricEqManager.currentBands.value)
+                        }
                         dspEq.processStereo(pcmStereo, 0, filled)
                     }
                     if (haasEffect.isActive) {
@@ -1457,11 +1498,22 @@ class DjAudioEngine(private val context: Context) {
                     if (nextFrames > 0) {
                         System.arraycopy(nextPcm!!, 0, pcmStereo, 0, nextFrames * 2)
                         if (_eqEnabled.value && parametricEqManager.isEqEnabled.value) {
-                            dspEq.lowGain = _eqLow.value
-                            dspEq.midGain = _eqMid.value
-                            dspEq.highGain = _eqHigh.value
-                            dspEq.setBands(parametricEqManager.currentBands.value)
-                            dspEq.preampDb = parametricEqManager.preampDb.value
+                            val eqVer = parametricEqManager.version.get()
+                            val curLow = _eqLow.value
+                            val curMid = _eqMid.value
+                            val curHigh = _eqHigh.value
+                            if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh) {
+                                lastAppliedEqVer = eqVer
+                                lastAppliedLow = curLow
+                                lastAppliedMid = curMid
+                                lastAppliedHigh = curHigh
+                                dspEq.lowGain = curLow
+                                dspEq.midGain = curMid
+                                dspEq.highGain = curHigh
+                                dspEq.preampDb = parametricEqManager.preampDb.value
+                                dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
+                                dspEq.setBands(parametricEqManager.currentBands.value)
+                            }
                             dspEq.processStereo(pcmStereo, 0, nextFrames)
                         }
                         if (haasEffect.isActive) haasEffect.process(pcmStereo, 0, nextFrames, sampleRate)

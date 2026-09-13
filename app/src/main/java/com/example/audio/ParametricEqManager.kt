@@ -15,10 +15,11 @@ import org.json.JSONObject
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Manages parametric EQ presets, persistence, and global active equalizer parameters.
- * Reference: Step 2 Part C requirements.
+ * Thread-safe with atomic version counter for lock-free audio thread polling.
  */
 class ParametricEqManager(
     private val context: Context,
@@ -47,7 +48,7 @@ class ParametricEqManager(
                     name = "Flat",
                     isBuiltIn = true,
                     preampDb = 0.0,
-                    bands = ParametricEq.DEFAULT_7_BANDS.map { it.copy(gainDb = 0.0) }
+                    bands = ParametricEq.DEFAULT_8_BANDS.map { it.copy(gainDb = 0.0) }
                 ),
                 EqPreset(
                     id = "preset_club_bass",
@@ -55,13 +56,14 @@ class ParametricEqManager(
                     isBuiltIn = true,
                     preampDb = -2.5,
                     bands = listOf(
-                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 60.0, 5.5, 0.71, true),
-                        EqBand(1, "Bass", EqFilterType.PEAKING, 150.0, 4.0, 1.0, true),
-                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 450.0, 1.5, 1.2, true),
-                        EqBand(3, "Mid", EqFilterType.PEAKING, 1000.0, -1.0, 1.4, true),
-                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 2500.0, 1.0, 1.4, true),
-                        EqBand(5, "Presence", EqFilterType.PEAKING, 6000.0, 2.5, 1.2, true),
-                        EqBand(6, "Brilliance", EqFilterType.HIGH_SHELF, 14000.0, 3.5, 0.71, true)
+                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 32.0, 5.5, 0.71, true),
+                        EqBand(1, "Bass", EqFilterType.PEAKING, 64.0, 4.5, 1.0, true),
+                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 160.0, 2.0, 1.2, true),
+                        EqBand(3, "Mid", EqFilterType.PEAKING, 500.0, -1.0, 1.4, true),
+                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 1200.0, 0.5, 1.4, true),
+                        EqBand(5, "Presence", EqFilterType.PEAKING, 3000.0, 2.0, 1.2, true),
+                        EqBand(6, "Brilliance", EqFilterType.PEAKING, 8000.0, 3.5, 1.0, true),
+                        EqBand(7, "Air", EqFilterType.HIGH_SHELF, 16000.0, 4.0, 0.71, true)
                     )
                 ),
                 EqPreset(
@@ -70,13 +72,14 @@ class ParametricEqManager(
                     isBuiltIn = true,
                     preampDb = -2.0,
                     bands = listOf(
-                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 60.0, 4.5, 0.71, true),
-                        EqBand(1, "Bass", EqFilterType.PEAKING, 150.0, 3.0, 1.0, true),
-                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 450.0, 0.0, 1.2, true),
-                        EqBand(3, "Mid", EqFilterType.PEAKING, 1000.0, 0.5, 1.4, true),
-                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 2500.0, 2.0, 1.4, true),
-                        EqBand(5, "Presence", EqFilterType.PEAKING, 6000.0, 3.5, 1.2, true),
-                        EqBand(6, "Brilliance", EqFilterType.HIGH_SHELF, 14000.0, 4.0, 0.71, true)
+                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 32.0, 4.5, 0.71, true),
+                        EqBand(1, "Bass", EqFilterType.PEAKING, 64.0, 3.5, 1.0, true),
+                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 160.0, 1.0, 1.2, true),
+                        EqBand(3, "Mid", EqFilterType.PEAKING, 500.0, 0.5, 1.4, true),
+                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 1200.0, 1.5, 1.4, true),
+                        EqBand(5, "Presence", EqFilterType.PEAKING, 3000.0, 3.0, 1.2, true),
+                        EqBand(6, "Brilliance", EqFilterType.PEAKING, 8000.0, 4.0, 1.0, true),
+                        EqBand(7, "Air", EqFilterType.HIGH_SHELF, 16000.0, 4.5, 0.71, true)
                     )
                 ),
                 EqPreset(
@@ -85,13 +88,14 @@ class ParametricEqManager(
                     isBuiltIn = true,
                     preampDb = -3.0,
                     bands = listOf(
-                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 60.0, 6.0, 0.71, true),
-                        EqBand(1, "Bass", EqFilterType.PEAKING, 150.0, 5.0, 1.0, true),
-                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 450.0, 1.0, 1.2, true),
-                        EqBand(3, "Mid", EqFilterType.PEAKING, 1000.0, -1.5, 1.4, true),
-                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 2500.0, 1.5, 1.4, true),
-                        EqBand(5, "Presence", EqFilterType.PEAKING, 6000.0, 2.0, 1.2, true),
-                        EqBand(6, "Brilliance", EqFilterType.HIGH_SHELF, 14000.0, 2.5, 0.71, true)
+                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 32.0, 6.0, 0.71, true),
+                        EqBand(1, "Bass", EqFilterType.PEAKING, 64.0, 5.0, 1.0, true),
+                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 160.0, 2.0, 1.2, true),
+                        EqBand(3, "Mid", EqFilterType.PEAKING, 500.0, -1.5, 1.4, true),
+                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 1200.0, 1.0, 1.4, true),
+                        EqBand(5, "Presence", EqFilterType.PEAKING, 3000.0, 2.0, 1.2, true),
+                        EqBand(6, "Brilliance", EqFilterType.PEAKING, 8000.0, 2.5, 1.0, true),
+                        EqBand(7, "Air", EqFilterType.HIGH_SHELF, 16000.0, 3.0, 0.71, true)
                     )
                 ),
                 EqPreset(
@@ -100,13 +104,14 @@ class ParametricEqManager(
                     isBuiltIn = true,
                     preampDb = -1.0,
                     bands = listOf(
-                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 60.0, -3.0, 0.71, true),
-                        EqBand(1, "Bass", EqFilterType.PEAKING, 150.0, -1.5, 1.0, true),
-                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 450.0, 1.0, 1.2, true),
-                        EqBand(3, "Mid", EqFilterType.PEAKING, 1000.0, 3.0, 1.4, true),
-                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 2500.0, 4.0, 1.4, true),
-                        EqBand(5, "Presence", EqFilterType.PEAKING, 6000.0, 3.0, 1.2, true),
-                        EqBand(6, "Brilliance", EqFilterType.HIGH_SHELF, 14000.0, 1.0, 0.71, true)
+                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 32.0, -4.0, 0.71, true),
+                        EqBand(1, "Bass", EqFilterType.PEAKING, 64.0, -2.0, 1.0, true),
+                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 160.0, -1.0, 1.2, true),
+                        EqBand(3, "Mid", EqFilterType.PEAKING, 500.0, 1.5, 1.4, true),
+                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 1200.0, 3.5, 1.4, true),
+                        EqBand(5, "Presence", EqFilterType.PEAKING, 3000.0, 4.0, 1.2, true),
+                        EqBand(6, "Brilliance", EqFilterType.PEAKING, 8000.0, 2.5, 1.0, true),
+                        EqBand(7, "Air", EqFilterType.HIGH_SHELF, 16000.0, 1.5, 0.71, true)
                     )
                 ),
                 EqPreset(
@@ -115,13 +120,14 @@ class ParametricEqManager(
                     isBuiltIn = true,
                     preampDb = 0.0,
                     bands = listOf(
-                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 60.0, 1.0, 0.71, true),
-                        EqBand(1, "Bass", EqFilterType.PEAKING, 150.0, 2.0, 1.0, true),
-                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 450.0, 2.5, 1.2, true),
-                        EqBand(3, "Mid", EqFilterType.PEAKING, 1000.0, 1.5, 1.4, true),
-                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 2500.0, 1.0, 1.4, true),
-                        EqBand(5, "Presence", EqFilterType.PEAKING, 6000.0, 1.5, 1.2, true),
-                        EqBand(6, "Brilliance", EqFilterType.HIGH_SHELF, 14000.0, 2.0, 0.71, true)
+                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 32.0, 1.0, 0.71, true),
+                        EqBand(1, "Bass", EqFilterType.PEAKING, 64.0, 2.0, 1.0, true),
+                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 160.0, 2.5, 1.2, true),
+                        EqBand(3, "Mid", EqFilterType.PEAKING, 500.0, 1.5, 1.4, true),
+                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 1200.0, 1.0, 1.4, true),
+                        EqBand(5, "Presence", EqFilterType.PEAKING, 3000.0, 1.5, 1.2, true),
+                        EqBand(6, "Brilliance", EqFilterType.PEAKING, 8000.0, 2.0, 1.0, true),
+                        EqBand(7, "Air", EqFilterType.HIGH_SHELF, 16000.0, 2.5, 0.71, true)
                     )
                 ),
                 EqPreset(
@@ -130,13 +136,14 @@ class ParametricEqManager(
                     isBuiltIn = true,
                     preampDb = -2.0,
                     bands = listOf(
-                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 60.0, 3.0, 0.71, true),
-                        EqBand(1, "Bass", EqFilterType.PEAKING, 150.0, 4.0, 1.0, true),
-                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 450.0, -1.0, 1.2, true),
-                        EqBand(3, "Mid", EqFilterType.PEAKING, 1000.0, 0.0, 1.4, true),
-                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 2500.0, 2.5, 1.4, true),
-                        EqBand(5, "Presence", EqFilterType.PEAKING, 6000.0, 4.0, 1.2, true),
-                        EqBand(6, "Brilliance", EqFilterType.HIGH_SHELF, 14000.0, 3.0, 0.71, true)
+                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 32.0, 3.0, 0.71, true),
+                        EqBand(1, "Bass", EqFilterType.PEAKING, 64.0, 4.0, 1.0, true),
+                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 160.0, 2.0, 1.2, true),
+                        EqBand(3, "Mid", EqFilterType.PEAKING, 500.0, -1.0, 1.4, true),
+                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 1200.0, 1.0, 1.4, true),
+                        EqBand(5, "Presence", EqFilterType.PEAKING, 3000.0, 3.0, 1.2, true),
+                        EqBand(6, "Brilliance", EqFilterType.PEAKING, 8000.0, 4.0, 1.0, true),
+                        EqBand(7, "Air", EqFilterType.HIGH_SHELF, 16000.0, 3.5, 0.71, true)
                     )
                 ),
                 EqPreset(
@@ -145,13 +152,14 @@ class ParametricEqManager(
                     isBuiltIn = true,
                     preampDb = -1.5,
                     bands = listOf(
-                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 60.0, 0.0, 0.71, true),
-                        EqBand(1, "Bass", EqFilterType.PEAKING, 150.0, 0.0, 1.0, true),
-                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 450.0, 0.0, 1.2, true),
-                        EqBand(3, "Mid", EqFilterType.PEAKING, 1000.0, 0.5, 1.4, true),
-                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 2500.0, 2.0, 1.4, true),
-                        EqBand(5, "Presence", EqFilterType.PEAKING, 6000.0, 4.5, 1.2, true),
-                        EqBand(6, "Brilliance", EqFilterType.HIGH_SHELF, 14000.0, 6.0, 0.71, true)
+                        EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 32.0, 0.0, 0.71, true),
+                        EqBand(1, "Bass", EqFilterType.PEAKING, 64.0, 0.0, 1.0, true),
+                        EqBand(2, "Low-Mid", EqFilterType.PEAKING, 160.0, 0.0, 1.2, true),
+                        EqBand(3, "Mid", EqFilterType.PEAKING, 500.0, 0.5, 1.4, true),
+                        EqBand(4, "High-Mid", EqFilterType.PEAKING, 1200.0, 1.5, 1.4, true),
+                        EqBand(5, "Presence", EqFilterType.PEAKING, 3000.0, 3.5, 1.2, true),
+                        EqBand(6, "Brilliance", EqFilterType.PEAKING, 8000.0, 5.0, 1.0, true),
+                        EqBand(7, "Air", EqFilterType.HIGH_SHELF, 16000.0, 6.5, 0.71, true)
                     )
                 )
             )
@@ -160,13 +168,16 @@ class ParametricEqManager(
 
     private val presetsFile = File(context.filesDir, PRESETS_FILENAME)
 
+    // Version incremented on any parameter change to notify audio engine thread
+    val version = AtomicInteger(1)
+
     private val _presets = MutableStateFlow<List<EqPreset>>(BUILT_IN_PRESETS)
     val presets: StateFlow<List<EqPreset>> = _presets.asStateFlow()
 
     private val _activePresetId = MutableStateFlow("preset_flat")
     val activePresetId: StateFlow<String> = _activePresetId.asStateFlow()
 
-    private val _currentBands = MutableStateFlow<List<EqBand>>(ParametricEq.DEFAULT_7_BANDS.map { it.copy() })
+    private val _currentBands = MutableStateFlow<List<EqBand>>(ParametricEq.DEFAULT_8_BANDS.map { it.copy() })
     val currentBands: StateFlow<List<EqBand>> = _currentBands.asStateFlow()
 
     private val _preampDb = MutableStateFlow(0.0)
@@ -175,8 +186,18 @@ class ParametricEqManager(
     private val _isEqEnabled = MutableStateFlow(true)
     val isEqEnabled: StateFlow<Boolean> = _isEqEnabled.asStateFlow()
 
+    private val _autoHeadroomEnabled = MutableStateFlow(false)
+    val autoHeadroomEnabled: StateFlow<Boolean> = _autoHeadroomEnabled.asStateFlow()
+
     fun setEqEnabled(enabled: Boolean) {
         _isEqEnabled.value = enabled
+        version.incrementAndGet()
+        saveToDiskAsync()
+    }
+
+    fun setAutoHeadroomEnabled(enabled: Boolean) {
+        _autoHeadroomEnabled.value = enabled
+        version.incrementAndGet()
         saveToDiskAsync()
     }
 
@@ -185,29 +206,62 @@ class ParametricEqManager(
         _activePresetId.value = preset.id
         _preampDb.value = preset.preampDb
         _currentBands.value = preset.bands.map { it.copy() }
+        version.incrementAndGet()
         saveToDiskAsync()
         Log.i(TAG, "Applied EQ preset: '${preset.name}'")
     }
 
-    fun updateBand(index: Int, freqHz: Double, gainDb: Double, q: Double, isEnabled: Boolean) {
+    fun updateBand(index: Int, freqHz: Double, gainDb: Double, q: Double, isEnabled: Boolean, type: EqFilterType? = null) {
         val updated = _currentBands.value.toMutableList()
         if (index in updated.indices) {
             val b = updated[index].copy(
-                frequencyHz = freqHz.coerceIn(20.0, 20000.0),
-                gainDb = gainDb.coerceIn(-15.0, 15.0),
-                q = q.coerceIn(0.2, 10.0),
-                isEnabled = isEnabled
+                frequencyHz = freqHz.coerceIn(ParametricEq.MIN_FREQ_HZ, ParametricEq.MAX_FREQ_HZ),
+                gainDb = gainDb.coerceIn(ParametricEq.MIN_GAIN_DB, ParametricEq.MAX_GAIN_DB),
+                q = q.coerceIn(ParametricEq.MIN_Q, ParametricEq.MAX_Q),
+                isEnabled = isEnabled,
+                type = type ?: updated[index].type
             )
             updated[index] = b
             _currentBands.value = updated
             _activePresetId.value = "custom_user_tweaked"
+            version.incrementAndGet()
+            saveToDiskAsync()
+        }
+    }
+
+    fun updateBandType(index: Int, type: EqFilterType) {
+        val updated = _currentBands.value.toMutableList()
+        if (index in updated.indices) {
+            updated[index] = updated[index].copy(type = type)
+            _currentBands.value = updated
+            _activePresetId.value = "custom_user_tweaked"
+            version.incrementAndGet()
+            saveToDiskAsync()
+        }
+    }
+
+    fun resetBand(index: Int) {
+        val updated = _currentBands.value.toMutableList()
+        if (index in updated.indices) {
+            val defaultBand = ParametricEq.DEFAULT_8_BANDS.getOrNull(index)
+            updated[index] = updated[index].copy(
+                gainDb = 0.0,
+                isEnabled = true,
+                q = defaultBand?.q ?: 1.0,
+                frequencyHz = defaultBand?.frequencyHz ?: updated[index].frequencyHz,
+                type = defaultBand?.type ?: updated[index].type
+            )
+            _currentBands.value = updated
+            _activePresetId.value = "custom_user_tweaked"
+            version.incrementAndGet()
             saveToDiskAsync()
         }
     }
 
     fun setPreamp(gainDb: Double) {
-        _preampDb.value = gainDb.coerceIn(-12.0, 12.0)
+        _preampDb.value = gainDb.coerceIn(ParametricEq.MIN_GAIN_DB, ParametricEq.MAX_GAIN_DB)
         _activePresetId.value = "custom_user_tweaked"
+        version.incrementAndGet()
         saveToDiskAsync()
     }
 
@@ -228,6 +282,7 @@ class ParametricEqManager(
         list.add(preset)
         _presets.value = list
         _activePresetId.value = newId
+        version.incrementAndGet()
         saveToDiskAsync()
         Log.i(TAG, "Saved custom preset: '$name'")
         return preset
@@ -243,6 +298,7 @@ class ParametricEqManager(
         if (_activePresetId.value == presetId) {
             applyPreset("preset_flat")
         }
+        version.incrementAndGet()
         saveToDiskAsync()
         return true
     }
@@ -253,6 +309,7 @@ class ParametricEqManager(
         if (idx >= 0 && !list[idx].isBuiltIn) {
             list[idx] = list[idx].copy(name = newName.trim().ifBlank { "Preset" })
             _presets.value = list
+            version.incrementAndGet()
             saveToDiskAsync()
             return true
         }
@@ -268,10 +325,11 @@ class ParametricEqManager(
     suspend fun saveToDisk() = withContext(Dispatchers.IO) {
         try {
             val root = JSONObject().apply {
-                put("version", 1)
+                put("version", 2)
                 put("activePresetId", _activePresetId.value)
                 put("preampDb", _preampDb.value)
                 put("isEqEnabled", _isEqEnabled.value)
+                put("autoHeadroomEnabled", _autoHeadroomEnabled.value)
 
                 val bandsArr = JSONArray()
                 _currentBands.value.forEach { b ->
@@ -328,6 +386,7 @@ class ParametricEqManager(
             _activePresetId.value = root.optString("activePresetId", "preset_flat")
             _preampDb.value = root.optDouble("preampDb", 0.0)
             _isEqEnabled.value = root.optBoolean("isEqEnabled", true)
+            _autoHeadroomEnabled.value = root.optBoolean("autoHeadroomEnabled", false)
 
             val customList = mutableListOf<EqPreset>()
             val customPresetsArr = root.optJSONArray("customPresets")
@@ -382,8 +441,16 @@ class ParametricEqManager(
                         )
                     )
                 }
+                // If legacy save had fewer than 8 bands, append missing default bands
+                if (bList.size < ParametricEq.DEFAULT_8_BANDS.size) {
+                    val defaults = ParametricEq.DEFAULT_8_BANDS
+                    for (k in bList.size until defaults.size) {
+                        bList.add(defaults[k].copy())
+                    }
+                }
                 _currentBands.value = bList
             }
+            version.incrementAndGet()
         } catch (e: Exception) {
             Log.w(TAG, "Failed restoring EQ settings from disk: ${e.message}")
         }
