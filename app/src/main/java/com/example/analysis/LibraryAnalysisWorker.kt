@@ -150,16 +150,31 @@ class LibraryAnalysisWorker(
                 return@withContext Result.success()
             }
 
+            if (manager.queueProgress.value.isRunning) {
+                Log.d(TAG, "In-app analysis loop is already actively processing. Worker yields cleanly.")
+                return@withContext Result.success()
+            }
+
             val pendingCount = manager.getPendingCount()
             if (pendingCount <= 0) {
                 Log.d(TAG, "No pending tracks for analysis. Worker finished.")
                 return@withContext Result.success()
             }
 
-            try {
-                setForeground(createForegroundInfo(0, pendingCount))
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not set foreground info: ${e.message}")
+            val hasNotificationPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            if (hasNotificationPermission) {
+                try {
+                    setForeground(createForegroundInfo(0, pendingCount))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not set foreground info: ${e.message}")
+                }
+            } else {
+                Log.d(TAG, "POST_NOTIFICATIONS not granted; executing analysis without foreground service escalation.")
             }
 
             var lastNotifiedMs = System.currentTimeMillis()
@@ -167,7 +182,7 @@ class LibraryAnalysisWorker(
 
             manager.runAnalysisLoopSuspended { processed, total, trackTitle ->
                 val now = System.currentTimeMillis()
-                if ((now - lastNotifiedMs > 4000) || (processed - lastNotifiedCount >= 10)) {
+                if (hasNotificationPermission && ((now - lastNotifiedMs > 4000) || (processed - lastNotifiedCount >= 10))) {
                     lastNotifiedMs = now
                     lastNotifiedCount = processed
                     try {

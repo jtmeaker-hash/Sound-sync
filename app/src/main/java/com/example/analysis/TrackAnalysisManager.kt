@@ -217,8 +217,6 @@ class TrackAnalysisManager private constructor(
     fun triggerQueueProcessing() {
         if (!isBackgroundAnalysisEnabled) return
 
-        LibraryAnalysisWorker.enqueueWork(context)
-
         scope.launch {
             jobMutex.withLock {
                 if (analysisJob?.isActive == true) {

@@ -2,6 +2,8 @@ package com.example
 
 import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -41,6 +43,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         DjLogger.startTiming("APP_START", "SoundSync cold launch")
         super.onCreate(savedInstanceState)
+        logHistoricalProcessExitReasons()
         Log.d(TAG, "onCreate: Activity starting up. Auto-playback is strictly prohibited.")
 
         if (BuildConfig.DEBUG) {
@@ -282,6 +285,37 @@ class MainActivity : ComponentActivity() {
         if (isFinishing) {
             if (activeViewModel?.audioEngine?.isPlaying?.value != true) {
                 com.example.service.MediaPlaybackService.stopService(applicationContext)
+            }
+        }
+    }
+
+    private fun logHistoricalProcessExitReasons() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                val reasons = am?.getHistoricalProcessExitReasons(packageName, 0, 5)
+                if (!reasons.isNullOrEmpty()) {
+                    reasons.forEach { exitInfo ->
+                        val reasonStr = when (exitInfo.reason) {
+                            android.app.ApplicationExitInfo.REASON_ANR -> "ANR"
+                            android.app.ApplicationExitInfo.REASON_CRASH -> "CRASH_APP"
+                            android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
+                            android.app.ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "DEPENDENCY_DIED"
+                            android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "EXCESSIVE_RESOURCE"
+                            android.app.ApplicationExitInfo.REASON_EXIT_SELF -> "EXIT_SELF"
+                            android.app.ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "INIT_FAILURE"
+                            android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "LOW_MEMORY"
+                            android.app.ApplicationExitInfo.REASON_OTHER -> "OTHER"
+                            android.app.ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "PERMISSION_CHANGE"
+                            android.app.ApplicationExitInfo.REASON_SIGNALED -> "SIGNALED"
+                            android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "USER_REQUESTED"
+                            else -> "UNKNOWN(${exitInfo.reason})"
+                        }
+                        Log.w(TAG, "Historical Process Exit: reason=$reasonStr, status=${exitInfo.status}, desc=${exitInfo.description}, pss=${exitInfo.pss}KB, rss=${exitInfo.rss}KB, timestamp=${exitInfo.timestamp}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not query historical process exit reasons: ${e.message}")
             }
         }
     }

@@ -1071,7 +1071,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         audioEngine.setCrossfadeSeconds(_crossfadeSeconds.value)
         registerMediaReceiver()
         trackAnalysisManager.triggerQueueProcessing()
-        com.example.analysis.LibraryAnalysisWorker.enqueueWork(application)
         setupAutoBackupObserver()
         observeTrackMetadataUpdates()
     }
@@ -1595,7 +1594,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     withContext(Dispatchers.Main) {
                         Log.d("MainDjViewModel", "Restoring track '${firstTrack.title}' on startup in paused state")
                         audioEngine.loadTrack(firstTrack, autoPlay = false)
-                        inspectTrackSpectrogram(firstTrack)
                     }
                 }
             } else {

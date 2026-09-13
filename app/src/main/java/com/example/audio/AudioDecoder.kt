@@ -9,6 +9,8 @@ import android.util.Log
 import com.example.model.Track
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteOrder
@@ -36,6 +38,13 @@ object AudioDecoder {
     private const val TAG = "SoundSyncDecoder"
     private const val TIMEOUT_US = 5000L
     private const val MAX_SAMPLES_SPECTROGRAM = 3_000_000
+
+    /**
+     * Strict bounded concurrency: limits hardware/software MediaCodec decoders to at most
+     * 1 active background decoding job at a time. Prevents SoC hardware codec exhaustion
+     * and native driver SIGSEGV crashes.
+     */
+    private val decoderSemaphore = Semaphore(1)
 
     data class DecodedAudioData(
         val samples: FloatArray,
@@ -78,11 +87,12 @@ object AudioDecoder {
             return@withContext null
         }
 
-        val startTime = System.currentTimeMillis()
-        val extractor = MediaExtractor()
-        var codec: MediaCodec? = null
+        decoderSemaphore.withPermit {
+            val startTime = System.currentTimeMillis()
+            val extractor = MediaExtractor()
+            var codec: MediaCodec? = null
 
-        try {
+            try {
             // 1. Configure Extractor
             if (filePathOrUri.startsWith("content://")) {
                 val uri = Uri.parse(filePathOrUri)
@@ -373,16 +383,18 @@ object AudioDecoder {
         } catch (e: Throwable) {
             val wavInfo = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
             if (wavInfo.isValid && wavInfo.dataSize > 0) {
-                return@withContext decodeWavWaveformPcm(context, track, filePathOrUri, wavInfo, targetBins, onProgress)
+                decodeWavWaveformPcm(context, track, filePathOrUri, wavInfo, targetBins, onProgress)
+            } else {
+                Log.e(TAG, "decodeRealWaveformPcm error for '${track.title}': ${e.message}", e)
+                null
             }
-            Log.e(TAG, "decodeRealWaveformPcm error for '${track.title}': ${e.message}", e)
-            null
         } finally {
             try { codec?.stop() } catch (ignored: Exception) {}
             try { codec?.release() } catch (ignored: Exception) {}
             try { extractor.release() } catch (ignored: Exception) {}
         }
     }
+}
 
     private fun decodeWavWaveformPcm(
         context: Context,
@@ -554,11 +566,12 @@ object AudioDecoder {
             return@withContext null
         }
 
-        val decodeStartTime = System.currentTimeMillis()
-        val extractor = MediaExtractor()
-        var codec: MediaCodec? = null
+        decoderSemaphore.withPermit {
+            val decodeStartTime = System.currentTimeMillis()
+            val extractor = MediaExtractor()
+            var codec: MediaCodec? = null
 
-        try {
+            try {
             if (filePathOrUri.startsWith("content://")) {
                 val uri = Uri.parse(filePathOrUri)
                 try {
@@ -746,20 +759,24 @@ object AudioDecoder {
                 val reader = com.example.analysis.WavPcmReader(context, filePathOrUri, wavInfo)
                 val monoFloats = reader.use { it.readMonoFloats(maxSamples) }
                 if (monoFloats != null && monoFloats.isNotEmpty()) {
-                    return@withContext DecodedAudioData(
+                    DecodedAudioData(
                         samples = monoFloats,
                         sampleRate = wavInfo.sampleRate,
                         channelCount = 1,
                         durationMs = durationMs
                     )
+                } else {
+                    null
                 }
+            } else {
+                Log.e(TAG, "Decoder error for '$filePathOrUri': ${e.message}", e)
+                null
             }
-            Log.e(TAG, "Decoder error for '$filePathOrUri': ${e.message}", e)
-            null
         } finally {
             try { codec?.stop() } catch (ignored: Exception) {}
             try { codec?.release() } catch (ignored: Exception) {}
             try { extractor.release() } catch (ignored: Exception) {}
         }
     }
+}
 }

@@ -74,27 +74,108 @@ class LocalPcmAudioAnalyzer(
         return bpm to confidence
     }
 
+    companion object {
+        private const val WINDOW_SIZE = 2048
+        private const val HOP_SIZE = 2048
+
+        // Precomputed Hann window for WINDOW_SIZE (2048)
+        private val HANN_WINDOW = FloatArray(WINDOW_SIZE) { n ->
+            (0.5 * (1.0 - cos(2.0 * PI * n / (WINDOW_SIZE - 1)))).toFloat()
+        }
+
+        /**
+         * Fast in-place Cooley-Tukey Radix-2 FFT.
+         */
+        private fun fftRadix2(real: FloatArray, imag: FloatArray, n: Int) {
+            var j = 0
+            for (i in 0 until n - 1) {
+                if (i < j) {
+                    val tr = real[i]
+                    val ti = imag[i]
+                    real[i] = real[j]
+                    imag[i] = imag[j]
+                    real[j] = tr
+                    imag[j] = ti
+                }
+                var k = n shr 1
+                while (k <= j) {
+                    j -= k
+                    k = k shr 1
+                }
+                j += k
+            }
+
+            var len = 2
+            while (len <= n) {
+                val halfLen = len shr 1
+                val angle = -2.0 * PI / len
+                val wStepR = cos(angle).toFloat()
+                val wStepI = sin(angle).toFloat()
+
+                var i = 0
+                while (i < n) {
+                    var wR = 1.0f
+                    var wI = 0.0f
+                    for (k in 0 until halfLen) {
+                        val uR = real[i + k]
+                        val uI = imag[i + k]
+                        val vR = real[i + k + halfLen] * wR - imag[i + k + halfLen] * wI
+                        val vI = real[i + k + halfLen] * wI + imag[i + k + halfLen] * wR
+
+                        real[i + k] = uR + vR
+                        imag[i + k] = uI + vI
+                        real[i + k + halfLen] = uR - vR
+                        imag[i + k + halfLen] = uI - vI
+
+                        val nextWR = wR * wStepR - wI * wStepI
+                        val nextWI = wR * wStepI + wI * wStepR
+                        wR = nextWR
+                        wI = nextWI
+                    }
+                    i += len
+                }
+                len = len shl 1
+            }
+        }
+    }
+
     private fun detectKey(samples: FloatArray, sampleRate: Int): Triple<String, String, Double>? {
-        val windowSize = 4096
-        val hop = 2048
-        if (samples.size < windowSize * 5) return null
+        val windowSize = WINDOW_SIZE
+        val hop = HOP_SIZE
+        if (samples.size < windowSize * 4) return null
         val chroma = DoubleArray(12)
         val frames = ((samples.size - windowSize) / hop).coerceAtMost(120)
+
+        val fftReal = FloatArray(windowSize)
+        val fftImag = FloatArray(windowSize)
+
+        // Precompute bin -> pitch class lookup for 65 Hz .. 2000 Hz
+        val binToPitchClass = IntArray(windowSize / 2) { bin ->
+            val frequency = bin * sampleRate.toDouble() / windowSize
+            if (frequency in 65.0..2000.0) {
+                val midi = (12.0 * (ln(frequency / 440.0) / ln(2.0)) + 69.0).roundToInt()
+                ((midi % 12) + 12) % 12
+            } else {
+                -1
+            }
+        }
+
         for (frame in 0 until frames) {
             val start = frame * hop
+            for (i in 0 until windowSize) {
+                fftReal[i] = samples[start + i] * HANN_WINDOW[i]
+                fftImag[i] = 0.0f
+            }
+            fftRadix2(fftReal, fftImag, windowSize)
+
             for (bin in 1 until windowSize / 2) {
-                val frequency = bin * sampleRate.toDouble() / windowSize
-                if (frequency !in 65.0..2000.0) continue
-                var real = 0.0
-                var imaginary = 0.0
-                for (i in 0 until windowSize step 4) {
-                    val sample = samples[start + i] * (0.5 - 0.5 * cos(2.0 * PI * i / windowSize))
-                    val angle = 2.0 * PI * bin * i / windowSize
-                    real += sample * cos(angle)
-                    imaginary -= sample * sin(angle)
+                val pitchClass = binToPitchClass[bin]
+                if (pitchClass >= 0) {
+                    val r = fftReal[bin]
+                    val im = fftImag[bin]
+                    val mag = sqrt(r * r + im * im)
+                    chroma[pitchClass] += mag.toDouble()
                 }
-                val midi = (12.0 * (ln(frequency / 440.0) / ln(2.0)) + 69.0).roundToInt()
-                chroma[((midi % 12) + 12) % 12] += sqrt(real * real + imaginary * imaginary)
             }
         }
         val sum = chroma.sum()
