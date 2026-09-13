@@ -266,6 +266,7 @@ class MetadataSafetyPipelineTest {
             override fun playbackSessionDao(): PlaybackSessionDao = Proxy.newProxyInstance(PlaybackSessionDao::class.java.classLoader, arrayOf(PlaybackSessionDao::class.java)) { _, _, _ -> null } as PlaybackSessionDao
             override fun bulkOperationHistoryDao(): BulkOperationHistoryDao = Proxy.newProxyInstance(BulkOperationHistoryDao::class.java.classLoader, arrayOf(BulkOperationHistoryDao::class.java)) { _, _, _ -> null } as BulkOperationHistoryDao
             override fun lyricsDao(): LyricsDao = Proxy.newProxyInstance(LyricsDao::class.java.classLoader, arrayOf(LyricsDao::class.java)) { _, _, _ -> null } as LyricsDao
+            override fun trackBrainDao(): TrackBrainDao = Proxy.newProxyInstance(TrackBrainDao::class.java.classLoader, arrayOf(TrackBrainDao::class.java)) { _, _, _ -> null } as TrackBrainDao
             override fun clearAllTables() {
                 tracks.clear()
                 reviewEntries.clear()

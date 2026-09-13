@@ -310,12 +310,15 @@ fun MainDjScreen(
 
                         // Library Background Metadata Analysis Banner
                         val analysisProgress by viewModel.analysisProgress.collectAsState()
-                        AnimatedVisibility(visible = analysisProgress.isRunning && (analysisProgress.totalCount > 0 || analysisProgress.currentTrackTitle.isNotBlank())) {
+                        val brainSummary by viewModel.brainSummary.collectAsState()
+                        val isAnyAnalysisRunning = (analysisProgress.isRunning && (analysisProgress.totalCount > 0 || analysisProgress.currentTrackTitle.isNotBlank())) ||
+                                                   (brainSummary.isRunning && (brainSummary.queueLength > 0 || brainSummary.currentTrackTitle.isNotBlank()))
+                        AnimatedVisibility(visible = isAnyAnalysisRunning) {
                             Surface(
-                                color = if (analysisProgress.isPausedForPlayback) theme.surfaceSunken else theme.surfaceRaised,
+                                color = if (analysisProgress.isPausedForPlayback || brainSummary.isPaused) theme.surfaceSunken else theme.surfaceRaised,
                                 border = BorderStroke(
                                     0.5.dp,
-                                    if (analysisProgress.isPausedForPlayback) theme.warning.copy(alpha = 0.5f) else theme.accent.copy(alpha = 0.5f)
+                                    if (analysisProgress.isPausedForPlayback || brainSummary.isPaused) theme.warning.copy(alpha = 0.5f) else theme.accent.copy(alpha = 0.5f)
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -328,15 +331,19 @@ fun MainDjScreen(
                                 ) {
                                     CircularProgressIndicator(
                                         progress = {
-                                            if (analysisProgress.totalCount > 0) {
+                                            if (brainSummary.isRunning && brainSummary.totalTracks > 0) {
+                                                (brainSummary.completeCount.toFloat() / brainSummary.totalTracks.toFloat()).coerceIn(0f, 1f)
+                                            } else if (analysisProgress.totalCount > 0) {
                                                 (analysisProgress.processedCount.toFloat() / analysisProgress.totalCount.toFloat()).coerceIn(0f, 1f)
                                             } else 0f
                                         },
                                         modifier = Modifier.size(16.dp),
-                                        color = if (analysisProgress.isPausedForPlayback) theme.warning else theme.accent,
+                                        color = if (analysisProgress.isPausedForPlayback || brainSummary.isPaused) theme.warning else theme.accent,
                                         strokeWidth = 2.dp
                                     )
-                                    val bannerText = if (analysisProgress.isPausedForPlayback) {
+                                    val bannerText = if (brainSummary.isRunning && brainSummary.currentTrackTitle.isNotBlank()) {
+                                        "Library Brain · ${brainSummary.currentJobDescription} (${brainSummary.completeCount}/${brainSummary.totalTracks})"
+                                    } else if (analysisProgress.isPausedForPlayback) {
                                         if (analysisProgress.totalCount > 0) {
                                             "Analysis throttled for audio playback (${analysisProgress.processedCount}/${analysisProgress.totalCount})"
                                         } else {
@@ -1385,6 +1392,13 @@ private fun SideDestinationScreen(
                         operationJournal = operationJournal,
                         scanServiceState = scanServiceState,
                         metadataSettings = viewModel.metadataSettings.collectAsState().value,
+                        brainSummary = viewModel.brainSummary.collectAsState().value,
+                        onPauseBrain = { viewModel.pauseBrainAnalysis() },
+                        onResumeBrain = { viewModel.resumeBrainAnalysis() },
+                        onRetryBrainFailed = { viewModel.retryBrainFailed() },
+                        onAnalyseIncompleteBrain = { viewModel.analyseIncompleteBrain() },
+                        onReanalyseBrainCategory = { viewModel.reanalyseBrainCategory(it) },
+                        onCancelBrainWork = { viewModel.cancelBrainWork() },
                         focusMetadataOnly = false,
                         onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
                         onSetAppleSearchEnabled = viewModel::setAppleSearchEnabled,
@@ -1429,6 +1443,13 @@ private fun SideDestinationScreen(
                         operationJournal = operationJournal,
                         scanServiceState = scanServiceState,
                         metadataSettings = viewModel.metadataSettings.collectAsState().value,
+                        brainSummary = viewModel.brainSummary.collectAsState().value,
+                        onPauseBrain = { viewModel.pauseBrainAnalysis() },
+                        onResumeBrain = { viewModel.resumeBrainAnalysis() },
+                        onRetryBrainFailed = { viewModel.retryBrainFailed() },
+                        onAnalyseIncompleteBrain = { viewModel.analyseIncompleteBrain() },
+                        onReanalyseBrainCategory = { viewModel.reanalyseBrainCategory(it) },
+                        onCancelBrainWork = { viewModel.cancelBrainWork() },
                         focusMetadataOnly = true,
                         onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
                         onSetAppleSearchEnabled = viewModel::setAppleSearchEnabled,

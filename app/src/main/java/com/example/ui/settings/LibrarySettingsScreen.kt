@@ -74,6 +74,9 @@ import com.example.model.StorageSource
 import com.example.model.StorageSourceType
 import com.example.service.AudioScanState
 import com.example.sync.CloudSyncManager
+import com.example.brain.BrainCategory
+import com.example.brain.BrainSummary
+import com.example.ui.components.LibraryBrainCard
 import com.example.ui.components.MetadataEnrichmentSettingsCard
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DjObsidian
@@ -98,6 +101,13 @@ fun LibrarySettingsScreen(
     operationJournal: List<OperationJournalItem>,
     scanServiceState: AudioScanState = AudioScanState(),
     metadataSettings: MetadataSettings = MetadataSettings(),
+    brainSummary: BrainSummary = BrainSummary(),
+    onPauseBrain: () -> Unit = {},
+    onResumeBrain: () -> Unit = {},
+    onRetryBrainFailed: () -> Unit = {},
+    onAnalyseIncompleteBrain: () -> Unit = {},
+    onReanalyseBrainCategory: (BrainCategory) -> Unit = {},
+    onCancelBrainWork: () -> Unit = {},
     focusMetadataOnly: Boolean = false,
     onSetEnrichmentEnabled: (Boolean) -> Unit = {},
     onSetAppleSearchEnabled: (Boolean) -> Unit = {},
@@ -145,6 +155,19 @@ fun LibrarySettingsScreen(
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // Library Brain Orchestration Card
+        item {
+            LibraryBrainCard(
+                summary = brainSummary,
+                onPause = onPauseBrain,
+                onResume = onResumeBrain,
+                onRetryFailed = onRetryBrainFailed,
+                onAnalyseIncomplete = onAnalyseIncompleteBrain,
+                onReanalyseCategory = onReanalyseBrainCategory,
+                onCancelWork = onCancelBrainWork
+            )
+        }
+
         // Metadata & Artwork Settings Card
         item {
             MetadataEnrichmentSettingsCard(

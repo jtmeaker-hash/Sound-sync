@@ -176,6 +176,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
     val analysisProgress = trackAnalysisManager.queueProgress
 
+    val libraryBrain = com.example.brain.LibraryBrain.getInstance(application).apply {
+        attachAudioEngine(audioEngine)
+    }
+    val brainSummary = libraryBrain.brainSummary
+
+    fun pauseBrainAnalysis() = libraryBrain.pauseAnalysis()
+    fun resumeBrainAnalysis() = libraryBrain.resumeAnalysis()
+    fun retryBrainFailed() = libraryBrain.retryFailed()
+    fun analyseIncompleteBrain() = libraryBrain.analyseIncompleteTracks()
+    fun reanalyseBrainCategory(cat: com.example.brain.BrainCategory) = libraryBrain.reanalyseCategory(cat)
+    fun cancelBrainWork() = libraryBrain.cancelCurrentWork()
+    fun detectFileChanges() = viewModelScope.launch { libraryBrain.detectFileChanges() }
+
     val carModeManager = com.example.carmode.CarModeManager.getInstance(application).apply {
         attachAudioEngine(audioEngine)
     }

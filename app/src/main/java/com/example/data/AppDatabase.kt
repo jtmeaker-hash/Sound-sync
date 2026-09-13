@@ -21,9 +21,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MetadataReviewItemEntity::class,
         WatchedFolderEntity::class,
         LyricsEntity::class,
-        MetadataBackupEntity::class
+        MetadataBackupEntity::class,
+        TrackBrainStatusEntity::class
     ],
-    version = 17,
+    version = 18,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -38,6 +39,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun watchedFolderDao(): WatchedFolderDao
     abstract fun lyricsDao(): LyricsDao
     abstract fun metadataBackupDao(): MetadataBackupDao
+    abstract fun trackBrainDao(): TrackBrainDao
 
     companion object {
         @Volatile
@@ -624,6 +626,116 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `track_brain_status` (
+                            `trackId` TEXT NOT NULL PRIMARY KEY,
+                            `overallStatus` TEXT NOT NULL DEFAULT 'PENDING',
+                            `metadataStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `artworkStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `bpmStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `keyStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `waveformStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `qualityStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `lyricsStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `replayGainStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `duplicateStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `fileValidationStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `lastAttemptTime` INTEGER DEFAULT NULL,
+                            `lastSuccessTime` INTEGER DEFAULT NULL,
+                            `retryCount` INTEGER NOT NULL DEFAULT 0,
+                            `errorCode` TEXT DEFAULT NULL,
+                            `errorMessage` TEXT DEFAULT NULL,
+                            `analysisVersion` INTEGER NOT NULL DEFAULT 1,
+                            `sourceProvider` TEXT DEFAULT NULL,
+                            `bpmVersion` INTEGER NOT NULL DEFAULT 2,
+                            `keyVersion` INTEGER NOT NULL DEFAULT 2,
+                            `waveformVersion` INTEGER NOT NULL DEFAULT 1,
+                            `qualityVersion` INTEGER NOT NULL DEFAULT 1,
+                            `replayGainVersion` INTEGER NOT NULL DEFAULT 1,
+                            `loudnessLufs` REAL DEFAULT NULL,
+                            `loudnessPeak` REAL DEFAULT NULL,
+                            `fileModifiedTimestamp` INTEGER NOT NULL DEFAULT 0,
+                            `fileSize` INTEGER NOT NULL DEFAULT 0
+                        )
+                        """.trimIndent()
+                    )
+                } catch (_: Exception) {}
+
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_overallStatus` ON `track_brain_status` (`overallStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_metadataStatus` ON `track_brain_status` (`metadataStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_artworkStatus` ON `track_brain_status` (`artworkStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_bpmStatus` ON `track_brain_status` (`bpmStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_keyStatus` ON `track_brain_status` (`keyStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_waveformStatus` ON `track_brain_status` (`waveformStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_qualityStatus` ON `track_brain_status` (`qualityStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_lyricsStatus` ON `track_brain_status` (`lyricsStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_replayGainStatus` ON `track_brain_status` (`replayGainStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_duplicateStatus` ON `track_brain_status` (`duplicateStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_fileValidationStatus` ON `track_brain_status` (`fileValidationStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_lastAttemptTime` ON `track_brain_status` (`lastAttemptTime`)")
+                } catch (_: Exception) {}
+
+                try {
+                    db.execSQL(
+                        """
+                        INSERT OR IGNORE INTO `track_brain_status` (
+                            `trackId`, `overallStatus`, `metadataStatus`, `artworkStatus`,
+                            `bpmStatus`, `keyStatus`, `waveformStatus`, `qualityStatus`,
+                            `fileValidationStatus`, `lastAttemptTime`, `lastSuccessTime`,
+                            `fileModifiedTimestamp`
+                        )
+                        SELECT
+                            `id`,
+                            CASE
+                                WHEN `analysisState` = 'COMPLETE' THEN 'COMPLETE'
+                                WHEN `analysisState` = 'FAILED' THEN 'FAILED'
+                                WHEN `playabilityStatus` = 'MISSING_FILE' THEN 'MISSING_FILE'
+                                ELSE 'PENDING'
+                            END,
+                            CASE WHEN `artist` != 'Unknown Artist' AND `title` != 'Unknown Title' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `artworkCachePath` IS NOT NULL AND `artworkCachePath` != '' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `bpm` > 0.0 THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `musicalKey` != '' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `analysisState` = 'COMPLETE' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `qualityRating` != 'UNKNOWN_BITRATE' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `playabilityStatus` = 'PLAYABLE' THEN 'COMPLETE' WHEN `playabilityStatus` = 'MISSING_FILE' THEN 'FAILED' ELSE 'NOT_STARTED' END,
+                            `lastAnalysedAt`,
+                            CASE WHEN `analysisState` = 'COMPLETE' THEN `lastAnalysedAt` ELSE NULL END,
+                            `fileModifiedTimestamp`
+                        FROM `tracks`
+                        """.trimIndent()
+                    )
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -647,7 +759,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_13_14,
                     MIGRATION_14_15,
                     MIGRATION_15_16,
-                    MIGRATION_16_17
+                    MIGRATION_16_17,
+                    MIGRATION_17_18
                 )
                 .fallbackToDestructiveMigration()
                 .build()
