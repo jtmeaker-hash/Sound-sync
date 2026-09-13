@@ -9,8 +9,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.res.painterResource
 import com.example.R
+import com.example.diagnostics.DeveloperModeManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +34,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Code
@@ -39,6 +43,7 @@ import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -63,6 +68,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -90,6 +96,7 @@ import com.example.util.ExternalAppOpener
  * - AUDIO: Multipoint EQ, Haas Surround, Crossfade & Transitions, Playback Behaviour
  * - SYSTEM: Appearance & Density, SoundSync GitHub, Check for Updates
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SideNavigationDrawerContent(
     onSelectDestination: (SideMenuDestination) -> Unit,
@@ -98,6 +105,8 @@ fun SideNavigationDrawerContent(
 ) {
     val context = LocalContext.current
     val theme = SoundSyncTheme.current
+    val devManager = remember { DeveloperModeManager.getInstance(context) }
+    val isDeveloperMode by devManager.isDeveloperModeEnabled.collectAsState()
 
     val expandedMap = remember {
         mutableStateMapOf(
@@ -174,11 +183,15 @@ fun SideNavigationDrawerContent(
                     Surface(
                         shape = RoundedCornerShape(2.dp),
                         color = theme.surfaceRaised,
-                        border = BorderStroke(0.5.dp, theme.divider)
+                        border = BorderStroke(0.5.dp, if (isDeveloperMode) theme.accent else theme.divider),
+                        modifier = Modifier.combinedClickable(
+                            onClick = { devManager.registerTap() },
+                            onLongClick = { devManager.setDeveloperModeEnabled(true) }
+                        )
                     ) {
                         Text(
-                            text = "v${BuildConfig.VERSION_NAME}",
-                            color = theme.textSecondary,
+                            text = "v${BuildConfig.VERSION_NAME}${if (isDeveloperMode) " DEV" else ""}",
+                            color = if (isDeveloperMode) theme.accent else theme.textSecondary,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
@@ -478,6 +491,37 @@ fun SideNavigationDrawerContent(
                                 onSelectDestination(SideMenuDestination.GitHubUpdates)
                             }
                         )
+                        ProDrawerItem(
+                            title = "About SoundSync",
+                            subtitle = "Build info, licenses, and diagnostics",
+                            icon = Icons.Default.Info,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.AboutSoundSync)
+                            }
+                        )
+                        if (isDeveloperMode) {
+                            ProDrawerItem(
+                                title = "Developer Diagnostics",
+                                subtitle = "Live audio specs, drift monitor, and error logs",
+                                icon = Icons.Default.BugReport,
+                                badge = "DEV",
+                                onClick = {
+                                    onCloseDrawer()
+                                    onSelectDestination(SideMenuDestination.DeveloperDiagnostics)
+                                }
+                            )
+                            ProDrawerItem(
+                                title = "SoundSync Self-Test",
+                                subtitle = "Automated 11-module subsystem validation",
+                                icon = Icons.Default.CheckCircle,
+                                badge = "TEST",
+                                onClick = {
+                                    onCloseDrawer()
+                                    onSelectDestination(SideMenuDestination.SoundSyncSelfTest)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -555,6 +599,7 @@ private fun ProDrawerItem(
     title: String,
     subtitle: String,
     icon: ImageVector,
+    badge: String? = null,
     onClick: () -> Unit
 ) {
     val theme = SoundSyncTheme.current
@@ -593,6 +638,23 @@ private fun ProDrawerItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+
+            if (badge != null) {
+                Surface(
+                    shape = RoundedCornerShape(2.dp),
+                    color = theme.surfaceRaised,
+                    border = BorderStroke(0.5.dp, theme.accent)
+                ) {
+                    Text(
+                        text = badge,
+                        color = theme.accent,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
             }
         }
     }

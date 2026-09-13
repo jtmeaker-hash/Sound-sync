@@ -24,4 +24,7 @@ sealed class SideMenuDestination(val title: String) {
     object LibraryHealth : SideMenuDestination("Library Health")
     object MetadataReviewInbox : SideMenuDestination("Metadata Review Inbox")
     object LibraryIntegrity : SideMenuDestination("Library Integrity")
+    object AboutSoundSync : SideMenuDestination("About SoundSync")
+    object DeveloperDiagnostics : SideMenuDestination("Developer Diagnostics")
+    object SoundSyncSelfTest : SideMenuDestination("SoundSync Self-Test")
 }

@@ -25,6 +25,38 @@ as unavailable by the backfill.
 
 ## Automated CI run log
 
+### Stage 2 — Developer Diagnostics & SoundSync Self-Test
+- **Date**: 2026-09-13T20:02:00Z
+- **Branch**: `Debug`
+- **Target**: Stage 2 Completion
+
+#### Issues Discovered:
+- Lack of runtime visibility into audio engine decoding, audio buffer metrics, latency, and dual-deck waveform drift.
+- Missing in-app self-test verification for database integrity, media permissions, storage access, background workers, decoders, and network.
+- No centralized diagnostic report exporter or sanitized log capture for crash/bug investigation.
+- `IndexOutOfBoundsException: No group 1` in `DiagnosticLogger` token redaction regex when pattern didn't declare group 1.
+- `android.content.Context` is an abstract class causing `IllegalArgumentException` in unit test dynamic proxies.
+
+#### Changes Made:
+- Implemented `DeveloperDiagnosticsScreen` with 8 expandable real-time diagnostic sections (Playback & Audio Engine, Waveform & Sync, Output Device, Library Brain, Metadata, Storage & Database, Network & Remote, System & Device).
+- Implemented `SelfTestRunner` with 11 isolated subsystem test modules (`Database`, `Media permissions`, `Storage access`, `Background jobs`, `Internet`, `Metadata lookup`, `Artwork download`, `Audio decoder`, `GitHub update check`, `Library Brain`, `Error reporting`) and overall health calculation (`GOOD`, `WARNING`, `DEGRADED`, `CRITICAL`).
+- Implemented `SelfTestScreen` with live testing progress, subsystem test cards, retry buttons, and markdown summary exporter.
+- Implemented `DiagnosticLogger` circular buffer (100 entries) with strict token/credential redaction and `DiagnosticReportExporter` with clipboard/share intents.
+- Implemented `DeveloperModeManager` with 7-tap activation mechanism within 3.5s window and SharedPreferences persistence.
+- Connected `AudioOutputTracker` to `DjAudioEngine` audio focus and `BluetoothCarReceiver` ACL connect/disconnect events.
+- Added `AboutSettingsScreen` with version unlock badge and updated `SideNavigationDrawer` with `DEV` and `TEST` destination items under SYSTEM.
+- Created `DeveloperDiagnosticsAndSelfTestTest` suite covering all diagnostic models, logger redaction, self-test health scoring, and developer mode activation.
+
+#### Fixes Applied:
+- Paired each regex pattern in `DiagnosticLogger` with an explicit replacement string to avoid non-existent capturing group lookups.
+- Configured Robolectric `ApplicationProvider.getApplicationContext()` in unit tests instead of Java dynamic proxy for Context.
+- Aligned `BrainSummary` property access with `LibraryBrain` implementation.
+
+#### Test Results:
+- Unit tests: 394 tests passed (0 failures) via `./gradlew testDebugUnitTest`
+- Debug APK: SUCCESS (`app-debug.apk`, 27MB) via `./gradlew assembleDebug`
+- Release APK: SKIPPED (non-release branch push per repository rule)
+
 ### Stage 1 — Library Brain Foundation & CI History Diagnostics
 - **Date**: 2026-09-13T18:50:00Z
 - **Branch**: `Debug`

@@ -130,6 +130,7 @@ val DeckACyanGlow = Color(0x3300F0FF)
 val DeckBPink = Color(0xFFFF2A6D)
 val DeckBPinkDark = Color(0xFFB8184C)
 val DeckBPinkGlow = Color(0x33FF2A6D)
+val DeckBOrange = Color(0xFFFF8A00)
 
 // Accents & Quality Indicators
 val NeonGreen = Color(0xFF05FFA1)      // Lossless / True 320k / In Sync

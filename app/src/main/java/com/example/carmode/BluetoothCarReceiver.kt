@@ -35,11 +35,18 @@ class BluetoothCarReceiver : BroadcastReceiver() {
         when (action) {
             BluetoothDevice.ACTION_ACL_CONNECTED -> {
                 val deviceName = intent.getStringExtra(BluetoothDevice.EXTRA_NAME)
+                val label = deviceName ?: try { device.name } catch (_: SecurityException) { null } ?: device.address
                 Log.d(TAG, "Bluetooth ACL connected: ${device.address}")
+                runCatching {
+                    com.example.diagnostics.AudioOutputTracker.getInstance(context).recordConnect(label)
+                }
                 carManager.onBluetoothDeviceConnected(device, deviceName)
             }
             BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
                 Log.d(TAG, "Bluetooth ACL disconnected: ${device.address}")
+                runCatching {
+                    com.example.diagnostics.AudioOutputTracker.getInstance(context).recordDisconnect(device.address)
+                }
                 carManager.onBluetoothDeviceDisconnected(device)
             }
         }

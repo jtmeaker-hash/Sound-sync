@@ -1569,6 +1569,26 @@ private fun SideDestinationScreen(
                         onBack = onClose
                     )
                 }
+                SideMenuDestination.AboutSoundSync -> {
+                    com.example.ui.settings.AboutSettingsScreen(
+                        onBack = onClose,
+                        onNavigateToDiagnostics = { onNavigate(SideMenuDestination.DeveloperDiagnostics) },
+                        onNavigateToSelfTest = { onNavigate(SideMenuDestination.SoundSyncSelfTest) }
+                    )
+                }
+                SideMenuDestination.DeveloperDiagnostics -> {
+                    com.example.ui.diagnostics.DeveloperDiagnosticsScreen(
+                        viewModel = viewModel,
+                        audioEngine = viewModel.audioEngine,
+                        onBack = onClose,
+                        onNavigateToSelfTest = { onNavigate(SideMenuDestination.SoundSyncSelfTest) }
+                    )
+                }
+                SideMenuDestination.SoundSyncSelfTest -> {
+                    com.example.ui.diagnostics.SelfTestScreen(
+                        onBack = onClose
+                    )
+                }
             }
         }
     }

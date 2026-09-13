@@ -34,6 +34,26 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
+ * Technical diagnostic snapshot of live DjAudioEngine playback metrics.
+ */
+data class AudioEngineDiagnosticsSnapshot(
+    val isPlaying: Boolean,
+    val currentTrack: Track?,
+    val positionMs: Long,
+    val playbackProgress: Float,
+    val decoderName: String,
+    val containerFormat: String,
+    val mimeType: String,
+    val sampleRate: Int,
+    val bitDepth: Int,
+    val channelCount: Int,
+    val bitrateKbps: Int,
+    val audioSessionId: Int,
+    val hasAudioFocus: Boolean,
+    val playbackSpeed: Float
+)
+
+/**
  * Single authoritative DJ Audio Engine managing playback state, real-time DSP decoding
  * via MediaCodec + AudioTrack (EQ + Haas applied to actual audio), fallback procedural
  * synthesis for demo tracks, and DJ deck parameters (Pitch, EQ, 4-bar Looping, Cues).
@@ -86,6 +106,17 @@ class DjAudioEngine(private val context: Context) {
     @Volatile private var wasPlayingBeforeFocusLoss = false
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        val eventName = when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS -> "AUDIOFOCUS_LOSS"
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> "AUDIOFOCUS_LOSS_TRANSIENT"
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK"
+            AudioManager.AUDIOFOCUS_GAIN -> "AUDIOFOCUS_GAIN"
+            else -> "AUDIOFOCUS_CHANGE_$focusChange"
+        }
+        runCatching {
+            com.example.diagnostics.AudioOutputTracker.getInstance(context).recordAudioFocusEvent(eventName)
+        }
+
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS -> {
                 Log.d(TAG, "Audio focus lost permanently -> pausing")
@@ -217,11 +248,50 @@ class DjAudioEngine(private val context: Context) {
     // ── Diagnostics ────────────────────────────────────────────────────────
     @Volatile private var underrunLogCounter: Int = 0
     @Volatile private var underrunCheckInterval: Int = 200
+    @Volatile private var activeDecoderName: String? = null
+    @Volatile private var activeMimeType: String? = null
+    @Volatile private var activeContainerFormat: String? = null
+    @Volatile private var activeBitrateBps: Int = 0
+    @Volatile private var isUsingProceduralSynthesis: Boolean = false
 
     // ── Pending seek ───────────────────────────────────────────────────────
     @Volatile private var pendingSeekMs: Long? = null
 
     @Volatile private var isEngineReleased = false
+
+    /**
+     * Obtains a point-in-time diagnostic snapshot of playback metrics, decoder info, and audio output state.
+     */
+    fun getPlaybackDiagnostics(): AudioEngineDiagnosticsSnapshot {
+        val track = _currentTrack.value
+        val decName = activeDecoderName ?: if (isUsingProceduralSynthesis) {
+            "Procedural Synthesizer (Demo/Fallback)"
+        } else if (activeCodec != null) {
+            "MediaCodec (Hardware/Software)"
+        } else {
+            "None (Idle)"
+        }
+        val format = activeContainerFormat ?: track?.format?.takeIf { it.isNotBlank() } ?: track?.filePath?.substringAfterLast('.', "")?.uppercase() ?: "Unknown"
+        val mime = activeMimeType ?: "audio/unknown"
+        val bitrate = if (activeBitrateBps > 0) activeBitrateBps / 1000 else track?.bitrateKbps ?: 0
+
+        return AudioEngineDiagnosticsSnapshot(
+            isPlaying = _isPlaying.value,
+            currentTrack = track,
+            positionMs = _currentPositionMs.value,
+            playbackProgress = _playbackProgress.value,
+            decoderName = decName,
+            containerFormat = format,
+            mimeType = mime,
+            sampleRate = activeSampleRate,
+            bitDepth = 16,
+            channelCount = activeChannelCount,
+            bitrateKbps = bitrate,
+            audioSessionId = activeAudioTrack?.audioSessionId ?: 0,
+            hasAudioFocus = hasAudioFocus,
+            playbackSpeed = 1.0f + (_pitchPercent.value / 100f)
+        )
+    }
 
     // ── Authoritative Playback State ───────────────────────────────────────
     private val _isPlaying = MutableStateFlow(false)
@@ -767,6 +837,11 @@ class DjAudioEngine(private val context: Context) {
             dec.start()
             codec = dec
             activeCodec = dec
+            activeDecoderName = try { dec.name } catch (_: Exception) { "MediaCodec ($mime)" }
+            activeMimeType = mime
+            activeBitrateBps = if (format.containsKey(MediaFormat.KEY_BIT_RATE)) format.getInteger(MediaFormat.KEY_BIT_RATE) else 0
+            activeContainerFormat = track.format.ifEmpty { track.filePath.substringAfterLast('.', "").uppercase() }
+            isUsingProceduralSynthesis = false
 
             // ── Calculate safe buffer size ──────────────────────────────
             val minBuf = AudioTrack.getMinBufferSize(
@@ -1692,6 +1767,11 @@ class DjAudioEngine(private val context: Context) {
             }
         }
         activeAudioTrack = null
+        activeDecoderName = null
+        activeMimeType = null
+        activeContainerFormat = null
+        activeBitrateBps = 0
+        isUsingProceduralSynthesis = false
         releaseSynthesisTrack()
     }
 
@@ -1712,6 +1792,10 @@ class DjAudioEngine(private val context: Context) {
     private fun startAudioSynthesis(session: Long) {
         decoderShouldPause = false
         decoderRunning = true
+        isUsingProceduralSynthesis = true
+        activeDecoderName = "Procedural Synthesizer (Demo/Fallback)"
+        activeMimeType = "audio/pcm"
+        activeContainerFormat = "SYNTH_PCM"
         activeLoopSessionId = session
         audioThreadExecutor.execute {
             android.os.Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)

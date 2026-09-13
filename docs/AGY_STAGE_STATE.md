@@ -3,8 +3,8 @@
 - Target branch: `Debug`
 - Starting branch: `main`
 - Starting commit: `fd8e9e7`
-- Last completed stage: `1`
-- Current stage: `2`
+- Last completed stage: `2`
+- Current stage: `3`
 - Stage status: `READY`
 - Last successful push: `c2a27f2`
 - Last CI run: _queued/in-progress on GitHub Actions_
