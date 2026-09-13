@@ -206,6 +206,7 @@ fun MainDjScreen(
     val haasEnabled by viewModel.audioEngine.haasEnabled.collectAsState()
     val haasAmount by viewModel.audioEngine.haasAmount.collectAsState()
     val haasDelayMs by viewModel.audioEngine.haasDelayMs.collectAsState()
+    val haasBassProtect by viewModel.audioEngine.haasBassProtect.collectAsState()
 
     // SoundSync In-App Update States
     val repeatMode by viewModel.repeatMode.collectAsState()
@@ -450,6 +451,7 @@ fun MainDjScreen(
                         haasEnabled = haasEnabled,
                         haasAmount = haasAmount,
                         haasDelayMs = haasDelayMs,
+                        haasBassProtect = haasBassProtect,
                         waveformStyle = waveformStyle,
                         onPickSafFolder = onPickSafFolder,
                         onPickAudioFiles = onPickAudioFiles,
@@ -1236,6 +1238,7 @@ private fun SideDestinationScreen(
     haasEnabled: Boolean,
     haasAmount: Float,
     haasDelayMs: Float,
+    haasBassProtect: Boolean = true,
     waveformStyle: com.example.model.WaveformStyle = com.example.model.WaveformStyle.DETAILED,
     onPickSafFolder: () -> Unit,
     onPickAudioFiles: () -> Unit,
@@ -1356,9 +1359,11 @@ private fun SideDestinationScreen(
                             haasEnabled = haasEnabled,
                             haasAmount = haasAmount,
                             haasDelayMs = haasDelayMs,
+                            haasBassProtect = haasBassProtect,
                             onSetHaasEnabled = { viewModel.audioEngine.setHaasEnabled(it) },
                             onSetHaasAmount = { viewModel.audioEngine.setHaasAmount(it) },
-                            onSetHaasDelayMs = { viewModel.audioEngine.setHaasDelayMs(it) }
+                            onSetHaasDelayMs = { viewModel.audioEngine.setHaasDelayMs(it) },
+                            onSetHaasBassProtect = { viewModel.audioEngine.setHaasBassProtect(it) }
                         )
                     }
                 }

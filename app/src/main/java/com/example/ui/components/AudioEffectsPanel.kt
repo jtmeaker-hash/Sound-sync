@@ -61,13 +61,14 @@ fun AudioEffectsPanel(
     onSetEqLow: (Float) -> Unit,
     onSetEqMid: (Float) -> Unit,
     onSetEqHigh: (Float) -> Unit,
-    // Haas state
     haasEnabled: Boolean,
     haasAmount: Float,
     haasDelayMs: Float,
+    haasBassProtect: Boolean = true,
     onSetHaasEnabled: (Boolean) -> Unit,
     onSetHaasAmount: (Float) -> Unit,
     onSetHaasDelayMs: (Float) -> Unit,
+    onSetHaasBassProtect: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -245,6 +246,29 @@ fun AudioEffectsPanel(
                             valueRange = HaasSurroundEffect.MIN_DELAY_MS..HaasSurroundEffect.MAX_DELAY_MS,
                             displayValue = "${String.format(java.util.Locale.US, "%.1f", haasDelayMs)}ms"
                         )
+
+                        // Mono Bass Protect toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "MONO BASS PROTECT",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Switch(
+                                checked = haasBassProtect,
+                                onCheckedChange = onSetHaasBassProtect,
+                                modifier = Modifier.size(width = 40.dp, height = 24.dp),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = DjObsidian,
+                                    checkedTrackColor = DeckBPink
+                                )
+                            )
+                        }
                     }
                 }
             }

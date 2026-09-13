@@ -320,6 +320,9 @@ class DjAudioEngine(private val context: Context) {
     private val _haasDelayMs = MutableStateFlow(HaasSurroundEffect.DEFAULT_DELAY_MS)
     val haasDelayMs = _haasDelayMs.asStateFlow()
 
+    private val _haasBassProtect = MutableStateFlow(true)
+    val haasBassProtect = _haasBassProtect.asStateFlow()
+
     private val _crossfadeSeconds = MutableStateFlow(0)
     val crossfadeSeconds = _crossfadeSeconds.asStateFlow()
 
@@ -329,9 +332,11 @@ class DjAudioEngine(private val context: Context) {
         _haasEnabled.value = savedHaas.isEnabled
         _haasAmount.value = savedHaas.amount
         _haasDelayMs.value = savedHaas.delayMs
+        _haasBassProtect.value = savedHaas.bassProtect
         haasEffect.setEnabled(savedHaas.isEnabled)
         haasEffect.setAmount(savedHaas.amount)
         haasEffect.setDelayMs(savedHaas.delayMs)
+        haasEffect.setBassProtect(savedHaas.bassProtect)
     }
 
     fun setCrossfadeSeconds(seconds: Int) {
@@ -603,7 +608,7 @@ class DjAudioEngine(private val context: Context) {
         haasEffect.setEnabled(enabled)
         HaasSurroundEffect.saveSettings(
             context,
-            HaasSurroundEffect.HaasSettings(enabled, _haasAmount.value, _haasDelayMs.value)
+            HaasSurroundEffect.HaasSettings(enabled, _haasAmount.value, _haasDelayMs.value, _haasBassProtect.value)
         )
     }
 
@@ -613,7 +618,7 @@ class DjAudioEngine(private val context: Context) {
         haasEffect.setAmount(clamped)
         HaasSurroundEffect.saveSettings(
             context,
-            HaasSurroundEffect.HaasSettings(_haasEnabled.value, clamped, _haasDelayMs.value)
+            HaasSurroundEffect.HaasSettings(_haasEnabled.value, clamped, _haasDelayMs.value, _haasBassProtect.value)
         )
         if (!_haasEnabled.value) {
             haasEffect.setEnabled(false)
@@ -626,7 +631,16 @@ class DjAudioEngine(private val context: Context) {
         haasEffect.setDelayMs(clamped)
         HaasSurroundEffect.saveSettings(
             context,
-            HaasSurroundEffect.HaasSettings(_haasEnabled.value, _haasAmount.value, clamped)
+            HaasSurroundEffect.HaasSettings(_haasEnabled.value, _haasAmount.value, clamped, _haasBassProtect.value)
+        )
+    }
+
+    fun setHaasBassProtect(protect: Boolean) {
+        _haasBassProtect.value = protect
+        haasEffect.setBassProtect(protect)
+        HaasSurroundEffect.saveSettings(
+            context,
+            HaasSurroundEffect.HaasSettings(_haasEnabled.value, _haasAmount.value, _haasDelayMs.value, protect)
         )
     }
 
