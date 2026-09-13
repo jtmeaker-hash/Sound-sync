@@ -74,6 +74,8 @@ fun LocalLibraryScreen(
     val allArtists by viewModel.allArtists.collectAsState()
     val allPlaylists by viewModel.allPlaylists.collectAsState()
     val allFolders by viewModel.allFolders.collectAsState()
+    val folderTree by viewModel.folderTree.collectAsState()
+    val expandedFolderIds by viewModel.expandedFolderIds.collectAsState()
     val hideUnavailableTracks by viewModel.hideUnavailableTracks.collectAsState()
 
     val selectedAlbum by viewModel.selectedAlbum.collectAsState()
@@ -330,7 +332,7 @@ fun LocalLibraryScreen(
                     albumCount = allAlbums.size,
                     artistCount = allArtists.size,
                     playlistCount = allPlaylists.size,
-                    folderCount = allFolders.size,
+                    folderCount = folderTree.totalFoldersCount,
                     onSelectCategory = { cat -> viewModel.selectLocalCategory(cat) },
                     onOpenLibraryInsights = { viewModel.openLibraryInsights() },
                     onOpenFolderExplorer = onOpenFolderExplorer
@@ -396,7 +398,9 @@ fun LocalLibraryScreen(
                     }
                     LocalCategory.FOLDERS -> {
                         FoldersScreen(
-                            folders = allFolders,
+                            folderTree = folderTree,
+                            expandedFolderIdsState = expandedFolderIds,
+                            onToggleFolderExpanded = { id -> viewModel.toggleFolderExpanded(id) },
                             onSelectFolder = { folder -> viewModel.openFolder(folder) },
                             onPlayFolder = { folder, shuffle -> viewModel.playTrackList(folder.tracks, shuffle) }
                         )

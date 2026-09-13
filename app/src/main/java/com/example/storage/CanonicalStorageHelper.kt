@@ -373,7 +373,7 @@ object CanonicalStorageHelper {
         }
     }
 
-    private fun extractDocumentIdFromUri(uriString: String): String? {
+    fun extractDocumentIdFromUri(uriString: String): String? {
         try {
             val uri = Uri.parse(uriString)
             // If it's a document URI, use DocumentsContract or parse path segments

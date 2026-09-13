@@ -68,6 +68,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -103,6 +104,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val db = AppDatabase.getDatabase(application)
     private val trackDao = db.trackDao()
     private val sourceFolderDao = db.sourceFolderDao()
+    private val watchedFolderDao = db.watchedFolderDao()
     val playlistDao = db.playlistDao()
 
     val songFindRepository = com.example.data.SongFindRepository(db.songFindDao())
@@ -793,32 +795,50 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }.flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // Dynamically grouped Folders from Real indexed tracks
-    val allFolders: StateFlow<List<com.example.model.TrackFolder>> = allTracks.map { tracks ->
-        val startNs = System.nanoTime()
-        val folders = tracks.groupBy { track ->
-            val dir = track.directoryPath.ifBlank {
-                if (track.filePath.contains('/')) track.filePath.substringBeforeLast('/') else "/Music"
-            }
-            dir.trimEnd('/')
-        }.map { (folderPath, folderTracks) ->
-            val folderName = folderPath.substringAfterLast('/').ifBlank { folderPath.ifBlank { "Root" } }
-            val sortedTracks = folderTracks.sortedWith(
-                compareBy<Track> { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
-                    .thenBy { it.title.lowercase(java.util.Locale.ROOT) }
-            )
-            com.example.model.TrackFolder(
-                id = "folder_${folderPath.hashCode()}",
-                name = folderName,
-                path = folderPath,
-                trackCount = sortedTracks.size,
-                totalDurationSeconds = sortedTracks.sumOf { it.durationSeconds },
-                tracks = sortedTracks
-            )
-        }.sortedBy { it.name.lowercase(java.util.Locale.ROOT) }
-        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
-        Log.d("SoundSyncPerf", "folder grouping in ${elapsedMs}ms (${folders.size} folders)")
-        folders
+    // Folder Hierarchy Expansion State
+    private val _expandedFolderIds = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+    val expandedFolderIds: StateFlow<Set<String>> = _expandedFolderIds.asStateFlow()
+
+    fun toggleFolderExpanded(folderId: String) {
+        _expandedFolderIds.update { current ->
+            if (current.contains(folderId)) current - folderId else current + folderId
+        }
+    }
+
+    fun expandFolderWithAncestors(folderId: String) {
+        val tree = folderTree.value
+        val ancestors = tree.getAncestorIds(folderId)
+        _expandedFolderIds.update { current ->
+            current + ancestors + folderId
+        }
+    }
+
+    // Reactive Hierarchical Folder Tree built from user-selected roots and real parent-child directory structures
+    val folderTree: StateFlow<com.example.model.FolderHierarchyTree> = combine(
+        allTracks,
+        sourceFolderDao.getAllSources(),
+        watchedFolderDao.observeAllFolders()
+    ) { tracks, sources, watched ->
+        val app = getApplication<Application>()
+        val persistedSaf = com.example.storage.SafStorageManager.getPersistedAccessibleFolderUris(app)
+        com.example.storage.FolderHierarchyEngine.buildTree(
+            context = app,
+            tracks = tracks,
+            sourceFolders = sources,
+            watchedFolders = watched,
+            persistedSafUris = persistedSaf
+        )
+    }.flowOn(Dispatchers.Default)
+    .stateIn(viewModelScope, SharingStarted.Lazily, com.example.model.FolderHierarchyTree())
+
+    // Dynamically grouped Folders from Real indexed tracks (backwards-compatible)
+    val allFolders: StateFlow<List<com.example.model.TrackFolder>> = folderTree.map { tree ->
+        if (tree.allNodesById.isNotEmpty()) {
+            tree.allNodesById.values.map { it.toTrackFolder() }
+                .sortedBy { it.name.lowercase(java.util.Locale.ROOT) }
+        } else {
+            emptyList()
+        }
     }.flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
