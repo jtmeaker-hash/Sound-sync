@@ -67,6 +67,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
@@ -735,7 +737,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     // Real database tracks flow with cached storage availability mapping
     val allTracks: StateFlow<List<Track>> = kotlinx.coroutines.flow.combine(
-        trackDao.getAllTracks(),
+        trackDao.getAllTracks().conflate(),
         _storageRootAvailability
     ) { entities, rootAvailability ->
         val startNs = System.nanoTime()
@@ -1053,9 +1055,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Fuzzy duplicate detector live matches
-    val duplicateMatches: StateFlow<List<DuplicateMatch>> = allTracks.map { tracks ->
-        DuplicateDetector.findDuplicates(tracks)
-    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    val duplicateMatches: StateFlow<List<DuplicateMatch>> = allTracks
+        .debounce(1000)
+        .map { tracks ->
+            DuplicateDetector.findDuplicates(tracks)
+        }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // SoundSync In-App Update System State
     val updateState: StateFlow<UpdateState> = UpdateManager.updateState

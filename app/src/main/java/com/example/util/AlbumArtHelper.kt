@@ -171,7 +171,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
 
         // Fallback embedded audio metadata reader for specialized tags/formats
         try {
-            val embeddedMeta = AudioEmbeddedMetadataReader.read(context, track.filePath)
+            val embeddedMeta = AudioEmbeddedMetadataReader.read(context, track.filePath, includeArtworkBytes = true)
             if (embeddedMeta.hasEmbeddedArtwork && embeddedMeta.embeddedArtworkBytes != null) {
                 decodeByteArrayToBitmap(embeddedMeta.embeddedArtworkBytes, sizePx)?.let { decoded ->
                     memoryCache.put(cacheKey, decoded)

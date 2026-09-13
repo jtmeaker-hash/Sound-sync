@@ -124,6 +124,12 @@ class SoundSyncBackupManager(
         autoBackupJob?.cancel()
         autoBackupJob = scope.launch {
             delay(5000)
+            try {
+                val analysisManager = com.example.analysis.TrackAnalysisManager.getInstance(context)
+                while (analysisManager.queueProgress.value.isRunning) {
+                    delay(3000)
+                }
+            } catch (_: Exception) {}
             Log.d(TAG, "Triggering automatic debounced backup...")
             createBackup()
         }
@@ -488,7 +494,7 @@ class SoundSyncBackupManager(
             backup.tracks.forEach { tracksArray.put(it.toJson()) }
             put("tracks", tracksArray)
         }
-        return root.toString(2)
+        return root.toString()
     }
 
     private fun writeToDefaultDirectory(jsonString: String): File {

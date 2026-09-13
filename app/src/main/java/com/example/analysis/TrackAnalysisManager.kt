@@ -438,7 +438,7 @@ class TrackAnalysisManager private constructor(
                 )
 
                 onProgressUpdate?.invoke(newProcessed, totalEligible, track.title)
-                delay(if (isPlaying) 150 else 30)
+                delay(if (isPlaying) 200 else 60)
             }
 
             terminalState = if (failedTerminal > 0) ScanLifecycleState.COMPLETE_WITH_ERRORS else ScanLifecycleState.COMPLETE
@@ -562,18 +562,10 @@ class TrackAnalysisManager private constructor(
             }
         }
 
-        trackDao.updateTrackAnalysisStatus(
-            id = track.id,
-            state = AnalysisState.ANALYSING.name,
-            lastAnalysedAt = System.currentTimeMillis(),
-            reason = null,
-            retryCount = track.analysisRetryCount
-        )
-
         try {
             // 1. Read embedded tags for accurate local metadata if missing
             try {
-                val embedded = AudioEmbeddedMetadataReader.read(context, updatedTrack.filePath)
+                val embedded = AudioEmbeddedMetadataReader.read(context, updatedTrack.filePath, includeArtworkBytes = false)
                 if (embedded != null) {
                     var modified = false
                     var t = updatedTrack

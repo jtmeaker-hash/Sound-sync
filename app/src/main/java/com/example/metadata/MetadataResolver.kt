@@ -86,7 +86,7 @@ class MetadataResolver(
         if (!forceRefresh && com.example.storage.TrackIdentityReconciler.isMetadataScanComplete(track.metadataScanState) && !track.filePath.isBlank()) {
             // Even for COMPLETE tracks, validate the album field to catch folder-name albums
             // stored by older versions of the app or incorrect MediaStore data.
-            if (!AlbumValidator.isValidAlbum(track.album, track.filePath)) {
+            if (!track.album.isNullOrBlank() && !AlbumValidator.isValidAlbum(track.album, track.filePath)) {
                 Log.d(TAG, "AlbumRepair: track '${track.title}' (${track.metadataScanState}) has invalid album '${track.album}' — clearing in DB")
                 val repairedTrack = track.copy(album = "")
                 val db = database ?: try { AppDatabase.getDatabase(context) } catch (_: Exception) { null }
