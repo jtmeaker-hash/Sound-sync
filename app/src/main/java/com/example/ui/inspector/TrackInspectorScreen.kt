@@ -699,6 +699,7 @@ fun TrackInspectorScreen(
                     }
                     coroutineScope.launch(Dispatchers.IO) {
                         trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                        com.example.util.AlbumArtHelper.invalidateTrack(updated.id, updated.artist, updated.album)
                     }
                     true
                 } else {

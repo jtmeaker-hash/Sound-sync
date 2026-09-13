@@ -740,7 +740,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val allAlbums: StateFlow<List<com.example.model.Album>> = allTracks.map { tracks ->
         val startNs = System.nanoTime()
         val albums = tracks.filter { it.album.isNotBlank() }
-            .groupBy { "${it.artist.trim().lowercase()}:::${it.album.trim().lowercase()}" }
+            .groupBy {
+                val artistKey = if (it.albumArtist.isNotBlank()) it.albumArtist.trim().lowercase() else it.artist.trim().lowercase()
+                "${artistKey}:::${it.album.trim().lowercase()}"
+            }
             .map { entry ->
                 val albumTracks = entry.value.sortedWith(
                     compareBy<Track> { it.discNumber }
@@ -749,8 +752,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 val firstTrack = albumTracks.first()
                 val albumTitle = firstTrack.album.ifBlank { "Single" }
-                val artistName = firstTrack.artist.ifBlank { "Unknown Artist" }
+                val artistName = firstTrack.albumArtist.ifBlank { firstTrack.artist.ifBlank { "Unknown Artist" } }
                 val totalSec = albumTracks.sumOf { it.durationSeconds }
+
+                // Deterministic representative artwork selection:
+                // Find member track with valid cached artwork, then embedded artwork, then first track
+                val trackWithArt = albumTracks.firstOrNull {
+                    !it.artworkCachePath.isNullOrBlank() || (!it.artworkUrl.isNullOrBlank() && !it.artworkUrl.startsWith("http"))
+                } ?: albumTracks.firstOrNull { it.isEmbeddedInFile } ?: firstTrack
+
+                val resolvedArtUri = trackWithArt.artworkCachePath?.takeIf { it.isNotBlank() }
+                    ?: trackWithArt.artworkUrl?.takeIf { it.isNotBlank() }
+                    ?: trackWithArt.filePath.takeIf { it.isNotBlank() }
+
                 com.example.model.Album(
                     id = "album_${artistName.hashCode()}_${albumTitle.hashCode()}",
                     title = albumTitle,
@@ -758,7 +772,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     trackCount = albumTracks.size,
                     totalDurationSeconds = totalSec,
                     tracks = albumTracks,
-                    artworkUri = null
+                    year = albumTracks.mapNotNull { it.releaseYear }.firstOrNull { it > 0 } ?: 0,
+                    artworkUri = resolvedArtUri
                 )
             }
             .sortedBy { it.title.lowercase() }
@@ -1061,6 +1076,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                                 updated.artist != cur.artist ||
                                 updated.album != cur.album ||
                                 updated.artworkUrl != cur.artworkUrl ||
+                                updated.artworkCachePath != cur.artworkCachePath ||
+                                updated.artworkSource != cur.artworkSource ||
+                                updated.fileModifiedTimestamp != cur.fileModifiedTimestamp ||
                                 updated.bpm != cur.bpm ||
                                 updated.musicalKey != cur.musicalKey)) {
                         audioEngine.updateCurrentTrackMetadata(updated)

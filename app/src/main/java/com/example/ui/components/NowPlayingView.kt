@@ -43,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -489,17 +490,32 @@ private fun AlbumArtworkDisplay(
 ) {
     val theme = SoundSyncTheme.current
     val context = LocalContext.current
-    var artworkBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-    var lastLoadedTrackId by remember { mutableStateOf<String?>(null) }
+    var artworkBitmap by remember(track.id) {
+        mutableStateOf(AlbumArtHelper.getCachedArtwork(track, 512)?.asImageBitmap())
+    }
+    var isLoading by remember { mutableStateOf(artworkBitmap == null) }
+    var lastLoadedTrackId by remember { mutableStateOf<String?>(track.id) }
+    val invalidationEvent by AlbumArtHelper.artworkInvalidationFlow.collectAsState(initial = null)
 
-    // Load artwork asynchronously whenever the track changes
-    LaunchedEffect(track.id, track.filePath) {
-        if (lastLoadedTrackId != track.id) {
-            artworkBitmap = null
-            isLoading = true
+    // Load artwork asynchronously whenever the track or artwork identity changes
+    LaunchedEffect(
+        track.id,
+        track.filePath,
+        track.artworkCachePath,
+        track.artworkUrl,
+        track.fileModifiedTimestamp,
+        invalidationEvent
+    ) {
+        if (invalidationEvent != null && invalidationEvent != track.id && invalidationEvent != "${track.artist.trim().lowercase()}:::${track.album.trim().lowercase()}") {
+            if (lastLoadedTrackId == track.id && artworkBitmap != null) {
+                return@LaunchedEffect
+            }
         }
-        lastLoadedTrackId = track.id
+        if (lastLoadedTrackId != track.id) {
+            artworkBitmap = AlbumArtHelper.getCachedArtwork(track, 512)?.asImageBitmap()
+            isLoading = (artworkBitmap == null)
+            lastLoadedTrackId = track.id
+        }
 
         val bitmap = withContext(Dispatchers.IO) {
             try {

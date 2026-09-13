@@ -633,6 +633,10 @@ class MetadataFileWriter(
         } catch (_: Throwable) {}
 
         try {
+            com.example.util.AlbumArtHelper.invalidateTrack(track.id, track.artist, track.album)
+        } catch (_: Throwable) {}
+
+        try {
             com.example.audio.DjAudioEngine.getInstance(context).onTrackFileModified(track.id, track.filePath, finalTrackPath)
         } catch (_: Throwable) {}
 

@@ -128,6 +128,7 @@ class MetadataReviewManager(
         )
         trackDao.updateTrack(updated)
         inboxDao.updateStatus(itemId, "ACCEPTED")
+        com.example.util.AlbumArtHelper.invalidateTrack(updated.id, updated.artist, updated.album)
 
         // 2. Physical File Writing with Transactional Rollback (Section 11)
         if (File(track.filePath).exists() && File(track.filePath).canWrite()) {

@@ -1,5 +1,6 @@
 package com.example.ui.library
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +28,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import com.example.ui.components.LibrarySearchBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,12 +36,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.Album
+import com.example.util.AlbumArtHelper
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
@@ -135,6 +141,17 @@ fun AlbumGridCard(
     album: Album,
     onClick: () -> Unit
 ) {
+    val context = LocalContext.current
+    var artworkBitmap by remember(album.id, album.artworkUri) {
+        mutableStateOf(AlbumArtHelper.getCachedArtworkForAlbum(album, 320))
+    }
+
+    LaunchedEffect(album.id, album.artworkUri) {
+        if (artworkBitmap == null) {
+            artworkBitmap = AlbumArtHelper.getArtworkForAlbum(context, album, 320)
+        }
+    }
+
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = DjSurfaceDark,
@@ -145,7 +162,7 @@ fun AlbumGridCard(
             .testTag("album_card_${album.id}")
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
-            // Album Artwork Placeholder
+            // Album Artwork Container
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -154,12 +171,21 @@ fun AlbumGridCard(
                     .background(DjSurfaceCard),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.Album,
-                    contentDescription = null,
-                    tint = DeckACyan.copy(alpha = 0.6f),
-                    modifier = Modifier.size(48.dp)
-                )
+                if (artworkBitmap != null) {
+                    Image(
+                        bitmap = artworkBitmap!!.asImageBitmap(),
+                        contentDescription = "${album.title} artwork",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Album,
+                        contentDescription = null,
+                        tint = DeckACyan.copy(alpha = 0.6f),
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))

@@ -145,8 +145,11 @@ class ArtworkCache(private val context: Context) {
 
     fun getCachedArtworkFileForTrack(trackId: String): File? {
         val safeKey = "track_${trackId.replace(Regex("[^a-zA-Z0-9_-]"), "_")}"
-        val imageFile = File(cacheDir, "$safeKey.jpg")
-        return if (imageFile.exists() && imageFile.length() > 0) imageFile else null
+        val jpgFile = File(cacheDir, "$safeKey.jpg")
+        if (jpgFile.exists() && jpgFile.length() > 0) return jpgFile
+        val pngFile = File(cacheDir, "$safeKey.png")
+        if (pngFile.exists() && pngFile.length() > 0) return pngFile
+        return null
     }
 
     fun saveArtworkBytes(
@@ -202,6 +205,30 @@ class ArtworkCache(private val context: Context) {
         val freed = getCacheSizeBytes()
         clear()
         return freed
+    }
+
+    fun evictArtworkForTrack(trackId: String): Boolean {
+        val safeKey = "track_${trackId.replace(Regex("[^a-zA-Z0-9_-]"), "_")}"
+        var deleted = false
+        val jpgFile = File(cacheDir, "$safeKey.jpg")
+        if (jpgFile.exists()) deleted = jpgFile.delete() || deleted
+        val pngFile = File(cacheDir, "$safeKey.png")
+        if (pngFile.exists()) deleted = pngFile.delete() || deleted
+        val metaFile = File(cacheDir, "$safeKey.json")
+        if (metaFile.exists()) metaFile.delete()
+        return deleted
+    }
+
+    fun evictArtworkForAlbum(artist: String, album: String?): Boolean {
+        val key = generateCacheKey(artist, album)
+        var deleted = false
+        val jpgFile = File(cacheDir, "$key.jpg")
+        if (jpgFile.exists()) deleted = jpgFile.delete() || deleted
+        val pngFile = File(cacheDir, "$key.png")
+        if (pngFile.exists()) deleted = pngFile.delete() || deleted
+        val metaFile = File(cacheDir, "$key.json")
+        if (metaFile.exists()) metaFile.delete()
+        return deleted
     }
 
     fun clear() {
