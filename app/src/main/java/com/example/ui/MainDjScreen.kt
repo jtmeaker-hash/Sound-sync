@@ -1556,7 +1556,13 @@ private fun SideDestinationScreen(
                         },
                         onFilterTracks = { _ ->
                             onClose()
-                        }
+                        },
+                        onNavigateToDoctor = { onNavigate(SideMenuDestination.LibraryDoctor) }
+                    )
+                }
+                SideMenuDestination.LibraryDoctor -> {
+                    com.example.ui.doctor.LibraryDoctorScreen(
+                        onBack = onClose
                     )
                 }
                 SideMenuDestination.MetadataReviewInbox -> {

@@ -362,6 +362,67 @@ class LibraryBrain private constructor(
     }
 
     /**
+     * Requests repair for a specific track and category through Library Brain.
+     * Used by Library Doctor to enqueue safe repair actions without creating competing workers.
+     */
+    fun requestCategoryRepairForTrack(trackId: String, category: BrainCategory) {
+        scope.launch {
+            try {
+                val current = brainDao.getStatusForTrack(trackId)
+                if (current != null) {
+                    val updated = when (category) {
+                        BrainCategory.ARTWORK -> current.copy(artworkStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                        BrainCategory.METADATA -> current.copy(metadataStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                        BrainCategory.BPM_KEY -> current.copy(bpmStatus = BrainSubStatus.NOT_STARTED.name, keyStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                        BrainCategory.WAVEFORM -> current.copy(waveformStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                        BrainCategory.QUALITY -> current.copy(qualityStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                        BrainCategory.LYRICS -> current.copy(lyricsStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                        BrainCategory.REPLAY_GAIN -> current.copy(replayGainStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                        else -> current.copy(overallStatus = BrainProcessingState.QUEUED.name)
+                    }
+                    brainDao.upsert(updated)
+                    priorityTrackId = trackId
+                    refreshSummary()
+                    triggerProcessing()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error requesting category repair for track $trackId: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Requests batch category repair for multiple tracks through Library Brain.
+     */
+    fun requestBatchCategoryRepair(trackIds: List<String>, category: BrainCategory) {
+        if (trackIds.isEmpty()) return
+        scope.launch {
+            try {
+                for (id in trackIds) {
+                    val current = brainDao.getStatusForTrack(id)
+                    if (current != null) {
+                        val updated = when (category) {
+                            BrainCategory.ARTWORK -> current.copy(artworkStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                            BrainCategory.METADATA -> current.copy(metadataStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                            BrainCategory.BPM_KEY -> current.copy(bpmStatus = BrainSubStatus.NOT_STARTED.name, keyStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                            BrainCategory.WAVEFORM -> current.copy(waveformStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                            BrainCategory.QUALITY -> current.copy(qualityStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                            BrainCategory.LYRICS -> current.copy(lyricsStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                            BrainCategory.REPLAY_GAIN -> current.copy(replayGainStatus = BrainSubStatus.NOT_STARTED.name, overallStatus = BrainProcessingState.QUEUED.name)
+                            else -> current.copy(overallStatus = BrainProcessingState.QUEUED.name)
+                        }
+                        brainDao.upsert(updated)
+                    }
+                }
+                refreshSummary()
+                triggerProcessing()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error requesting batch category repair: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Detects file changes (modifications, moves, removals) on disk.
      */
     suspend fun detectFileChanges(): Int = withContext(Dispatchers.IO) {

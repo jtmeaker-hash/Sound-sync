@@ -25,6 +25,38 @@ as unavailable by the backfill.
 
 ## Automated CI run log
 
+### Stage 3 — Library Doctor
+- **Date**: 2026-09-13T20:44:00Z
+- **Branch**: `Debug`
+- **Target**: Stage 3 Completion
+
+#### Issues Discovered:
+- Absence of user-facing diagnostic and safe maintenance tools for auditing library inconsistencies and corrupt assets.
+- Inconsistent album naming (e.g. whitespace, capitalization, year-suffixes) causing fragmented library organization.
+- Duplicate files and alternate versions/remixes were prone to accidental mass-deletion if not conservatively distinguished.
+- `AppDatabase` is an abstract class causing `IllegalArgumentException` when attempting to proxy it directly in unit tests; resolved by supporting DAO overrides in auditor and repair manager.
+- Album canonical grouping initially trimmed strings before comparison, concealing trailing whitespace anomalies.
+
+#### Changes Made:
+- Implemented `LibraryDoctorModels` defining 12 audit categories (`MISSING_ARTWORK`, `MISSING_ARTIST`, `DUPLICATE_TRACKS`, `BROKEN_FILE_PATHS`, `CORRUPTED_AUDIO`, `SUSPICIOUS_BPM`, `SUSPICIOUS_KEY`, `LOW_QUALITY_AUDIO`, `INCONSISTENT_ALBUMS`, `INCOMPLETE_ANALYSIS`, `MISSING_FILES`, `FAILED_BACKGROUND_JOBS`), issue models, severity levels, review statuses, and health scoring.
+- Implemented `LibraryDoctorPreferences` storing user ignore, review, and fix states in persistent SharedPreferences (`soundsync_library_doctor_prefs`).
+- Implemented `LibraryDoctorAuditor` performing asynchronous non-blocking scans across all 12 categories, calculating a transparent 0-100% health score, isolating remixes/live edits from exact duplicates, and detecting embedded `Artist - Title` patterns.
+- Implemented `LibraryDoctorRepairManager` dispatching all safe repair actions exclusively through `LibraryBrain` (`requestCategoryRepairForTrack`, `reanalyseTrack`, etc.) to prevent duplicate/competing background workers.
+- Added destructive confirmation safeguards preventing automated deletion of physical duplicate files, stale DB records, or album merges without explicit user modal approval.
+- Implemented `LibraryDoctorScreen` dashboard with health score gauge, category filter chips, expandable issue cards, "Fix All Safe Issues" action, BPM half/double-time adjustment dialog, and issue detail modal.
+- Added `LibraryDoctor` destination to `SideMenuDestination`, added "Library Doctor" entry under MUSIC in `SideNavigationDrawer`, and connected direct access from `LibraryHealthScreen`.
+- Created comprehensive `LibraryDoctorTest` unit test suite covering all 12 categories, preferences lifecycle, embedded artist splitting, duplicate distinction, and safe repair dispatch.
+
+#### Fixes Applied:
+- Added constructor DAO overrides (`trackDaoOverride`, `brainDaoOverride`) to `LibraryDoctorAuditor` and `LibraryDoctorRepairManager` to allow clean JVM unit testing without abstract RoomDatabase proxies.
+- Refined album consistency matcher to strip bracketed/parenthesized release years and preserve raw whitespace for comparison.
+- Added missing `Healing` icon and `verticalScroll` imports.
+
+#### Test Results:
+- Unit tests: 404 tests passed (0 failures) via `./gradlew testDebugUnitTest`
+- Debug APK: SUCCESS (`app-debug.apk`, 27MB) via `./gradlew assembleDebug`
+- Release APK: SKIPPED (non-release branch push per repository rule)
+
 ### Stage 2 — Developer Diagnostics & SoundSync Self-Test
 - **Date**: 2026-09-13T20:02:00Z
 - **Branch**: `Debug`

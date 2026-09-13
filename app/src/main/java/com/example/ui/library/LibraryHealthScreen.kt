@@ -47,7 +47,8 @@ fun LibraryHealthScreen(
     onNavigateToIntegrity: () -> Unit,
     onNavigateToReviewInbox: () -> Unit,
     onNavigateToDuplicates: () -> Unit,
-    onFilterTracks: (String) -> Unit
+    onFilterTracks: (String) -> Unit,
+    onNavigateToDoctor: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -131,13 +132,24 @@ fun LibraryHealthScreen(
                         Text("$healthPercent%", color = if (healthPercent > 80) NeonGreen else if (healthPercent > 50) NeonAmber else NeonRed, fontSize = 32.sp, fontWeight = FontWeight.Black)
                         Text("$totalTracks tracks indexed in library", color = TextMuted, fontSize = 12.sp)
                     }
-                    Button(
-                        onClick = onNavigateToIntegrity,
-                        colors = ButtonDefaults.buttonColors(containerColor = DeckACyan)
-                    ) {
-                        Icon(Icons.Default.Healing, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Integrity Tool", color = DjObsidian, fontWeight = FontWeight.Bold)
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(
+                            onClick = onNavigateToDoctor,
+                            colors = ButtonDefaults.buttonColors(containerColor = DeckACyan)
+                        ) {
+                            Icon(Icons.Default.Healing, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Library Doctor", color = DjObsidian, fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = onNavigateToIntegrity,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                        ) {
+                            Icon(Icons.Default.Build, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Integrity Tool", color = TextPrimary, fontSize = 12.sp)
+                        }
                     }
                 }
             }

@@ -3,10 +3,10 @@
 - Target branch: `Debug`
 - Starting branch: `main`
 - Starting commit: `fd8e9e7`
-- Last completed stage: `2`
-- Current stage: `3`
+- Last completed stage: `3`
+- Current stage: `4`
 - Stage status: `READY`
-- Last successful push: `c2a27f2`
+- Last successful push: `b95a06d`
 - Last CI run: _queued/in-progress on GitHub Actions_
 
 ## Resume rules

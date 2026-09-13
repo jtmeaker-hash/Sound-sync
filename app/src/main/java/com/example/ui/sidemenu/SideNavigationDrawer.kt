@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Healing
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Menu
@@ -211,7 +212,7 @@ fun SideNavigationDrawerContent(
                 // ── 1. MUSIC ─────────────────────────────────────
                 ProCategoryHeader(
                     title = "MUSIC",
-                    badge = "8 ITEMS",
+                    badge = "9 ITEMS",
                     isExpanded = expandedMap["MUSIC"] == true,
                     onToggle = { expandedMap["MUSIC"] = !(expandedMap["MUSIC"] ?: false) }
                 )
@@ -221,6 +222,15 @@ fun SideNavigationDrawerContent(
                     exit = shrinkVertically()
                 ) {
                     Column(modifier = Modifier.padding(start = 8.dp)) {
+                        ProDrawerItem(
+                            title = "Library Doctor",
+                            subtitle = "Audit health, diagnose issues & safe automated repairs",
+                            icon = Icons.Default.Healing,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.LibraryDoctor)
+                            }
+                        )
                         ProDrawerItem(
                             title = "Scanning & Storage Sources",
                             subtitle = "Mount points, MediaStore index, USB",
