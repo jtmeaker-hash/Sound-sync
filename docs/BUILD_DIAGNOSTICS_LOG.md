@@ -354,3 +354,75 @@ Run this script again after `gh auth login` to import retained workflow history.
 
 <!-- SOUNDSYNC_CI_ENTRIES -->
 
+
+## CI Run 34779508669 — PASS
+
+- **Date:** 2026-09-13T20:08:31.838876+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `Debug`
+- **Commit:** [`b95a06d150`](https://github.com/jtmeaker-hash/Sound-sync/commit/b95a06d150419d08fa8907144586634c02c819bd)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/34779508669)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ✅ PASS |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+- Lack of runtime visibility into audio engine decoding, audio buffer metrics, latency, and dual-deck waveform drift
+- Missing in-app self-test verification for database integrity, media permissions, storage access, background workers, decoders, and network
+- No centralized diagnostic report export or sanitized log capture for crash/bug investigation
+
+No CI build/test failures detected in this run.
+
+### Summary of changes
+
+- Implemented DeveloperDiagnosticsScreen with 8 expandable real-time diagnostic sections
+- Implemented SelfTestRunner with 11 isolated subsystem test modules and overall health calculation (GOOD/WARNING/DEGRADED/CRITICAL)
+- Implemented SelfTestScreen with live testing progress, subsystem test cards, retry buttons, and markdown summary exporter
+- Implemented DiagnosticLogger circular buffer (100 entries) with strict token/credential redaction and DiagnosticReportExporter with clipboard/share intents
+- Implemented DeveloperModeManager with 7-tap activation mechanism within 3.5s window and SharedPreferences persistence
+- Connected AudioOutputTracker to DjAudioEngine audio focus and BluetoothCarReceiver ACL connect/disconnect events
+- Added AboutSettingsScreen and updated SideNavigationDrawer with DEV and TEST destination items under SYSTEM
+- Created DeveloperDiagnosticsAndSelfTestTest suite covering all diagnostic models, logger redaction, self-test health scoring, and developer mode activation
+
+### Summary of fixes
+
+- Paired regex patterns in DiagnosticLogger with explicit replacement strings to prevent IndexOutOfBoundsException
+- Configured Robolectric ApplicationProvider.getApplicationContext() in unit tests instead of Java dynamic proxy
+- Aligned BrainSummary property access with LibraryBrain implementation
+
+### Commit/diff summary
+
+```text
+b95a06d feat(diagnostics): developer diagnostics dashboard and 11-module self-test runner
+ .../main/java/com/example/audio/DjAudioEngine.kt   |  84 +++
+ .../com/example/carmode/BluetoothCarReceiver.kt    |   7 +
+ .../com/example/diagnostics/AudioOutputTracker.kt  | 245 +++++++
+ .../example/diagnostics/DeveloperModeManager.kt    | 103 +++
+ .../com/example/diagnostics/DiagnosticLogger.kt    | 191 +++++
+ .../com/example/diagnostics/DiagnosticModels.kt    | 204 ++++++
+ .../diagnostics/DiagnosticReportExporter.kt        | 355 +++++++++
+ .../java/com/example/diagnostics/SelfTestRunner.kt | 735 +++++++++++++++++++
+ app/src/main/java/com/example/ui/MainDjScreen.kt   |  20 +
+ .../ui/diagnostics/DeveloperDiagnosticsScreen.kt   | 816 +++++++++++++++++++++
+ .../com/example/ui/diagnostics/SelfTestScreen.kt   | 475 ++++++++++++
+ .../com/example/ui/settings/AboutSettingsScreen.kt | 413 +++++++++++
+ .../example/ui/settings/GitHubSettingsScreen.kt    |  13 +-
+ .../com/example/ui/sidemenu/SideMenuDestination.kt |   3 +
+ .../example/ui/sidemenu/SideNavigationDrawer.kt    |  68 +-
+ app/src/main/java/com/example/ui/theme/Color.kt    |   1 +
+ .../DeveloperDiagnosticsAndSelfTestTest.kt         | 186 +++++
+ docs/AGY_STAGE_STATE.md                            |   4 +-
+ docs/BUILD_DIAGNOSTICS_LOG.md                      |  32 +
+ 19 files changed, 3947 insertions(+), 8 deletions(-)
+```
+
+---
