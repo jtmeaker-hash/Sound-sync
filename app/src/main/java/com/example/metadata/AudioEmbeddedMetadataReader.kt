@@ -68,7 +68,22 @@ object AudioEmbeddedMetadataReader {
         val retrieverMetadata = readWithRetriever(context, filePathOrUri)
         val streamMetadata = readFromStream(context, filePathOrUri)
 
-        return mergeMetadata(retrieverMetadata, streamMetadata)
+        var merged = mergeMetadata(retrieverMetadata, streamMetadata)
+
+        // If duration is <= 1 second, check container directly via WavContainerParser for WAV / RIFF audio
+        if (merged.durationSeconds <= 1) {
+            val wav = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
+            if (wav.isValid && wav.durationMs > 1000L) {
+                merged = merged.copy(
+                    durationSeconds = (wav.durationMs / 1000L).toInt(),
+                    bitrateKbps = if (merged.bitrateKbps <= 0) wav.bitrateKbps else merged.bitrateKbps,
+                    sampleRate = if (merged.sampleRate == null || merged.sampleRate ?: 0 <= 0) wav.sampleRate else merged.sampleRate,
+                    bitDepth = if (merged.bitDepth == null || merged.bitDepth ?: 0 <= 0) wav.bitsPerSample else merged.bitDepth
+                )
+            }
+        }
+
+        return merged
     }
 
     private fun readWithRetriever(context: Context?, filePathOrUri: String): EmbeddedAudioMetadata {

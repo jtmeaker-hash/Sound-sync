@@ -41,6 +41,14 @@ object CanonicalStorageHelper {
      *    -> /storage/emulated/0/Music/song.mp3
      */
     fun toCanonicalPath(pathOrUri: String): String {
+        return toCanonicalPath(null, pathOrUri)
+    }
+
+    /**
+     * Converts any audio path or URI (SAF content URI, MediaStore content URI, file:// URI, or raw path)
+     * to a canonical, decoded Linux filesystem path.
+     */
+    fun toCanonicalPath(context: Context?, pathOrUri: String): String {
         if (pathOrUri.isBlank() || pathOrUri.startsWith("demo://") || pathOrUri.startsWith("http")) {
             return pathOrUri
         }
@@ -60,7 +68,60 @@ object CanonicalStorageHelper {
             return normalizePath(clean)
         }
 
+        if (clean.startsWith("content://media/") && context != null) {
+            val resolved = resolveMediaStoreToCanonicalPath(context, clean)
+            if (!resolved.isNullOrBlank()) {
+                return normalizePath(resolved)
+            }
+        }
+
         return clean
+    }
+
+    /**
+     * Resolves a MediaStore audio content URI to its underlying Linux filesystem path.
+     */
+    fun resolveMediaStoreToCanonicalPath(context: Context, uriStr: String): String? {
+        try {
+            val uri = Uri.parse(uriStr)
+            val proj = mutableListOf(
+                android.provider.MediaStore.Audio.Media.DATA
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                proj.add(android.provider.MediaStore.Audio.Media.RELATIVE_PATH)
+                proj.add(android.provider.MediaStore.Audio.Media.DISPLAY_NAME)
+                proj.add(android.provider.MediaStore.Audio.Media.VOLUME_NAME)
+            }
+            context.contentResolver.query(uri, proj.toTypedArray(), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    val dataIdx = c.getColumnIndex(android.provider.MediaStore.Audio.Media.DATA)
+                    if (dataIdx != -1) {
+                        val data = c.getString(dataIdx)
+                        if (!data.isNullOrBlank() && data.startsWith("/")) {
+                            return data
+                        }
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val relIdx = c.getColumnIndex(android.provider.MediaStore.Audio.Media.RELATIVE_PATH)
+                        val dnIdx = c.getColumnIndex(android.provider.MediaStore.Audio.Media.DISPLAY_NAME)
+                        val volIdx = c.getColumnIndex(android.provider.MediaStore.Audio.Media.VOLUME_NAME)
+                        val rel = if (relIdx != -1) c.getString(relIdx) else null
+                        val dn = if (dnIdx != -1) c.getString(dnIdx) else null
+                        val vol = if (volIdx != -1) c.getString(volIdx) else null
+                        if (!dn.isNullOrBlank()) {
+                            val root = when {
+                                vol == null || vol == "external_primary" || vol == "external" -> PRIMARY_EMULATED_ROOT
+                                vol.matches(Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")) -> "/storage/$vol"
+                                else -> PRIMARY_EMULATED_ROOT
+                            }
+                            val cleanRel = (rel ?: "").trim('/')
+                            return if (cleanRel.isNotBlank()) "$root/$cleanRel/$dn" else "$root/$dn"
+                        }
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+        return null
     }
 
     /**
@@ -68,6 +129,10 @@ object CanonicalStorageHelper {
      * from any URI or filesystem path.
      */
     fun toStorageRelativePath(pathOrUri: String): String {
+        return toStorageRelativePath(null, pathOrUri)
+    }
+
+    fun toStorageRelativePath(context: Context?, pathOrUri: String): String {
         if (pathOrUri.isBlank() || pathOrUri.startsWith("demo://") || pathOrUri.startsWith("http")) {
             return ""
         }
@@ -89,7 +154,7 @@ object CanonicalStorageHelper {
         }
 
         // Case 2: Canonical or direct path
-        val canonical = toCanonicalPath(clean)
+        val canonical = toCanonicalPath(context, clean)
         if (canonical.startsWith("content://")) {
             return ""
         }
@@ -109,17 +174,28 @@ object CanonicalStorageHelper {
      * on local internal or external storage.
      */
     fun isSamePhysicalFile(pathOrUriA: String, pathOrUriB: String): Boolean {
+        return isSamePhysicalFile(null, pathOrUriA, pathOrUriB)
+    }
+
+    fun isSamePhysicalFile(context: Context?, pathOrUriA: String, pathOrUriB: String): Boolean {
         if (pathOrUriA.isBlank() || pathOrUriB.isBlank()) return false
         if (pathOrUriA == pathOrUriB) return true
 
-        val canA = toCanonicalPath(pathOrUriA)
-        val canB = toCanonicalPath(pathOrUriB)
-        if (canA.isNotBlank() && canB.isNotBlank() && canA.equals(canB, ignoreCase = true)) {
+        // Compare physical media keys if available
+        val keyA = PhysicalMediaIdentifier.computePhysicalMediaKey(context, pathOrUriA)
+        val keyB = PhysicalMediaIdentifier.computePhysicalMediaKey(context, pathOrUriB)
+        if (keyA.isNotBlank() && keyB.isNotBlank() && keyA == keyB) {
             return true
         }
 
-        val relA = toStorageRelativePath(pathOrUriA)
-        val relB = toStorageRelativePath(pathOrUriB)
+        val canA = toCanonicalPath(context, pathOrUriA)
+        val canB = toCanonicalPath(context, pathOrUriB)
+        if (canA.isNotBlank() && canB.isNotBlank() && !canA.startsWith("content://") && !canB.startsWith("content://") && canA.equals(canB, ignoreCase = true)) {
+            return true
+        }
+
+        val relA = toStorageRelativePath(context, pathOrUriA)
+        val relB = toStorageRelativePath(context, pathOrUriB)
         if (relA.isNotBlank() && relB.isNotBlank() && relA.equals(relB, ignoreCase = true)) {
             val isIntA = isInternalOrPrimary(pathOrUriA)
             val isIntB = isInternalOrPrimary(pathOrUriB)
@@ -138,8 +214,37 @@ object CanonicalStorageHelper {
             val docId = extractDocumentIdFromUri(pathOrUri) ?: ""
             return docId.startsWith("primary:", ignoreCase = true) || pathOrUri.contains("primary%3A", ignoreCase = true)
         }
+        if (pathOrUri.startsWith("content://media/")) {
+            val vol = PhysicalMediaIdentifier.extractVolumeFromUri(pathOrUri)?.lowercase(Locale.ROOT)
+            return vol == null || vol == "external" || vol == "external_primary" || vol == "internal"
+        }
         val p = toCanonicalPath(pathOrUri)
         return p.startsWith(PRIMARY_EMULATED_ROOT, ignoreCase = true) || p.contains("/storage/emulated/")
+    }
+
+    /**
+     * Extracts canonical storage volume identifier (e.g. "primary" or "aa44-8296").
+     */
+    fun extractStorageVolume(pathOrUri: String): String {
+        if (pathOrUri.startsWith("content://$EXTERNAL_STORAGE_AUTHORITY")) {
+            val docId = extractDocumentIdFromUri(pathOrUri) ?: ""
+            val rawVol = if (docId.contains(':')) docId.substringBefore(':') else "primary"
+            return if (rawVol.equals("primary", ignoreCase = true)) "primary" else rawVol.lowercase(Locale.ROOT)
+        }
+        if (pathOrUri.startsWith("content://media/")) {
+            val vol = PhysicalMediaIdentifier.extractVolumeFromUri(pathOrUri)?.lowercase(Locale.ROOT)
+            return if (vol == null || vol == "external" || vol == "external_primary" || vol == "internal") "primary" else vol
+        }
+        val p = toCanonicalPath(pathOrUri)
+        return when {
+            p.startsWith(PRIMARY_EMULATED_ROOT, ignoreCase = true) || p.contains("/storage/emulated/") -> "primary"
+            p.startsWith("/storage/") -> {
+                val sub = p.removePrefix("/storage/")
+                val vol = sub.substringBefore('/')
+                if (vol.matches(Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}"))) vol.lowercase(Locale.ROOT) else "primary"
+            }
+            else -> "primary"
+        }
     }
 
     /**

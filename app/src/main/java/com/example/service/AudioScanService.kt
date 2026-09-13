@@ -265,7 +265,7 @@ class AudioScanService : Service() {
 
                                     // Flush batch if full
                                     if (trackBatch.size >= BATCH_SIZE) {
-                                        database.trackDao().insertTracks(trackBatch.toList())
+                                        database.trackDao().upsertPhysicalTracks(trackBatch.toList())
                                         trackBatch.clear()
                                     }
                                 }
@@ -321,7 +321,7 @@ class AudioScanService : Service() {
 
                 // Flush any final leftovers
                 if (trackBatch.isNotEmpty()) {
-                    database.trackDao().insertTracks(trackBatch.toList())
+                    database.trackDao().upsertPhysicalTracks(trackBatch.toList())
                     trackBatch.clear()
                 }
 
@@ -477,13 +477,23 @@ class AudioScanService : Service() {
             try { retriever.release() } catch (e: Exception) {}
         }
 
-        val effectiveDurationSec = when {
+        var finalDuration = when {
             embedded.durationSeconds > 1 -> embedded.durationSeconds
             durationSec > 1 -> durationSec
             embedded.durationSeconds > 0 -> embedded.durationSeconds
             durationSec > 0 -> durationSec
             else -> 0
         }
+
+        if (finalDuration <= 1 && sizeBytes > 65536L && (format == "WAV" || name.endsWith(".wav", ignoreCase = true))) {
+            try {
+                val wavInfo = com.example.analysis.WavContainerParser.parse(this, uri.toString())
+                if (wavInfo.isValid && wavInfo.durationSeconds > 1) {
+                    finalDuration = wavInfo.durationSeconds
+                }
+            } catch (_: Exception) {}
+        }
+
         val effectiveBitrateKbps = when {
             embedded.bitrateKbps > 0 -> embedded.bitrateKbps
             bitrateKbps > 0 -> bitrateKbps
@@ -516,7 +526,8 @@ class AudioScanService : Service() {
         }
 
         val trackId = "saf_${uri.toString().hashCode().toLong().let { if (it < 0) -it else it }}"
-        val fingerprint = com.example.storage.AudioFingerprintUtil.generateDocumentFileFingerprint(this, file, effectiveDurationSec)
+        val fingerprint = com.example.storage.AudioFingerprintUtil.generateDocumentFileFingerprint(this, file, finalDuration)
+        val physicalKey = com.example.storage.PhysicalMediaIdentifier.computePhysicalMediaKey(this, uri.toString(), trackId)
 
         return Track(
             id = trackId,
@@ -529,7 +540,7 @@ class AudioScanService : Service() {
             bpm = bpm,
             musicalKey = musicalKey,
             camelotKey = embedded.camelotKey.orEmpty(),
-            durationSeconds = effectiveDurationSec,
+            durationSeconds = finalDuration,
             bitrateKbps = effectiveBitrateKbps,
             format = format,
             fileSizeMb = String.format(Locale.US, "%.2f", sizeMb).toDoubleOrNull() ?: sizeMb,
@@ -539,7 +550,7 @@ class AudioScanService : Service() {
             syncState = SyncState.SYNCED,
             platforms = listOf(MusicPlatform.LOCAL),
             energyRating = 7,
-            hotCues = listOf(0, (effectiveDurationSec * 0.15).toInt(), (effectiveDurationSec * 0.45).toInt(), (effectiveDurationSec * 0.75).toInt()),
+            hotCues = listOf(0, (finalDuration * 0.15).toInt(), (finalDuration * 0.45).toInt(), (finalDuration * 0.75).toInt()),
             isAiTagged = false,
             qualityRating = qualityRating,
             dateAdded = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),
@@ -552,7 +563,8 @@ class AudioScanService : Service() {
             recordLabel = embedded.recordLabel,
             barcode = embedded.barcode,
             isrc = embedded.isrc,
-            contentFingerprint = fingerprint
+            contentFingerprint = fingerprint,
+            physicalMediaKey = physicalKey
         )
     }
 

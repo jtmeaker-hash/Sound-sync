@@ -51,4 +51,10 @@ interface MetadataReviewInboxDao {
 
     @Query("DELETE FROM metadata_review_inbox WHERE status != 'PENDING'")
     suspend fun pruneResolved()
+
+    @Query("UPDATE metadata_review_inbox SET trackId = :newTrackId WHERE trackId = :oldTrackId")
+    suspend fun repointTrackId(oldTrackId: String, newTrackId: String)
+
+    @Query("DELETE FROM metadata_review_inbox WHERE trackId = :trackId")
+    suspend fun deleteForTrack(trackId: String)
 }

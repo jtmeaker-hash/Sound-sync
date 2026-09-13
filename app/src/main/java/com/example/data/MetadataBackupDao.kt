@@ -40,4 +40,7 @@ interface MetadataBackupDao {
 
     @Query("DELETE FROM metadata_backups")
     suspend fun clearAll()
+
+    @Query("UPDATE metadata_backups SET trackId = :newTrackId WHERE trackId = :oldTrackId")
+    suspend fun repointTrackId(oldTrackId: String, newTrackId: String)
 }

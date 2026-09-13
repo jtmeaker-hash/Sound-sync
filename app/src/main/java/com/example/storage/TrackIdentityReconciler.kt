@@ -39,6 +39,7 @@ object TrackIdentityReconciler {
     )
 
     enum class MatchReason {
+        PHYSICAL_MEDIA_KEY_MATCH,
         EXACT_PATH_MATCH,
         CANONICAL_PATH_MATCH,
         MEDIA_STORE_ID_MATCH,
@@ -73,6 +74,7 @@ object TrackIdentityReconciler {
         context: Context,
         allTracks: Collection<TrackEntity>
     ): Indexes {
+        val byPhysicalMediaKey = mutableMapOf<String, TrackEntity>()
         val byFingerprint = mutableMapOf<String, TrackEntity>()
         val byCanonicalPath = mutableMapOf<String, TrackEntity>()
         val byRawPath = mutableMapOf<String, TrackEntity>()
@@ -95,6 +97,22 @@ object TrackIdentityReconciler {
                     val key = "${fileName.lowercase(Locale.ROOT)}_${(track.fileSizeMb * 100).toInt()}_${track.durationSeconds}"
                     byFileNameAndSize[key] = track
                 }
+            }
+
+            // Index physicalMediaKey
+            val physKey = if (track.physicalMediaKey.isNotBlank()) {
+                track.physicalMediaKey
+            } else {
+                PhysicalMediaIdentifier.computePhysicalMediaKey(
+                    context,
+                    path,
+                    track.id,
+                    track.mediaStoreId,
+                    track.mediaStoreVolume
+                )
+            }
+            if (physKey.isNotBlank() && !physKey.startsWith("demo:") && !physKey.startsWith("uri:demo")) {
+                byPhysicalMediaKey[physKey] = track
             }
 
             // Index MediaStore ID
@@ -121,6 +139,7 @@ object TrackIdentityReconciler {
         }
 
         return Indexes(
+            byPhysicalMediaKey = byPhysicalMediaKey,
             byFingerprint = byFingerprint,
             byCanonicalPath = byCanonicalPath,
             byRawPath = byRawPath,
@@ -131,6 +150,7 @@ object TrackIdentityReconciler {
     }
 
     data class Indexes(
+        val byPhysicalMediaKey: MutableMap<String, TrackEntity>,
         val byFingerprint: MutableMap<String, TrackEntity>,
         val byCanonicalPath: MutableMap<String, TrackEntity>,
         val byRawPath: MutableMap<String, TrackEntity>,
@@ -158,6 +178,57 @@ object TrackIdentityReconciler {
     ): ReconciliationResult {
         val cleanCandidatePath = candidatePathOrUri.trim()
         val candidateCanonical = CanonicalStorageHelper.toCanonicalPath(cleanCandidatePath)
+
+        // 0. Physical media key match (authoritative identity across SAF, MediaStore, and direct paths)
+        val candidatePhysicalKey = PhysicalMediaIdentifier.computePhysicalMediaKey(
+            context = context,
+            filePathOrUri = cleanCandidatePath,
+            mediaId = candidateMediaId
+        )
+        if (candidatePhysicalKey.isNotBlank() && !candidatePhysicalKey.startsWith("demo:") && !candidatePhysicalKey.startsWith("uri:demo")) {
+            val physicalMatch = indexes.byPhysicalMediaKey[candidatePhysicalKey]
+            if (physicalMatch != null) {
+                val isSamePath = physicalMatch.filePath == cleanCandidatePath
+                val reason = if (candidatePhysicalKey.startsWith("ms:")) {
+                    MatchReason.MEDIA_STORE_ID_MATCH
+                } else {
+                    MatchReason.PHYSICAL_MEDIA_KEY_MATCH
+                }
+
+                if (isSamePath && (candidateDurationSec <= 1 || physicalMatch.durationSeconds > 1)) {
+                    return ReconciliationResult(
+                        matchedTrack = physicalMatch,
+                        isRelinked = false,
+                        relinkedTrack = null,
+                        matchReason = if (candidatePhysicalKey.startsWith("ms:")) MatchReason.MEDIA_STORE_ID_MATCH else MatchReason.EXACT_PATH_MATCH,
+                        confidence = 1.0f
+                    )
+                }
+
+                val relinked = relinkTrackEntity(
+                    existing = physicalMatch,
+                    newPathOrUri = cleanCandidatePath,
+                    newDirectoryPath = extractParentDirectory(cleanCandidatePath),
+                    newFingerprint = candidateFingerprint,
+                    newModifiedTimestamp = candidateModified,
+                    newTitle = candidateTitle,
+                    newArtist = candidateArtist,
+                    newAlbum = candidateAlbum,
+                    candidateDurationSec = candidateDurationSec,
+                    candidateMediaId = candidateMediaId,
+                    candidatePhysicalKey = candidatePhysicalKey,
+                    context = context
+                )
+                updateIndexes(indexes, physicalMatch, relinked)
+                return ReconciliationResult(
+                    matchedTrack = physicalMatch,
+                    isRelinked = true,
+                    relinkedTrack = relinked,
+                    matchReason = reason,
+                    confidence = 1.0f
+                )
+            }
+        }
 
         // 1. Exact raw path match
         val exactMatch = indexes.byRawPath[cleanCandidatePath]
@@ -397,6 +468,9 @@ object TrackIdentityReconciler {
         newTitle: String? = null,
         newArtist: String? = null,
         newAlbum: String? = null,
+        candidateDurationSec: Int? = null,
+        candidateMediaId: Long? = null,
+        candidatePhysicalKey: String? = null,
         context: Context? = null
     ): TrackEntity {
         val relPath = CanonicalStorageHelper.toStorageRelativePath(newPathOrUri)
@@ -452,6 +526,28 @@ object TrackIdentityReconciler {
             }
         }
 
+        val finalDuration = when {
+            existing.durationSeconds > 1 -> existing.durationSeconds
+            candidateDurationSec != null && candidateDurationSec > 1 -> candidateDurationSec
+            existing.durationSeconds > 0 -> existing.durationSeconds
+            candidateDurationSec != null && candidateDurationSec > 0 -> candidateDurationSec
+            else -> 0
+        }
+
+        val effectiveMediaId = existing.mediaStoreId ?: candidateMediaId ?: extractMediaIdFromPathOrUri(newPathOrUri)
+        val effectiveVolume = existing.mediaStoreVolume ?: PhysicalMediaIdentifier.extractVolumeFromUri(newPathOrUri)
+        val finalPhysicalKey = when {
+            existing.physicalMediaKey.isNotBlank() -> existing.physicalMediaKey
+            !candidatePhysicalKey.isNullOrBlank() -> candidatePhysicalKey
+            else -> PhysicalMediaIdentifier.computePhysicalMediaKey(
+                context,
+                newPathOrUri,
+                existing.id,
+                effectiveMediaId,
+                effectiveVolume
+            )
+        }
+
         // Explicitly preserve all metadata status, analysis state, BPM, Key, Cues, and User flags
         return existing.copy(
             filePath = newPathOrUri,
@@ -460,6 +556,10 @@ object TrackIdentityReconciler {
             fingerprintAlgorithm = if (newFingerprint.isNotBlank()) "SOUNDSYNC_SHA256" else existing.fingerprintAlgorithm,
             fingerprintTimestamp = if (newFingerprint.isNotBlank()) System.currentTimeMillis() else existing.fingerprintTimestamp,
             fileModifiedTimestamp = if (newModifiedTimestamp > 0) newModifiedTimestamp else existing.fileModifiedTimestamp,
+            durationSeconds = finalDuration,
+            mediaStoreId = effectiveMediaId,
+            mediaStoreVolume = effectiveVolume,
+            physicalMediaKey = finalPhysicalKey,
             title = finalTitle,
             artist = finalArtist,
             album = finalAlbum,
@@ -527,6 +627,14 @@ object TrackIdentityReconciler {
         }
         extractMediaId(track)?.let { mediaId ->
             indexes.byMediaId[mediaId] = track
+        }
+        val physKey = if (track.physicalMediaKey.isNotBlank()) {
+            track.physicalMediaKey
+        } else {
+            PhysicalMediaIdentifier.computePhysicalMediaKey(null, track.filePath, track.id, track.mediaStoreId, track.mediaStoreVolume)
+        }
+        if (physKey.isNotBlank() && !physKey.startsWith("demo:") && !physKey.startsWith("uri:demo")) {
+            indexes.byPhysicalMediaKey[physKey] = track
         }
     }
 
@@ -661,6 +769,18 @@ object TrackIdentityReconciler {
 
         extractMediaId(newTrack)?.let { mediaId ->
             indexes.byMediaId[mediaId] = newTrack
+        }
+
+        if (oldTrack.physicalMediaKey.isNotBlank()) {
+            indexes.byPhysicalMediaKey.remove(oldTrack.physicalMediaKey)
+        }
+        val newPhysKey = if (newTrack.physicalMediaKey.isNotBlank()) {
+            newTrack.physicalMediaKey
+        } else {
+            PhysicalMediaIdentifier.computePhysicalMediaKey(null, newTrack.filePath, newTrack.id, newTrack.mediaStoreId, newTrack.mediaStoreVolume)
+        }
+        if (newPhysKey.isNotBlank() && !newPhysKey.startsWith("demo:") && !newPhysKey.startsWith("uri:demo")) {
+            indexes.byPhysicalMediaKey[newPhysKey] = newTrack
         }
     }
 

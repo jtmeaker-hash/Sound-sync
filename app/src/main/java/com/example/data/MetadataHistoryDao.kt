@@ -41,4 +41,7 @@ interface MetadataHistoryDao {
      */
     @Query("DELETE FROM metadata_history WHERE id NOT IN (SELECT id FROM metadata_history ORDER BY timestamp DESC LIMIT :maxEntries)")
     suspend fun pruneOldEntries(maxEntries: Int = 5000)
+
+    @Query("UPDATE metadata_history SET trackId = :newTrackId WHERE trackId = :oldTrackId")
+    suspend fun repointTrackId(oldTrackId: String, newTrackId: String)
 }

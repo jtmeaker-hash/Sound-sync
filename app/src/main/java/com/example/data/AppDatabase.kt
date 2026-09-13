@@ -23,7 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LyricsEntity::class,
         MetadataBackupEntity::class
     ],
-    version = 16,
+    version = 17,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -585,6 +585,45 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    db.execSQL("ALTER TABLE `tracks` ADD COLUMN `physicalMediaKey` TEXT NOT NULL DEFAULT ''")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("ALTER TABLE `tracks` ADD COLUMN `mediaStoreId` INTEGER DEFAULT NULL")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("ALTER TABLE `tracks` ADD COLUMN `mediaStoreVolume` TEXT DEFAULT NULL")
+                } catch (_: Exception) {}
+
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_physicalMediaKey` ON `tracks` (`physicalMediaKey`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_mediaStoreId` ON `tracks` (`mediaStoreId`)")
+                } catch (_: Exception) {}
+
+                // Backfill physicalMediaKey and mediaStoreId for existing tracks
+                try {
+                    db.execSQL("""
+                        UPDATE `tracks`
+                        SET `mediaStoreId` = CAST(SUBSTR(`id`, 7) AS INTEGER),
+                            `mediaStoreVolume` = 'external',
+                            `physicalMediaKey` = 'ms:external:' || SUBSTR(`id`, 7)
+                        WHERE `id` LIKE 'media_%' AND `physicalMediaKey` = ''
+                    """.trimIndent())
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("""
+                        UPDATE `tracks`
+                        SET `physicalMediaKey` = 'path:' || LOWER(`filePath`)
+                        WHERE `physicalMediaKey` = '' AND `filePath` LIKE '/storage/%'
+                    """.trimIndent())
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -607,7 +646,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_12_13,
                     MIGRATION_13_14,
                     MIGRATION_14_15,
-                    MIGRATION_15_16
+                    MIGRATION_15_16,
+                    MIGRATION_16_17
                 )
                 .fallbackToDestructiveMigration()
                 .build()

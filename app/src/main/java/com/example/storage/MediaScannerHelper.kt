@@ -150,12 +150,23 @@ object MediaScannerHelper {
 
                         // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 / RIFF chunks) if present
                         val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, targetPath)
-                        val finalDurationSec = when {
+                        var finalDurationSec = when {
                             embedded.durationSeconds > 1 -> embedded.durationSeconds
                             rawDurationSec > 1 -> rawDurationSec
                             embedded.durationSeconds > 0 -> embedded.durationSeconds
                             rawDurationSec > 0 -> rawDurationSec
                             else -> 0
+                        }
+
+                        // Defensive WAV check: AOSP WAVExtractor native crash causes MediaStore to assign dummy 1000ms duration
+                        if (finalDurationSec <= 1 && sizeBytes > 65536L && (format == "WAV" || targetPath.endsWith(".wav", ignoreCase = true) || dataPath.endsWith(".wav", ignoreCase = true))) {
+                            try {
+                                val uriOrPathToParse = if (targetPath.startsWith("content://")) targetPath else dataPath.ifBlank { targetPath }
+                                val wavInfo = com.example.analysis.WavContainerParser.parse(context, uriOrPathToParse)
+                                if (wavInfo.isValid && wavInfo.durationSeconds > 1) {
+                                    finalDurationSec = wavInfo.durationSeconds
+                                }
+                            } catch (_: Exception) {}
                         }
 
                         // Generate stable content fingerprint
@@ -265,6 +276,15 @@ object MediaScannerHelper {
                         val effectiveYear = embedded.releaseYear
                         val effectiveDate = embedded.releaseDate
 
+                        val mediaVol = PhysicalMediaIdentifier.extractVolumeFromUri(contentUri.toString()) ?: "external"
+                        val physicalKey = PhysicalMediaIdentifier.computePhysicalMediaKey(
+                            context = context,
+                            filePathOrUri = targetPath,
+                            trackId = "media_$id",
+                            mediaId = id,
+                            volume = mediaVol
+                        )
+
                         val track = Track(
                             id = "media_$id",
                             title = effectiveTitle,
@@ -305,7 +325,10 @@ object MediaScannerHelper {
                                 ?: rawArtist?.takeIf { !com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(it) },
                             resolvedArtist = null,
                             metadataSource = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(effectiveArtist)) "EMBEDDED" else null,
-                            metadataConfidence = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(effectiveArtist)) 100.0 else 0.0
+                            metadataConfidence = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(effectiveArtist)) 100.0 else 0.0,
+                            physicalMediaKey = physicalKey,
+                            mediaStoreId = id,
+                            mediaStoreVolume = mediaVol
                         )
 
                         seenFingerprints.add(fingerprint)

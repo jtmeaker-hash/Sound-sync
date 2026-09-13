@@ -16,7 +16,9 @@ import com.example.model.Track
         Index(value = ["crateId"]),
         Index(value = ["dateAdded"]),
         Index(value = ["analysisState"]),
-        Index(value = ["playabilityStatus"])
+        Index(value = ["playabilityStatus"]),
+        Index(value = ["physicalMediaKey"]),
+        Index(value = ["mediaStoreId"])
     ]
 )
 data class TrackEntity(
@@ -97,7 +99,10 @@ data class TrackEntity(
     val lastRepairAttempt: Long? = null,
     val resolvedUri: String? = null,
     val validationFileSize: Long = 0L,
-    val validationModifiedTimestamp: Long = 0L
+    val validationModifiedTimestamp: Long = 0L,
+    val physicalMediaKey: String = "",
+    val mediaStoreId: Long? = null,
+    val mediaStoreVolume: String? = null
 ) {
     fun toTrack(): Track {
         val syncEnum = try { SyncState.valueOf(syncState) } catch (e: Exception) { SyncState.LOCAL_ONLY }
@@ -203,7 +208,10 @@ data class TrackEntity(
             lastRepairAttempt = lastRepairAttempt,
             resolvedUri = resolvedUri,
             validationFileSize = validationFileSize,
-            validationModifiedTimestamp = validationModifiedTimestamp
+            validationModifiedTimestamp = validationModifiedTimestamp,
+            physicalMediaKey = physicalMediaKey,
+            mediaStoreId = mediaStoreId,
+            mediaStoreVolume = mediaStoreVolume
         )
     }
 
@@ -286,7 +294,10 @@ data class TrackEntity(
                 lastRepairAttempt = track.lastRepairAttempt,
                 resolvedUri = track.resolvedUri,
                 validationFileSize = track.validationFileSize,
-                validationModifiedTimestamp = track.validationModifiedTimestamp
+                validationModifiedTimestamp = track.validationModifiedTimestamp,
+                physicalMediaKey = track.physicalMediaKey,
+                mediaStoreId = track.mediaStoreId,
+                mediaStoreVolume = track.mediaStoreVolume
             )
         }
     }

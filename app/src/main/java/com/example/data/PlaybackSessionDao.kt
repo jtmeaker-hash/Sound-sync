@@ -178,4 +178,7 @@ interface PlaybackSessionDao {
         ORDER BY startedAt ASC
     """)
     suspend fun getDailyListeningRecords(fromTime: Long, toTime: Long): List<DailyListeningRecord>
+
+    @Query("UPDATE playback_sessions SET trackId = :newTrackId WHERE trackId = :oldTrackId")
+    suspend fun repointTrackId(oldTrackId: String, newTrackId: String)
 }

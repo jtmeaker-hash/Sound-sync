@@ -152,4 +152,10 @@ interface PlaylistDao {
             updatePlaylist(playlist.copy(updatedAt = System.currentTimeMillis()))
         }
     }
+
+    @Query("SELECT * FROM playlist_tracks WHERE trackId = :trackId")
+    suspend fun getPlaylistEntriesForTrack(trackId: String): List<PlaylistTrackEntity>
+
+    @Query("UPDATE playlist_tracks SET trackId = :canonicalId WHERE id = :entryId")
+    suspend fun repointPlaylistTrackEntry(entryId: Long, canonicalId: String)
 }

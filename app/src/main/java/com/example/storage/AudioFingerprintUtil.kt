@@ -31,8 +31,9 @@ object AudioFingerprintUtil {
         return try {
             val digest = MessageDigest.getInstance("SHA-256")
 
-            // Feed structural metadata
-            digest.update("size=$fileSizeBytes;dur=$durationSeconds;".toByteArray(Charsets.UTF_8))
+            // Feed structural metadata (normalize <= 1s dummy duration for files > 100KB so fingerprints remain stable)
+            val effectiveDur = if (fileSizeBytes > 100_000L && durationSeconds <= 1) 0 else durationSeconds
+            digest.update("size=$fileSizeBytes;dur=$effectiveDur;".toByteArray(Charsets.UTF_8))
 
             val openedStream = openInputStream(context, uriOrPath)
             if (openedStream != null) {

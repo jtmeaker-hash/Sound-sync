@@ -239,7 +239,10 @@ data class Track(
     val lastRepairAttempt: Long? = null,
     val resolvedUri: String? = null,
     val validationFileSize: Long = 0L,
-    val validationModifiedTimestamp: Long = 0L
+    val validationModifiedTimestamp: Long = 0L,
+    val physicalMediaKey: String = "",
+    val mediaStoreId: Long? = null,
+    val mediaStoreVolume: String? = null
 ) {
     val playability: PlayabilityStatus
         get() = try { PlayabilityStatus.valueOf(playabilityStatus) } catch (_: Exception) { PlayabilityStatus.UNKNOWN }

@@ -34,6 +34,9 @@ data class WavContainerInfo(
         } else {
             (sampleRate * numChannels * bitsPerSample) / 1000
         }
+
+    val durationSeconds: Int
+        get() = (durationMs / 1000L).toInt()
 }
 
 /**

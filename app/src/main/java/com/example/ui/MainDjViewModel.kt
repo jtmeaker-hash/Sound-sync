@@ -1510,6 +1510,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun initializeStorageAndData() {
         viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+
+            // Startup library deduplication migration to eliminate any ghost/duplicate tracks
+            try {
+                val db = AppDatabase.getDatabase(app)
+                val report = com.example.storage.TrackDeduplicationEngine.deduplicateLibrary(app, db)
+                if (report.duplicateRowsRemoved > 0) {
+                    Log.i("MainDjViewModel", "Startup library deduplication complete: removed ${report.duplicateRowsRemoved} ghost/duplicate tracks across ${report.duplicateGroupsFound} groups.")
+                }
+            } catch (e: Exception) {
+                Log.w("MainDjViewModel", "Deduplication check on startup skipped/failed: ${e.message}")
+            }
+
             // Check for interrupted scan from a previous app crash or killed process
             val wasInterrupted = scanStateManager.checkAndRecoverInterruptedScan()
             if (wasInterrupted) {
@@ -1603,7 +1616,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 },
                 onBatch = { batch ->
                     val entities = batch.map { TrackEntity.fromTrack(it) }
-                    trackDao.insertTracks(entities)
+                    trackDao.upsertPhysicalTracks(entities)
                     trackAnalysisManager.enqueueDiscoveredTracks(batch.map { it.id })
 
                     if (isFirstBatch && batch.isNotEmpty() && audioEngine.currentTrack.value == null) {
@@ -1775,7 +1788,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             if (imported.isNotEmpty()) {
-                trackDao.insertTracks(imported.map { TrackEntity.fromTrack(it) })
+                trackDao.upsertPhysicalTracks(imported.map { TrackEntity.fromTrack(it) })
                 refreshStorageSourcesList()
 
                 // Scan metadata for newly added files only (Section: Add a new file -> scan metadata for that new file only)

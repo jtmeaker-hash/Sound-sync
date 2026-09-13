@@ -311,6 +311,15 @@ object LocalFileSystemScanner {
             else -> 0
         }
 
+        if (durationSec <= 1 && file.length() > 65536L && (format == "WAV" || name.endsWith(".wav", ignoreCase = true))) {
+            try {
+                val wavInfo = com.example.analysis.WavContainerParser.parse(context, file.absolutePath)
+                if (wavInfo.isValid && wavInfo.durationSeconds > 1) {
+                    durationSec = wavInfo.durationSeconds
+                }
+            } catch (_: Exception) {}
+        }
+
         val parsed = com.example.metadata.parser.TrackIdentityParser.parse(
             existingTitle = title,
             existingArtist = if (com.example.metadata.parser.TrackIdentityParser.isArtistValid(artist)) artist else null,
@@ -363,6 +372,7 @@ object LocalFileSystemScanner {
         } else null
         val effectivePath = mediaStoreUri ?: safUri ?: path
         val isPlayable = isRawReadable || (mediaStoreUri != null) || (safUri != null)
+        val physicalKey = PhysicalMediaIdentifier.computePhysicalMediaKey(context, effectivePath, trackId)
 
         return Track(
             id = trackId,
@@ -415,7 +425,8 @@ object LocalFileSystemScanner {
             originalArtist = embedded.artist?.takeIf { !com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(it) },
             resolvedArtist = null,
             metadataSource = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(embedded.artist)) "EMBEDDED" else null,
-            metadataConfidence = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(embedded.artist)) 100.0 else 0.0
+            metadataConfidence = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(embedded.artist)) 100.0 else 0.0,
+            physicalMediaKey = physicalKey
         )
     }
 }

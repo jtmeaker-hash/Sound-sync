@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -168,4 +169,71 @@ interface TrackDao {
 
     @Query("UPDATE tracks SET playabilityStatus = 'UNKNOWN', lastPlaybackValidation = NULL")
     suspend fun resetAllPlayabilityStatus()
+
+    @Query("SELECT * FROM tracks WHERE physicalMediaKey = :key LIMIT 1")
+    suspend fun getTrackByPhysicalMediaKey(key: String): TrackEntity?
+
+    @Query("SELECT * FROM tracks WHERE physicalMediaKey = :key")
+    suspend fun getTracksByPhysicalMediaKey(key: String): List<TrackEntity>
+
+    @Query("SELECT * FROM tracks WHERE mediaStoreId = :mediaId LIMIT 1")
+    suspend fun getTrackByMediaStoreId(mediaId: Long): TrackEntity?
+
+    @Query("SELECT * FROM tracks WHERE mediaStoreId = :mediaId")
+    suspend fun getTracksByMediaStoreId(mediaId: Long): List<TrackEntity>
+
+    @Transaction
+    suspend fun upsertPhysicalTrack(track: TrackEntity): Long {
+        val existing = if (track.physicalMediaKey.isNotBlank()) {
+            getTrackByPhysicalMediaKey(track.physicalMediaKey)
+        } else null
+            ?: (if (track.mediaStoreId != null) getTrackByMediaStoreId(track.mediaStoreId) else null)
+            ?: (if (track.filePath.isNotBlank()) getTrackByFilePath(track.filePath) else null)
+            ?: getTrackById(track.id)
+
+        if (existing != null) {
+            val merged = existing.copy(
+                physicalMediaKey = if (existing.physicalMediaKey.isNotBlank()) existing.physicalMediaKey else track.physicalMediaKey,
+                mediaStoreId = existing.mediaStoreId ?: track.mediaStoreId,
+                mediaStoreVolume = existing.mediaStoreVolume ?: track.mediaStoreVolume,
+                durationSeconds = if (existing.durationSeconds > 1) existing.durationSeconds else (if (track.durationSeconds > 1) track.durationSeconds else existing.durationSeconds),
+                filePath = if (track.filePath.isNotBlank()) track.filePath else existing.filePath,
+                storageRelativePath = if (track.storageRelativePath.isNotBlank()) track.storageRelativePath else existing.storageRelativePath,
+                title = if (existing.userConfirmedMetadata || (existing.title.isNotBlank() && existing.title != "<unknown>" && !existing.title.startsWith("Track "))) existing.title else track.title,
+                artist = if (existing.userConfirmedMetadata || (existing.artist.isNotBlank() && existing.artist != "<unknown>" && existing.artist != "Unknown Artist")) existing.artist else track.artist,
+                album = if (existing.userConfirmedMetadata || (existing.album.isNotBlank() && existing.album != "<unknown>" && existing.album != "Single")) existing.album else track.album,
+                bpm = if (existing.bpm > 0.0) existing.bpm else track.bpm,
+                bpmConfidence = if (existing.bpm > 0.0) existing.bpmConfidence else track.bpmConfidence,
+                bpmAnalysisVersion = existing.bpmAnalysisVersion ?: track.bpmAnalysisVersion,
+                bpmLastAnalyzed = existing.bpmLastAnalyzed ?: track.bpmLastAnalyzed,
+                musicalKey = if (existing.musicalKey.isNotBlank()) existing.musicalKey else track.musicalKey,
+                camelotKey = if (existing.camelotKey.isNotBlank()) existing.camelotKey else track.camelotKey,
+                keyConfidence = if (existing.keyConfidence > 0.0) existing.keyConfidence else track.keyConfidence,
+                keyAnalysisVersion = existing.keyAnalysisVersion ?: track.keyAnalysisVersion,
+                keyLastAnalyzed = existing.keyLastAnalyzed ?: track.keyLastAnalyzed,
+                analysisState = if (existing.analysisState == "COMPLETE") existing.analysisState else track.analysisState,
+                lastAnalysedAt = existing.lastAnalysedAt ?: track.lastAnalysedAt,
+                artworkCachePath = existing.artworkCachePath ?: track.artworkCachePath,
+                artworkUrl = existing.artworkUrl ?: track.artworkUrl,
+                artworkSource = existing.artworkSource ?: track.artworkSource,
+                metadataScanState = if (existing.userConfirmedMetadata || existing.metadataScanState == "COMPLETE") existing.metadataScanState else track.metadataScanState,
+                userConfirmedMetadata = existing.userConfirmedMetadata || track.userConfirmedMetadata,
+                contentFingerprint = if (existing.contentFingerprint.isNotBlank()) existing.contentFingerprint else track.contentFingerprint,
+                playabilityStatus = if (existing.playabilityStatus == "PLAYABLE") existing.playabilityStatus else track.playabilityStatus,
+                resolvedUri = track.resolvedUri ?: existing.resolvedUri
+            )
+            updateTrack(merged)
+            return 0L
+        } else {
+            insertTrack(track)
+            return 1L
+        }
+    }
+
+    @Transaction
+    suspend fun upsertPhysicalTracks(tracks: List<TrackEntity>) {
+        for (track in tracks) {
+            upsertPhysicalTrack(track)
+        }
+    }
 }

@@ -110,8 +110,15 @@ class TrackStorageAndPlaybackIntegrityTest {
                     }
                     null
                 }
-                "getAllTracksSync" -> memoryDb.values.toList()
+                "getAllTracksSync", "getAllTracksList" -> memoryDb.values.toList()
                 "getTracksWithPlaybackIssues" -> memoryDb.values.filter { it.playabilityStatus != "PLAYABLE" && it.playabilityStatus != "REPAIRED" }
+                "getTrackByPhysicalMediaKey" -> memoryDb.values.firstOrNull { it.physicalMediaKey == args[0] }
+                "getTrackByMediaStoreId" -> memoryDb.values.firstOrNull { it.mediaStoreId == args[0] }
+                "getTrackByFilePath" -> memoryDb.values.firstOrNull { it.filePath == args[0] }
+                "deleteTrackById" -> {
+                    memoryDb.remove(args[0] as String)
+                    null
+                }
                 else -> null
             }
         } as TrackDao
@@ -919,5 +926,164 @@ class TrackStorageAndPlaybackIntegrityTest {
         val probeResult = com.example.audio.BitrateProbe.probe(context, testFile.absolutePath, 246)
         assertEquals(1411, probeResult.encodedBitrateKbps)
         assertEquals(com.example.model.BitrateMode.CBR, probeResult.bitrateMode)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST BB: Duplicate / 0:01 ghost track deduplication reproduces and merges into single canonical entry
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testBB_duplicateAndOneSecondGhostTrackDeduplicationMergesIntoSingleCanonicalTrack() {
+        // Track 1: Original valid track scanned via SAF with full 207s duration and completed analysis
+        val safTrack = TrackEntity(
+            id = "saf_1001",
+            title = "It Will Be Ok",
+            artist = "Original Artist",
+            album = "Single",
+            filePath = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FIt%20Will%20Be%20Ok.wav",
+            storageRelativePath = "Music/It Will Be Ok.wav",
+            durationSeconds = 207,
+            bpm = 128.0,
+            bpmConfidence = 0.95,
+            musicalKey = "8A",
+            camelotKey = "8A",
+            analysisState = "COMPLETE",
+            playabilityStatus = "PLAYABLE",
+            dateAdded = 1000L
+        )
+
+        // Track 2: Duplicate ghost track scanned via MediaStore with broken 1-second duration
+        val mediaStoreGhostTrack = TrackEntity(
+            id = "media_5001",
+            title = "It Will Be Ok",
+            artist = "Original Artist",
+            album = "Single",
+            filePath = "content://media/external/audio/media/5001",
+            storageRelativePath = "Music/It Will Be Ok.wav",
+            mediaStoreId = 5001L,
+            mediaStoreVolume = "external",
+            durationSeconds = 1, // 0:01 ghost!
+            bpm = 0.0,
+            camelotKey = "",
+            analysisState = "NOT_ANALYSED",
+            playabilityStatus = "UNKNOWN",
+            dateAdded = 2000L
+        )
+
+        // 1. findDuplicateGroups must identify both tracks as pointing to the same physical file
+        val groups = TrackDeduplicationEngine.findDuplicateGroups(context, listOf(safTrack, mediaStoreGhostTrack))
+        assertEquals("Exactly 1 duplicate group must be found", 1, groups.size)
+        assertEquals("Group must contain both the SAF track and the MediaStore ghost track", 2, groups[0].size)
+
+        // 2. pickCanonicalTrack must select the valid 207-second track, NOT the 1-second ghost
+        val canonical = TrackDeduplicationEngine.pickCanonicalTrack(context, groups[0])
+        assertEquals("Canonical track must be the full-length 207s version", "saf_1001", canonical.id)
+        assertEquals("Canonical duration must be 207 seconds", 207, canonical.durationSeconds)
+
+        // 3. mergeTrackData must preserve 207 seconds and adopt mediaStoreId from duplicate
+        val merged = TrackDeduplicationEngine.mergeTrackData(context, canonical = safTrack, duplicate = mediaStoreGhostTrack)
+        assertEquals("Merged track must retain 207s duration", 207, merged.durationSeconds)
+        assertEquals("Merged track must retain 128.0 BPM", 128.0, merged.bpm, 0.001)
+        assertEquals("Merged track must retain Camelot key 8A", "8A", merged.camelotKey)
+        assertEquals("Merged track must adopt MediaStore ID 5001", 5001L, merged.mediaStoreId)
+        assertTrue("Merged track must have non-blank physicalMediaKey", merged.physicalMediaKey.isNotBlank())
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST CC: Distinct files with identical title/artist are NEVER deduplicated
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testCC_distinctAudioFilesWithIdenticalMetadataAreNeverDeduplicated() {
+        // User legitimately owns two different versions with identical metadata:
+        // One in Music/It Will Be Ok.mp3 and another in Music/Remixes/It Will Be Ok.mp3
+        val trackA = TrackEntity(
+            id = "saf_orig",
+            title = "It Will Be Ok",
+            artist = "Original Artist",
+            album = "Single",
+            filePath = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FIt%20Will%20Be%20Ok.mp3",
+            storageRelativePath = "Music/It Will Be Ok.mp3",
+            durationSeconds = 207
+        )
+
+        val trackB = TrackEntity(
+            id = "saf_remix",
+            title = "It Will Be Ok",
+            artist = "Original Artist",
+            album = "Single",
+            filePath = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FRemixes%2FIt%20Will%20Be%20Ok.mp3",
+            storageRelativePath = "Music/Remixes/It Will Be Ok.mp3",
+            durationSeconds = 207
+        )
+
+        val groups = TrackDeduplicationEngine.findDuplicateGroups(context, listOf(trackA, trackB))
+        assertTrue("Tracks with different physical paths must NOT be deduplicated despite identical title/artist/duration", groups.isEmpty())
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST DD: TrackIdentityReconciler matches SAF and MediaStore representations of the same physical file
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testDD_trackIdentityReconcilerMatchesExistingSafTrackWithIncomingMediaStoreCandidate() {
+        val canonicalFsPath = "/storage/emulated/0/Music/Song.wav"
+        val safPath = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FSong.wav"
+
+        val existingTrack = TrackEntity(
+            id = "saf_song_1",
+            title = "Song",
+            artist = "Artist",
+            filePath = safPath,
+            storageRelativePath = "Music/Song.wav",
+            durationSeconds = 207,
+            physicalMediaKey = "path:$canonicalFsPath"
+        )
+
+        val indexes = TrackIdentityReconciler.buildIndexes(context, listOf(existingTrack))
+
+        // Incoming candidate from MediaStore with canonical path matching
+        val candidatePath = canonicalFsPath
+        val result = TrackIdentityReconciler.reconcileCandidate(
+            candidatePathOrUri = candidatePath,
+            candidateFingerprint = "",
+            candidateSizeBytes = 5_000_000L,
+            candidateDurationSec = 1, // incoming MediaStore might have 1s dummy duration
+            candidateTitle = "Song",
+            candidateArtist = "Artist",
+            candidateAlbum = "Album",
+            candidateMediaId = 8888L,
+            context = context,
+            indexes = indexes
+        )
+
+        assertTrue("Candidate must match existing SAF track without creating a duplicate row", result.matchedTrack != null)
+        assertEquals("Matched track must be the existing SAF track", "saf_song_1", result.matchedTrack?.id)
+        assertTrue("Incoming 1-second duration must not overwrite existing 207s duration", (result.relinkedTrack?.durationSeconds ?: 0) >= 207)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST EE: PhysicalMediaIdentifier produces stable physical media keys
+    // ──────────────────────────────────────────────────────────────────────────
+    @Test
+    fun testEE_physicalMediaIdentifierProducesStableKeys() {
+        val msKey = PhysicalMediaIdentifier.computePhysicalMediaKey(
+            context = context,
+            filePathOrUri = "content://media/external/audio/media/1000014321",
+            mediaId = 1000014321L
+        )
+        assertEquals("ms:external:1000014321", msKey)
+
+        val safKey = PhysicalMediaIdentifier.computePhysicalMediaKey(
+            context = context,
+            filePathOrUri = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FSong.mp3"
+        )
+        assertEquals("path:/storage/emulated/0/music/song.mp3", safKey)
+
+        val rawKey = PhysicalMediaIdentifier.computePhysicalMediaKey(
+            context = context,
+            filePathOrUri = "/storage/emulated/0/Music/Song.mp3"
+        )
+        assertEquals("path:/storage/emulated/0/music/song.mp3", rawKey)
+
+        // Comparison: safKey and rawKey are identical physical keys!
+        assertEquals("SAF and raw filesystem path for same file must have identical physical keys", rawKey, safKey)
     }
 }
