@@ -343,11 +343,11 @@ fun MainDjScreen(
                                         }
                                     } else {
                                         if (analysisProgress.totalCount > 0 && analysisProgress.currentTrackTitle.isNotBlank()) {
-                                            "Analysing library: ${analysisProgress.processedCount}/${analysisProgress.totalCount} • ${analysisProgress.currentTrackTitle}"
+                                            "Scanning metadata · ${analysisProgress.processedCount} / ${analysisProgress.totalCount} • ${analysisProgress.currentTrackTitle}"
                                         } else if (analysisProgress.totalCount > 0) {
-                                            "Analysing library: ${analysisProgress.processedCount}/${analysisProgress.totalCount}"
+                                            "Scanning metadata · ${analysisProgress.processedCount} / ${analysisProgress.totalCount}"
                                         } else if (analysisProgress.currentTrackTitle.isNotBlank()) {
-                                            "Analysing library… • ${analysisProgress.currentTrackTitle}"
+                                            "Scanning metadata… • ${analysisProgress.currentTrackTitle}"
                                         } else {
                                             "Preparing library analysis…"
                                         }

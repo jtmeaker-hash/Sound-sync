@@ -121,17 +121,18 @@ object PlayabilityValidator {
                 if (f.exists()) fileModifiedTimestamp = f.lastModified()
             }
         } else {
-            // Unresolvable source - classify failure mode with precise diagnostics
-            val technical = "${diag.formatDiagnostics()}\n\nFailure Details: ${diag.detectedFailureMode}"
+            // Unresolvable source - classify failure mode with canonical diagnostics
+            val availReport = StorageAvailabilityHelper.evaluateStorageAvailability(context, track)
+            val technical = "${diag.formatDiagnostics()}\n\nFailure Details: ${diag.detectedFailureMode}\nAvailability State: ${availReport.state}"
 
-            if (!diag.isVolumeMounted) {
+            if (availReport.state == com.example.storage.StorageAvailabilityState.VOLUME_UNMOUNTED || !diag.isVolumeMounted) {
                 return@withContext PlayabilityDiagnosticReport(
                     trackId = trackId,
                     status = PlayabilityStatus.VOLUME_UNAVAILABLE,
-                    errorCode = "ERR_STORAGE_UNMOUNTED",
-                    errorMessage = "External storage volume (${resolution.volumeUuid ?: "SD Card"}) is not mounted or has been disconnected.",
+                    errorCode = PlaybackErrorCodes.ERR_STORAGE_UNMOUNTED,
+                    errorMessage = "External storage volume (${resolution.volumeUuid ?: availReport.volumeIdentity ?: "SD Card"}) is not mounted or has been disconnected.",
                     problemDescription = "The storage drive containing this file is currently disconnected.",
-                    detectedReason = "Storage volume offline (${resolution.volumeUuid ?: "removable"})",
+                    detectedReason = "Storage volume offline (${resolution.volumeUuid ?: availReport.volumeIdentity ?: "removable"})",
                     lastKnownLocation = path,
                     technicalDetails = technical,
                     originalExceptionClass = diag.originalExceptionClass,
@@ -145,14 +146,17 @@ object PlayabilityValidator {
                 )
             }
 
-            if (resolution.requiresFolderAccess || diag.isScopedStorageBlockingRawAccess) {
+            if (availReport.state == com.example.storage.StorageAvailabilityState.PERMISSION_LOST ||
+                resolution.requiresFolderAccess || diag.isScopedStorageBlockingRawAccess ||
+                diag.originalExceptionClass?.contains("SecurityException", ignoreCase = true) == true
+            ) {
                 return@withContext PlayabilityDiagnosticReport(
                     trackId = trackId,
                     status = PlayabilityStatus.PERMISSION_DENIED,
-                    errorCode = "ERR_SCOPED_STORAGE_RESTRICTION",
-                    errorMessage = "Android Scoped Storage restricts direct file path access to removable storage at '$path'. Folder permission grant required.",
-                    problemDescription = "SoundSync needs folder permission to access music files on your removable storage (${resolution.volumeUuid ?: "SD Card"}).",
-                    detectedReason = "Android Scoped Storage blocks raw POSIX filesystem access on secondary storage",
+                    errorCode = PlaybackErrorCodes.ERR_SCOPED_STORAGE_RESTRICTION,
+                    errorMessage = "Android Scoped Storage or permissions restrict access to storage at '$path'. Folder permission grant required.",
+                    problemDescription = "SoundSync needs permission to access music files on your storage (${resolution.volumeUuid ?: availReport.volumeIdentity ?: "Storage"}).",
+                    detectedReason = "Android storage permission or SAF folder grant required",
                     lastKnownLocation = path,
                     technicalDetails = technical,
                     originalExceptionClass = diag.originalExceptionClass,
@@ -166,23 +170,23 @@ object PlayabilityValidator {
                 )
             }
 
-            if (diag.originalExceptionClass?.contains("SecurityException", ignoreCase = true) == true) {
+            if (availReport.state == com.example.storage.StorageAvailabilityState.STALE_SOURCE) {
                 return@withContext PlayabilityDiagnosticReport(
                     trackId = trackId,
-                    status = PlayabilityStatus.PERMISSION_DENIED,
-                    errorCode = "ERR_PERMISSION_DENIED",
-                    errorMessage = "Storage permission denied accessing media: ${diag.originalExceptionMessage}",
-                    problemDescription = "SoundSync cannot read this file because storage permissions are missing or revoked.",
-                    detectedReason = diag.originalExceptionMessage ?: "Android permission denied on storage path",
+                    status = PlayabilityStatus.STALE_URI,
+                    errorCode = PlaybackErrorCodes.ERR_MEDIASTORE_STALE,
+                    errorMessage = "MediaStore reference for file '$path' is stale or was moved.",
+                    problemDescription = "The media reference to this track is no longer valid.",
+                    detectedReason = "Stale MediaStore entry",
                     lastKnownLocation = path,
                     technicalDetails = technical,
                     originalExceptionClass = diag.originalExceptionClass,
                     originalExceptionMessage = diag.originalExceptionMessage,
                     resolvedSourceType = resolution.sourceType.name,
                     availableActions = listOf(
-                        RepairActionType.REQUEST_PERMISSION,
                         RepairActionType.FIX_AUTOMATICALLY,
-                        RepairActionType.LOCATE_FILE
+                        RepairActionType.LOCATE_FILE,
+                        RepairActionType.REMOVE_FROM_LIBRARY
                     )
                 )
             }
@@ -190,7 +194,7 @@ object PlayabilityValidator {
             return@withContext PlayabilityDiagnosticReport(
                 trackId = trackId,
                 status = PlayabilityStatus.MISSING_FILE,
-                errorCode = "ERR_FILE_NOT_FOUND",
+                errorCode = PlaybackErrorCodes.ERR_SOURCE_MISSING,
                 errorMessage = "File was deleted, renamed, or moved from '$path'.",
                 problemDescription = "SoundSync cannot find the file on device storage.",
                 detectedReason = "File not found at saved location and not indexed in MediaStore or SAF",

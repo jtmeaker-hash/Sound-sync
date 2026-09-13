@@ -6,9 +6,21 @@ import android.util.Log
 
 enum class ScanStatus {
     IDLE,
-    SCANNING,
-    COMPLETED,
-    FAILED
+    QUEUED,
+    RUNNING,
+    SCANNING, // legacy compatibility alias for RUNNING
+    PAUSED,
+    COMPLETE,
+    COMPLETED, // legacy compatibility alias for COMPLETE
+    COMPLETE_WITH_ERRORS,
+    CANCELLED,
+    FAILED;
+
+    val isActive: Boolean
+        get() = this == QUEUED || this == RUNNING || this == SCANNING || this == PAUSED
+
+    val isTerminal: Boolean
+        get() = this == COMPLETE || this == COMPLETED || this == COMPLETE_WITH_ERRORS || this == CANCELLED || this == FAILED
 }
 
 /**
@@ -44,16 +56,21 @@ class ScanStateManager(context: Context) {
         get() = prefs.getString(KEY_LAST_ERROR, null)
         set(value) = prefs.edit().putString(KEY_LAST_ERROR, value).apply()
 
+    var activeRunId: String?
+        get() = prefs.getString(KEY_ACTIVE_RUN_ID, null)
+        set(value) = prefs.edit().putString(KEY_ACTIVE_RUN_ID, value).apply()
+
     /**
      * Check if a previous scan crashed or was killed by the OS mid-execution.
-     * If status is SCANNING at startup, we reset to FAILED/IDLE and record the recovery
-     * to prevent repeating broken scan loops automatically on every launch.
+     * If status is SCANNING, RUNNING, or QUEUED at startup, we reset to FAILED
+     * and clear the active run ID to prevent repeating broken scan loops automatically on launch.
      */
     fun checkAndRecoverInterruptedScan(): Boolean {
-        if (status == ScanStatus.SCANNING) {
+        if (status == ScanStatus.SCANNING || status == ScanStatus.RUNNING || status == ScanStatus.QUEUED) {
             Log.w(TAG, "Detected interrupted scan from previous app session. Safely recovering state.")
             status = ScanStatus.FAILED
             lastErrorMessage = "Previous scan was interrupted or app was closed during scan."
+            activeRunId = null
             return true
         }
         return false
@@ -66,5 +83,6 @@ class ScanStateManager(context: Context) {
         private const val KEY_LAST_SCAN_TIME = "key_last_scan_time"
         private const val KEY_LAST_SCANNED_COUNT = "key_last_scanned_count"
         private const val KEY_LAST_ERROR = "key_last_error"
+        private const val KEY_ACTIVE_RUN_ID = "key_active_run_id"
     }
 }

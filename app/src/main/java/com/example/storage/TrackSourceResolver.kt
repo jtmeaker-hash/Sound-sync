@@ -857,10 +857,14 @@ object TrackSourceResolver {
         }
 
         // Storage Volume inspection
+        val availReport = StorageAvailabilityHelper.evaluateStorageAvailability(context, track)
         val volumeInfo = getStorageVolumeForPath(context, path)
-        val volumeUuid = volumeInfo?.uuid ?: extractVolumeUuid(path)
-        val isRemovable = volumeInfo?.isRemovable ?: StorageAvailabilityHelper.isExternalStoragePath(path)
-        val isVolumeMounted = volumeInfo?.isMounted ?: isRemovableStorageVolumeMounted(context, volumeUuid ?: "")
+        val volumeUuid = volumeInfo?.uuid ?: availReport.volumeIdentity ?: extractVolumeUuid(path)
+        val isRemovable = volumeInfo?.isRemovable ?: (availReport.sourceType == ResolvedSourceType.REMOVABLE_STORAGE_PATH || StorageAvailabilityHelper.isExternalStoragePath(path))
+        val isSourcePlayable = (isContentUri && isContentUriPlayable(context, Uri.parse(path))) || fisOpened
+        val isVolumeMounted = if (!isRemovable) true else {
+            isSourcePlayable || (availReport.state != StorageAvailabilityState.VOLUME_UNMOUNTED && (volumeInfo?.isMounted ?: isRemovableStorageVolumeMounted(context, volumeUuid ?: "")))
+        }
         val volumeSummary = volumeInfo?.let {
             "${it.description} [UUID=${it.uuid ?: "primary"}, State=${it.state}, Removable=${it.isRemovable}, ReadOnly=${it.isReadOnly}]"
         } ?: if (isRemovable) "Removable Volume (UUID=$volumeUuid, Mounted=$isVolumeMounted)" else "Internal Emulated Storage (/storage/emulated/0)"
@@ -888,12 +892,22 @@ object TrackSourceResolver {
         val hasVolumeChanged = !isVolumeMounted && findReinsertedVolumeForTrack(context, track) != null
 
         val failureMode = when {
-            !isVolumeMounted -> "External storage volume ($volumeUuid) is disconnected or unmounted."
-            isScopedStorageBlocking -> "Android Scoped Storage is blocking raw filesystem access to removable storage ($volumeUuid)."
-            isGenuinelyCorrupt -> "Audio file container is damaged or truncated (<128 bytes)."
-            !fileExists && !isContentUri -> "Physical audio file is missing at path ($cleanPath)."
-            fisOpened || isContentUriPlayable(context, Uri.parse(path)) -> "None (Source is accessible)"
-            else -> "Storage read failure: ${originalExMessage ?: "Unknown reason"}"
+            availReport.state == StorageAvailabilityState.VOLUME_UNMOUNTED && !isSourcePlayable ->
+                "External storage volume ($volumeUuid) is disconnected or unmounted."
+            isSourcePlayable ->
+                "None (Source is accessible)"
+            availReport.state == StorageAvailabilityState.PERMISSION_LOST || isScopedStorageBlocking ->
+                "Android Scoped Storage is blocking raw filesystem access to removable storage ($volumeUuid)."
+            availReport.state == StorageAvailabilityState.STALE_SOURCE ->
+                "MediaStore reference is stale or moved."
+            isGenuinelyCorrupt ->
+                "Audio file container is damaged or truncated (<128 bytes)."
+            !fileExists && !isContentUri ->
+                "Physical audio file is missing at path ($cleanPath)."
+            !isVolumeMounted ->
+                "External storage volume ($volumeUuid) is disconnected or unmounted."
+            else ->
+                "Storage read failure: ${originalExMessage ?: "Unknown reason"}"
         }
 
         val recommended = when {
@@ -1246,6 +1260,9 @@ object TrackSourceResolver {
     @androidx.annotation.VisibleForTesting
     var contentUriPlayableCheckerForTesting: ((context: Context, uri: Uri) -> Boolean)? = null
 
+    @androidx.annotation.VisibleForTesting
+    var audioReadPermissionOverrideForTesting: Boolean? = null
+
     fun setVolumeMountedForTesting(uuid: String, isMounted: Boolean) {
         mountedVolumesOverrideForTesting[uuid.uppercase(Locale.ROOT)] = isMounted
     }
@@ -1255,6 +1272,7 @@ object TrackSourceResolver {
         mediaStoreUriFinderForTesting = null
         safDocumentUriFinderForTesting = null
         contentUriPlayableCheckerForTesting = null
+        audioReadPermissionOverrideForTesting = null
     }
 
     /**
@@ -1329,18 +1347,7 @@ object TrackSourceResolver {
         if (mountedVolumesOverrideForTesting.containsKey(volumeUuid.uppercase(Locale.ROOT))) {
             return mountedVolumesOverrideForTesting[volumeUuid.uppercase(Locale.ROOT)] == true
         }
-        try {
-            val sm = context.getSystemService(Context.STORAGE_SERVICE) as? StorageManager
-            if (sm != null) {
-                val match = sm.storageVolumes.firstOrNull { it.uuid?.equals(volumeUuid, ignoreCase = true) == true }
-                if (match != null) {
-                    val state = match.state
-                    return state == Environment.MEDIA_MOUNTED || state == Environment.MEDIA_MOUNTED_READ_ONLY
-                }
-            }
-        } catch (_: Throwable) {}
-
-        return File("/storage/$volumeUuid").exists()
+        return StorageAvailabilityHelper.isVolumePhysicallyMounted(context, volumeUuid)
     }
 
     /**
@@ -1592,7 +1599,8 @@ object TrackSourceResolver {
         return null
     }
 
-    private fun hasAudioReadPermission(context: Context): Boolean {
+    fun hasAudioReadPermission(context: Context): Boolean {
+        audioReadPermissionOverrideForTesting?.let { return it }
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(context, "android.permission.READ_MEDIA_AUDIO") == PackageManager.PERMISSION_GRANTED
         } else {

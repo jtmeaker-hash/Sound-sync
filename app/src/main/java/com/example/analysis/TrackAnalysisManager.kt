@@ -8,6 +8,7 @@ import com.example.audio.SpectrogramEngine
 import com.example.audio.WaveformAnalyzer
 import com.example.audio.WaveformCache
 import com.example.data.AppDatabase
+import com.example.data.TrackDao
 import com.example.data.TrackEntity
 import com.example.metadata.AudioEmbeddedMetadataReader
 import com.example.metadata.LocalPcmAudioAnalyzer
@@ -45,22 +46,65 @@ import java.io.File
  * - Robust error handling: corrupted files are recorded as FAILED without stopping the queue.
  * - Live reactive state for subtle UI progress displays.
  */
+/**
+ * Explicit scan lifecycle state machine for SoundSync metadata analysis.
+ */
+enum class ScanLifecycleState {
+    IDLE,
+    QUEUED,
+    RUNNING,
+    PAUSED,
+    COMPLETE,
+    COMPLETE_WITH_ERRORS,
+    CANCELLED,
+    FAILED;
+
+    val isActive: Boolean
+        get() = this == QUEUED || this == RUNNING || this == PAUSED
+
+    val isTerminal: Boolean
+        get() = this == COMPLETE || this == COMPLETE_WITH_ERRORS || this == CANCELLED || this == FAILED
+}
+
+/**
+ * Result of analysing a single audio track.
+ */
+enum class ProcessOutcome {
+    SUCCESS,
+    SKIPPED,
+    FAILED_TERMINAL,
+    RETRYABLE_FAILURE
+}
+
 class TrackAnalysisManager private constructor(
     private val context: Context
 ) {
 
     data class QueueProgress(
+        val state: ScanLifecycleState = ScanLifecycleState.IDLE,
         val isRunning: Boolean = false,
         val isPausedForPlayback: Boolean = false,
         val processedCount: Int = 0,
         val totalCount: Int = 0,
+        val completedSuccess: Int = 0,
+        val completedSkipped: Int = 0,
+        val failedTerminal: Int = 0,
+        val pendingCount: Int = 0,
+        val inProgressCount: Int = 0,
         val currentTrackTitle: String = "",
         val failedCount: Int = 0,
-        val statusMessage: String = "Idle"
+        val statusMessage: String = "Idle",
+        val runId: String = ""
     )
 
-    private val db = AppDatabase.getDatabase(context)
-    private val trackDao = db.trackDao()
+    private val db by lazy { AppDatabase.getDatabase(context) }
+    private val defaultTrackDao by lazy { db.trackDao() }
+
+    @androidx.annotation.VisibleForTesting
+    var trackDaoOverrideForTesting: TrackDao? = null
+
+    private val trackDao: TrackDao get() = trackDaoOverrideForTesting ?: defaultTrackDao
+    private val scanStateManager = com.example.storage.ScanStateManager(context)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var analysisJob: Job? = null
@@ -125,10 +169,8 @@ class TrackAnalysisManager private constructor(
             try {
                 val tracks = trackDao.getTracksByIds(trackIds)
                 val needingAnalysis = tracks.filter { entity ->
-                    entity.analysisState != AnalysisState.COMPLETE.name ||
-                    !com.example.storage.TrackIdentityReconciler.isMetadataScanComplete(entity.metadataScanState) ||
-                    entity.bpm <= 0.0 ||
-                    entity.musicalKey.isBlank()
+                    entity.analysisState != AnalysisState.COMPLETE.name &&
+                    (entity.analysisState in listOf(AnalysisState.NOT_ANALYSED.name, AnalysisState.QUEUED.name, AnalysisState.PARTIAL.name))
                 }.map { it.id }
 
                 if (needingAnalysis.isNotEmpty()) {
@@ -213,37 +255,82 @@ class TrackAnalysisManager private constructor(
     private fun launchAnalysisLoop(
         onProgressUpdate: ((processed: Int, total: Int, currentTrackTitle: String) -> Unit)? = null
     ): Job = scope.launch {
-        Log.d(TAG, "Background library analysis loop started.")
-        var consecutiveEmptyBatches = 0
-        var sessionProcessed = 0
-        var sessionTotal = 0
+        val runId = "scan_${System.currentTimeMillis()}"
+        Log.d(TAG, "[$runId] Background library analysis loop started.")
+
+        var totalEligible = 0
         try {
-            sessionTotal = trackDao.getPendingAnalysisCount()
+            totalEligible = trackDao.getPendingAnalysisCount()
         } catch (_: Exception) {}
 
+        scanStateManager.status = com.example.storage.ScanStatus.RUNNING
+        scanStateManager.activeRunId = runId
+
+        if (totalEligible <= 0) {
+            Log.d(TAG, "[$runId] No tracks need analysis. Scan complete immediately.")
+            scanStateManager.status = com.example.storage.ScanStatus.COMPLETE
+            scanStateManager.lastScanTime = System.currentTimeMillis()
+            scanStateManager.lastScannedCount = 0
+            scanStateManager.activeRunId = null
+
+            _queueProgress.value = QueueProgress(
+                state = ScanLifecycleState.COMPLETE,
+                isRunning = false,
+                isPausedForPlayback = false,
+                processedCount = 0,
+                totalCount = 0,
+                completedSuccess = 0,
+                completedSkipped = 0,
+                failedTerminal = 0,
+                pendingCount = 0,
+                inProgressCount = 0,
+                currentTrackTitle = "",
+                failedCount = 0,
+                statusMessage = "Metadata scan complete",
+                runId = runId
+            )
+            return@launch
+        }
+
+        var completedSuccess = 0
+        var completedSkipped = 0
+        var failedTerminal = 0
+        var consecutiveEmptyBatches = 0
+        val processedIdsInThisRun = mutableSetOf<String>()
+
         _queueProgress.value = QueueProgress(
+            state = ScanLifecycleState.RUNNING,
             isRunning = true,
             isPausedForPlayback = false,
             processedCount = 0,
-            totalCount = sessionTotal,
+            totalCount = totalEligible,
+            completedSuccess = 0,
+            completedSkipped = 0,
+            failedTerminal = 0,
+            pendingCount = totalEligible,
+            inProgressCount = 0,
             currentTrackTitle = "",
             failedCount = 0,
-            statusMessage = if (sessionTotal > 0) "Preparing library analysis…" else "Analysing library…"
+            statusMessage = "Scanning metadata · 0 / $totalEligible",
+            runId = runId
         )
+
+        var terminalState = ScanLifecycleState.COMPLETE
 
         try {
             while (isActive) {
                 if (!isBackgroundAnalysisEnabled) {
-                    Log.d(TAG, "Background analysis disabled in settings. Pausing worker.")
+                    Log.d(TAG, "[$runId] Background analysis disabled in settings. Pausing worker.")
+                    terminalState = ScanLifecycleState.PAUSED
                     break
                 }
 
-                // Check playback state and apply priority throttle
                 val isPlaying = audioEngineRef?.isPlaying?.value == true
                 if (isPlaying) {
                     when (analyseWhilePlayingMode) {
                         "PAUSED" -> {
                             _queueProgress.value = _queueProgress.value.copy(
+                                state = ScanLifecycleState.PAUSED,
                                 isRunning = true,
                                 isPausedForPlayback = true,
                                 statusMessage = "Analysis paused during playback"
@@ -253,6 +340,7 @@ class TrackAnalysisManager private constructor(
                         }
                         "OFF" -> {
                             _queueProgress.value = _queueProgress.value.copy(
+                                state = ScanLifecycleState.PAUSED,
                                 isRunning = false,
                                 isPausedForPlayback = true,
                                 statusMessage = "Analysis stopped during playback"
@@ -261,20 +349,21 @@ class TrackAnalysisManager private constructor(
                             continue
                         }
                         else -> { // "REDUCED"
-                            // Throttle with small pause and yield CPU
                             yield()
                             delay(250)
                         }
                     }
                 }
 
-                // Refresh remaining count to keep sessionTotal accurate if new tracks were added
+                // Deterministic accounting: check if new tracks were discovered
                 try {
                     val remaining = trackDao.getPendingAnalysisCount()
-                    sessionTotal = maxOf(sessionTotal, sessionProcessed + remaining)
+                    val currentProcessed = completedSuccess + completedSkipped + failedTerminal
+                    if (currentProcessed + remaining > totalEligible) {
+                        totalEligible = currentProcessed + remaining
+                    }
                 } catch (_: Exception) {}
 
-                // Retrieve priority track if requested
                 var currentEntity: TrackEntity? = null
                 val prioId = priorityTrackId
                 if (prioId != null) {
@@ -284,64 +373,122 @@ class TrackAnalysisManager private constructor(
 
                 if (currentEntity == null) {
                     val batch = trackDao.getTracksNeedingAnalysis(limit = 10)
-                    if (batch.isEmpty()) {
+                    val unhandled = batch.filter { it.id !in processedIdsInThisRun }
+
+                    if (batch.isEmpty() || unhandled.isEmpty()) {
                         consecutiveEmptyBatches++
                         if (consecutiveEmptyBatches >= 2) {
-                            Log.d(TAG, "All queued tracks analysed. Background analysis complete.")
-                            _queueProgress.value = _queueProgress.value.copy(
-                                isRunning = false,
-                                isPausedForPlayback = false,
-                                currentTrackTitle = "",
-                                totalCount = sessionProcessed,
-                                processedCount = sessionProcessed,
-                                statusMessage = "Library analysis complete"
-                            )
+                            Log.d(TAG, "[$runId] All eligible tracks reached terminal state.")
                             break
                         }
-                        delay(1500)
+                        delay(500)
                         continue
                     }
                     consecutiveEmptyBatches = 0
-                    currentEntity = batch.first()
+                    currentEntity = unhandled.first()
                 }
 
-                val track = currentEntity.toTrack()
+                val entity = currentEntity ?: continue
+                val trackId = entity.id
+                val track = entity.toTrack()
+                val currentProcessed = completedSuccess + completedSkipped + failedTerminal
+                val pending = (totalEligible - currentProcessed).coerceAtLeast(0)
+
                 _queueProgress.value = _queueProgress.value.copy(
+                    state = ScanLifecycleState.RUNNING,
                     isRunning = true,
                     isPausedForPlayback = isPlaying && analyseWhilePlayingMode == "REDUCED",
-                    totalCount = sessionTotal,
+                    totalCount = totalEligible,
+                    processedCount = currentProcessed,
+                    completedSuccess = completedSuccess,
+                    completedSkipped = completedSkipped,
+                    failedTerminal = failedTerminal,
+                    pendingCount = pending,
+                    inProgressCount = 1,
                     currentTrackTitle = track.title,
-                    statusMessage = if (isPlaying) "Analysing (reduced priority) • ${track.title}" else "Analysing • ${track.title}"
+                    statusMessage = if (isPlaying) "Scanning metadata (reduced priority) · $currentProcessed / $totalEligible • ${track.title}"
+                                    else "Scanning metadata · $currentProcessed / $totalEligible • ${track.title}"
                 )
 
-                // Process single track within DSP semaphore
-                val success = processSingleTrack(track)
-                sessionProcessed++
-                if (sessionTotal > 0 && sessionProcessed > sessionTotal) {
-                    sessionTotal = sessionProcessed
+                val outcome = processSingleTrackWithOutcome(track)
+                processedIdsInThisRun.add(trackId)
+
+                when (outcome) {
+                    ProcessOutcome.SUCCESS -> completedSuccess++
+                    ProcessOutcome.SKIPPED -> completedSkipped++
+                    ProcessOutcome.FAILED_TERMINAL -> failedTerminal++
+                    ProcessOutcome.RETRYABLE_FAILURE -> {
+                        val check = trackDao.getTrackById(trackId)
+                        if (check == null || check.analysisRetryCount >= 3 || check.analysisState == AnalysisState.FAILED.name) {
+                            failedTerminal++
+                        }
+                    }
                 }
 
-                val prev = _queueProgress.value
-                _queueProgress.value = prev.copy(
-                    processedCount = sessionProcessed,
-                    totalCount = sessionTotal,
-                    failedCount = if (success) prev.failedCount else prev.failedCount + 1
-                )
-                onProgressUpdate?.invoke(sessionProcessed, sessionTotal, track.title)
+                val newProcessed = completedSuccess + completedSkipped + failedTerminal
+                val newPending = (totalEligible - newProcessed).coerceAtLeast(0)
 
-                // Safe pacing interval
-                delay(if (isPlaying) 150 else 40)
+                _queueProgress.value = _queueProgress.value.copy(
+                    processedCount = newProcessed,
+                    totalCount = totalEligible,
+                    completedSuccess = completedSuccess,
+                    completedSkipped = completedSkipped,
+                    failedTerminal = failedTerminal,
+                    pendingCount = newPending,
+                    inProgressCount = 0,
+                    failedCount = failedTerminal
+                )
+
+                onProgressUpdate?.invoke(newProcessed, totalEligible, track.title)
+                delay(if (isPlaying) 150 else 30)
             }
+
+            terminalState = if (failedTerminal > 0) ScanLifecycleState.COMPLETE_WITH_ERRORS else ScanLifecycleState.COMPLETE
         } catch (e: CancellationException) {
-            Log.d(TAG, "Analysis loop cancelled cleanly.")
+            Log.d(TAG, "[$runId] Analysis loop cancelled cleanly.")
+            terminalState = ScanLifecycleState.CANCELLED
         } catch (e: Throwable) {
-            Log.e(TAG, "Unhandled error in analysis loop", e)
+            Log.e(TAG, "[$runId] Unhandled error in analysis loop", e)
+            terminalState = ScanLifecycleState.FAILED
         } finally {
-            _queueProgress.value = _queueProgress.value.copy(
+            val totalFinal = completedSuccess + completedSkipped + failedTerminal
+            val finalMsg = when (terminalState) {
+                ScanLifecycleState.COMPLETE -> "Metadata scan complete"
+                ScanLifecycleState.COMPLETE_WITH_ERRORS -> "Metadata scan complete · $failedTerminal unavailable sources"
+                ScanLifecycleState.CANCELLED -> "Metadata scan cancelled"
+                ScanLifecycleState.FAILED -> "Metadata scan failed"
+                ScanLifecycleState.PAUSED -> "Metadata scan paused"
+                else -> "Metadata scan complete"
+            }
+
+            scanStateManager.status = when (terminalState) {
+                ScanLifecycleState.COMPLETE -> com.example.storage.ScanStatus.COMPLETE
+                ScanLifecycleState.COMPLETE_WITH_ERRORS -> com.example.storage.ScanStatus.COMPLETE_WITH_ERRORS
+                ScanLifecycleState.CANCELLED -> com.example.storage.ScanStatus.CANCELLED
+                ScanLifecycleState.FAILED -> com.example.storage.ScanStatus.FAILED
+                ScanLifecycleState.PAUSED -> com.example.storage.ScanStatus.PAUSED
+                else -> com.example.storage.ScanStatus.IDLE
+            }
+            scanStateManager.lastScanTime = System.currentTimeMillis()
+            scanStateManager.lastScannedCount = completedSuccess + completedSkipped
+            scanStateManager.activeRunId = null
+
+            Log.d(TAG, "[$runId] Analysis loop terminal transition: state=$terminalState, msg='$finalMsg'")
+            _queueProgress.value = QueueProgress(
+                state = terminalState,
                 isRunning = false,
                 isPausedForPlayback = false,
+                processedCount = totalFinal,
+                totalCount = totalEligible,
+                completedSuccess = completedSuccess,
+                completedSkipped = completedSkipped,
+                failedTerminal = failedTerminal,
+                pendingCount = 0,
+                inProgressCount = 0,
                 currentTrackTitle = "",
-                statusMessage = "Library analysis complete"
+                failedCount = failedTerminal,
+                statusMessage = finalMsg,
+                runId = runId
             )
         }
     }
@@ -350,22 +497,25 @@ class TrackAnalysisManager private constructor(
      * Performs Phase B analysis on a single track.
      * Guaranteed to never throw out of this function.
      */
-    private suspend fun processSingleTrack(track: Track): Boolean = withContext(Dispatchers.IO) {
+    suspend fun processSingleTrack(track: Track): Boolean {
+        val outcome = processSingleTrackWithOutcome(track)
+        return outcome == ProcessOutcome.SUCCESS || outcome == ProcessOutcome.SKIPPED
+    }
+
+    /**
+     * Detailed track processing returning explicit execution outcome.
+     */
+    suspend fun processSingleTrackWithOutcome(track: Track): ProcessOutcome = withContext(Dispatchers.IO) {
         val file = if (!track.filePath.startsWith("content://")) File(track.filePath) else null
         val fileModTime = file?.lastModified() ?: track.dateAdded
-        val fileSize = file?.length() ?: 0L
 
-        // Fast skip check: file unchanged, analysis version current, has valid BPM, Key, and Waveform
-        val hasWaveform = WaveformCache.contains(WaveformCache.getCacheKey(track, context), context)
-        val hasBpmAndKey = track.hasValidBpm && track.hasValidKey
-
+        // Fast skip check: file unchanged and analysis version current
         if (track.analysisVersion >= CURRENT_ANALYSIS_VERSION &&
             track.analysisState == AnalysisState.COMPLETE &&
-            fileModTime == track.fileModifiedTimestamp &&
-            hasBpmAndKey && hasWaveform
+            fileModTime == track.fileModifiedTimestamp
         ) {
             Log.d(TAG, "Track '${track.title}' already has valid analysis. Skipping.")
-            return@withContext true
+            return@withContext ProcessOutcome.SKIPPED
         }
 
         var updatedTrack = track
@@ -385,23 +535,32 @@ class TrackAnalysisManager private constructor(
                 trackDao.updatePlayabilityStatus(track.id, com.example.model.PlayabilityStatus.PLAYABLE.name, null, null)
                 updatedTrack = track.copy(filePath = playablePath, resolvedUri = playablePath)
             } else if (!isPathAccessible) {
-                val volInfo = com.example.storage.TrackSourceResolver.getStorageVolumeForPath(context, track.filePath)
-                val status = if (volInfo?.isMounted == false) {
-                    com.example.model.PlayabilityStatus.VOLUME_UNAVAILABLE.name
-                } else {
-                    track.playabilityStatus
+                val avail = com.example.storage.StorageAvailabilityHelper.evaluateStorageAvailability(context, track)
+                val status = when (avail.state) {
+                    com.example.storage.StorageAvailabilityState.VOLUME_UNMOUNTED -> com.example.model.PlayabilityStatus.VOLUME_UNAVAILABLE.name
+                    com.example.storage.StorageAvailabilityState.PERMISSION_LOST -> com.example.model.PlayabilityStatus.PERMISSION_DENIED.name
+                    com.example.storage.StorageAvailabilityState.STALE_SOURCE -> com.example.model.PlayabilityStatus.STALE_URI.name
+                    else -> track.playabilityStatus
                 }
-                val code = if (volInfo?.isMounted == false) "ERR_STORAGE_UNMOUNTED" else (track.playbackErrorCode ?: "ERR_SOURCE_INACCESSIBLE")
-                trackDao.updatePlayabilityStatus(track.id, status, code, "Storage file inaccessible during analysis")
+                val code = when (avail.state) {
+                    com.example.storage.StorageAvailabilityState.VOLUME_UNMOUNTED -> "ERR_STORAGE_UNMOUNTED"
+                    com.example.storage.StorageAvailabilityState.PERMISSION_LOST -> "ERR_SCOPED_STORAGE_RESTRICTION"
+                    com.example.storage.StorageAvailabilityState.STALE_SOURCE -> "ERR_MEDIASTORE_STALE"
+                    else -> (track.playbackErrorCode ?: "ERR_SOURCE_INACCESSIBLE")
+                }
+                trackDao.updatePlayabilityStatus(track.id, status, code, avail.details.ifBlank { "Storage file inaccessible during analysis" })
+                val newRetry = (track.analysisRetryCount + 1).coerceAtMost(3)
+                val isTerminal = newRetry >= 3 || avail.state == com.example.storage.StorageAvailabilityState.VOLUME_UNMOUNTED || avail.state == com.example.storage.StorageAvailabilityState.SOURCE_MISSING
+                val stateName = if (isTerminal) AnalysisState.FAILED.name else AnalysisState.PARTIAL.name
                 trackDao.updateTrackAnalysisStatus(
                     id = track.id,
-                    state = AnalysisState.FAILED.name,
+                    state = stateName,
                     lastAnalysedAt = System.currentTimeMillis(),
                     reason = "Source file inaccessible ($code)",
-                    retryCount = (track.analysisRetryCount + 1).coerceAtMost(5)
+                    retryCount = if (isTerminal) 3 else newRetry
                 )
-                Log.d(TAG, "Track '${track.title}' source path is not accessible. Skipping analysis with backoff.")
-                return@withContext false
+                Log.d(TAG, "Track '${track.title}' source path is not accessible. Handled as ${if (isTerminal) "FAILED_TERMINAL" else "RETRYABLE"}.")
+                return@withContext if (isTerminal) ProcessOutcome.FAILED_TERMINAL else ProcessOutcome.RETRYABLE_FAILURE
             }
         }
 
@@ -416,7 +575,7 @@ class TrackAnalysisManager private constructor(
         try {
             // 1. Read embedded tags for accurate local metadata if missing
             try {
-                val embedded = AudioEmbeddedMetadataReader.read(context, track.filePath)
+                val embedded = AudioEmbeddedMetadataReader.read(context, updatedTrack.filePath)
                 if (embedded != null) {
                     var modified = false
                     var t = updatedTrack
@@ -487,6 +646,7 @@ class TrackAnalysisManager private constructor(
             }
 
             // 3. Generate Waveform if missing
+            val hasWaveform = WaveformCache.contains(WaveformCache.getCacheKey(updatedTrack, context), context)
             if (!hasWaveform) {
                 dspSemaphore.withPermit {
                     try {
@@ -552,10 +712,11 @@ class TrackAnalysisManager private constructor(
                 Log.w(TAG, "Failed to check or enqueue file write after analysis: ${queueEx.message}")
             }
 
-            true
+            ProcessOutcome.SUCCESS
         } catch (e: Exception) {
             val retryCount = track.analysisRetryCount + 1
-            val newState = if (retryCount >= 3) AnalysisState.FAILED else AnalysisState.PARTIAL
+            val isTerminal = retryCount >= 3
+            val newState = if (isTerminal) AnalysisState.FAILED else AnalysisState.PARTIAL
             Log.e(TAG, "Analysis failed for track '${track.title}' (attempt $retryCount): ${e.message}")
 
             trackDao.updateTrackAnalysisStatus(
@@ -563,9 +724,9 @@ class TrackAnalysisManager private constructor(
                 state = newState.name,
                 lastAnalysedAt = System.currentTimeMillis(),
                 reason = e.message ?: "Unknown error",
-                retryCount = retryCount
+                retryCount = if (isTerminal) 3 else retryCount
             )
-            false
+            if (isTerminal) ProcessOutcome.FAILED_TERMINAL else ProcessOutcome.RETRYABLE_FAILURE
         }
     }
 

@@ -127,51 +127,310 @@ object StorageAvailabilityHelper {
     }
 
     /**
-     * Determines whether a track is genuinely stored on an external removable storage medium
-     * (such as a USB OTG drive or SD card) whose root volume is currently unmounted or disconnected.
-     *
-     * Files on internal or emulated storage (/storage/emulated/0, content://) NEVER return true here.
-     * This prevents false "storage is disconnected" alerts when a file reference is simply stale or modified.
+     * Determines whether a storage volume is physically mounted and available.
+     * Evaluates testing overrides, StorageManager, MediaStore volumes, persisted SAF trees,
+     * and filesystem fallback.
+     */
+    fun isVolumePhysicallyMounted(context: Context?, volumeUuid: String?): Boolean {
+        if (volumeUuid.isNullOrBlank() ||
+            volumeUuid.equals("primary", ignoreCase = true) ||
+            volumeUuid.equals("internal", ignoreCase = true) ||
+            volumeUuid.contains("emulated", ignoreCase = true)
+        ) {
+            return true
+        }
+
+        // 1. Check testing overrides
+        if (TrackSourceResolver.mountedVolumesOverrideForTesting.containsKey(volumeUuid.uppercase(java.util.Locale.ROOT))) {
+            return TrackSourceResolver.mountedVolumesOverrideForTesting[volumeUuid.uppercase(java.util.Locale.ROOT)] == true
+        }
+
+        if (context == null) {
+            return try {
+                File("/storage/$volumeUuid").exists()
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
+        // 2. Query StorageManager.storageVolumes
+        try {
+            val sm = context.getSystemService(Context.STORAGE_SERVICE) as? android.os.storage.StorageManager
+            if (sm != null) {
+                val vols = sm.storageVolumes
+                if (vols.isNotEmpty()) {
+                    val match = vols.firstOrNull { it.uuid?.equals(volumeUuid, ignoreCase = true) == true }
+                    if (match != null) {
+                        val state = match.state
+                        return state == android.os.Environment.MEDIA_MOUNTED || state == android.os.Environment.MEDIA_MOUNTED_READ_ONLY
+                    }
+                    // Volume list is populated by OS but this UUID is not in the mounted volumes
+                    return false
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 3. MediaStore external volume names (Android Q+)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            try {
+                val volNames = android.provider.MediaStore.getExternalVolumeNames(context)
+                if (volNames.any { it.equals(volumeUuid, ignoreCase = true) }) {
+                    return true
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // 4. Check SAF persisted folder grants for this volume
+        try {
+            val persistedTrees = SafStorageManager.getPersistedAccessibleFolderUris(context)
+            for (treeUri in persistedTrees) {
+                if (treeUri.toString().contains(volumeUuid, ignoreCase = true)) {
+                    val doc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+                    if (doc != null && doc.canRead()) {
+                        return true
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 5. Direct filesystem directory fallback
+        return try {
+            File("/storage/$volumeUuid").exists()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * Evaluates granular storage and source availability for a track.
+     * Accurately distinguishes CONNECTED_READABLE, PERMISSION_LOST, SOURCE_MISSING,
+     * VOLUME_UNMOUNTED, STALE_SOURCE, and UNKNOWN.
+     */
+    fun evaluateStorageAvailability(context: Context, track: Track): StorageAvailabilityReport {
+        return evaluateStorageAvailability(context, track.filePath, track.sourceId)
+    }
+
+    /**
+     * Evaluates granular storage and source availability for a file path or content URI.
+     */
+    fun evaluateStorageAvailability(
+        context: Context,
+        filePathOrUri: String,
+        sourceId: String? = null
+    ): StorageAvailabilityReport {
+        val path = filePathOrUri.trim()
+        if (path.isBlank()) {
+            return StorageAvailabilityReport(
+                state = StorageAvailabilityState.SOURCE_MISSING,
+                sourceType = ResolvedSourceType.UNKNOWN,
+                volumeIdentity = null,
+                isReadable = false,
+                hasPermission = false,
+                details = "Track file path is empty."
+            )
+        }
+
+        if (path.startsWith("demo://")) {
+            return StorageAvailabilityReport(
+                state = StorageAvailabilityState.CONNECTED_READABLE,
+                sourceType = ResolvedSourceType.RAW_FILE_PATH,
+                volumeIdentity = "internal",
+                isReadable = true,
+                hasPermission = true,
+                mountLabelOrPath = "Demo Synthetic Audio",
+                details = "SoundSync built-in demo audio"
+            )
+        }
+
+        val isContent = path.startsWith("content://")
+        val isMediaStore = isContent && TrackSourceResolver.isMediaStoreUri(path)
+        val isSaf = isContent && !isMediaStore
+        val isExternal = isExternalStoragePath(path) || (sourceId != null && (
+            sourceId.contains("usb", ignoreCase = true) ||
+            sourceId.contains("removable", ignoreCase = true) ||
+            sourceId.contains("sd", ignoreCase = true)
+        ))
+
+        val sourceType = when {
+            isMediaStore -> ResolvedSourceType.MEDIASTORE
+            isSaf -> if (path.contains("/tree/")) ResolvedSourceType.SAF_TREE else ResolvedSourceType.SAF_DOCUMENT
+            isExternal -> ResolvedSourceType.REMOVABLE_STORAGE_PATH
+            else -> ResolvedSourceType.RAW_FILE_PATH
+        }
+
+        val volumeId = TrackSourceResolver.extractVolumeUuid(path) ?: if (isExternal) {
+            getStorageRoot(path.removePrefix("file://"))?.substringAfterLast('/') ?: "removable"
+        } else {
+            "primary"
+        }
+
+        // Usability priority: if content/document URI or file opens successfully,
+        // it is CONNECTED and READABLE. Never report volume disconnected when readable!
+        val isReadable = isTrackPathAvailable(context, path)
+        if (isReadable) {
+            val label = if (volumeId == "primary") "/storage/emulated/0" else "/storage/$volumeId"
+            return StorageAvailabilityReport(
+                state = StorageAvailabilityState.CONNECTED_READABLE,
+                sourceType = sourceType,
+                volumeIdentity = volumeId,
+                isReadable = true,
+                hasPermission = true,
+                mountLabelOrPath = label,
+                details = "Source is connected and verified readable."
+            )
+        }
+
+        // Not readable: diagnose root cause
+        val isRemovableVol = isExternal || (volumeId != "primary" && volumeId.matches(Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")))
+        val isMounted = if (isRemovableVol) isVolumePhysicallyMounted(context, volumeId) else true
+
+        if (!isMounted) {
+            return StorageAvailabilityReport(
+                state = StorageAvailabilityState.VOLUME_UNMOUNTED,
+                sourceType = sourceType,
+                volumeIdentity = volumeId,
+                isReadable = false,
+                hasPermission = false,
+                mountLabelOrPath = "/storage/$volumeId",
+                details = "Storage volume ($volumeId) is unmounted or disconnected."
+            )
+        }
+
+        val hasAudioPerm = TrackSourceResolver.hasAudioReadPermission(context)
+
+        if (isMediaStore) {
+            if (!hasAudioPerm) {
+                return StorageAvailabilityReport(
+                    state = StorageAvailabilityState.PERMISSION_LOST,
+                    sourceType = sourceType,
+                    volumeIdentity = volumeId,
+                    isReadable = false,
+                    hasPermission = false,
+                    details = "Android audio read permission is missing or revoked."
+                )
+            }
+
+            val existsInMediaStore = try {
+                context.contentResolver.query(
+                    Uri.parse(path),
+                    arrayOf(android.provider.MediaStore.Audio.Media._ID),
+                    null, null, null
+                )?.use { it.moveToFirst() } == true
+            } catch (_: Throwable) {
+                false
+            }
+
+            return if (!existsInMediaStore) {
+                StorageAvailabilityReport(
+                    state = StorageAvailabilityState.STALE_SOURCE,
+                    sourceType = sourceType,
+                    volumeIdentity = volumeId,
+                    isReadable = false,
+                    hasPermission = true,
+                    details = "MediaStore entry no longer exists at URI (stale index)."
+                )
+            } else {
+                StorageAvailabilityReport(
+                    state = StorageAvailabilityState.SOURCE_MISSING,
+                    sourceType = sourceType,
+                    volumeIdentity = volumeId,
+                    isReadable = false,
+                    hasPermission = true,
+                    details = "MediaStore entry points to missing or unreadable physical data."
+                )
+            }
+        }
+
+        if (isSaf) {
+            val uri = try { Uri.parse(path) } catch (_: Throwable) { null }
+            val hasSafGrant = if (uri != null) {
+                val persisted = SafStorageManager.getPersistedAccessibleFolderUris(context)
+                persisted.any { tree ->
+                    uri.toString().startsWith(tree.toString()) ||
+                    (volumeId != "primary" && tree.toString().contains(volumeId, ignoreCase = true))
+                }
+            } else false
+
+            if (!hasSafGrant) {
+                return StorageAvailabilityReport(
+                    state = StorageAvailabilityState.PERMISSION_LOST,
+                    sourceType = sourceType,
+                    volumeIdentity = volumeId,
+                    isReadable = false,
+                    hasPermission = false,
+                    details = "SAF folder/document permission is missing or revoked."
+                )
+            }
+            return StorageAvailabilityReport(
+                state = StorageAvailabilityState.SOURCE_MISSING,
+                sourceType = sourceType,
+                volumeIdentity = volumeId,
+                isReadable = false,
+                hasPermission = true,
+                details = "SAF document reference cannot be found or read."
+            )
+        }
+
+        // Raw file path checks
+        val cleanPath = path.removePrefix("file://")
+        val file = File(cleanPath)
+
+        if (!hasAudioPerm && !isExternal) {
+            return StorageAvailabilityReport(
+                state = StorageAvailabilityState.PERMISSION_LOST,
+                sourceType = sourceType,
+                volumeIdentity = volumeId,
+                isReadable = false,
+                hasPermission = false,
+                details = "Storage permission required to read file."
+            )
+        }
+
+        if (isRemovableVol) {
+            val hasSafGrant = SafStorageManager.getPersistedAccessibleFolderUris(context).any {
+                it.toString().contains(volumeId, ignoreCase = true)
+            }
+            if (!hasSafGrant) {
+                return StorageAvailabilityReport(
+                    state = StorageAvailabilityState.PERMISSION_LOST,
+                    sourceType = sourceType,
+                    volumeIdentity = volumeId,
+                    isReadable = false,
+                    hasPermission = false,
+                    mountLabelOrPath = "/storage/$volumeId",
+                    details = "Android Scoped Storage restricts direct file access. SAF folder grant required for /storage/$volumeId."
+                )
+            }
+        }
+
+        if (!file.exists()) {
+            return StorageAvailabilityReport(
+                state = StorageAvailabilityState.SOURCE_MISSING,
+                sourceType = sourceType,
+                volumeIdentity = volumeId,
+                isReadable = false,
+                hasPermission = hasAudioPerm,
+                details = "File does not exist on storage at $cleanPath."
+            )
+        }
+
+        return StorageAvailabilityReport(
+            state = StorageAvailabilityState.UNKNOWN,
+            sourceType = sourceType,
+            volumeIdentity = volumeId,
+            isReadable = false,
+            hasPermission = hasAudioPerm,
+            details = "Source file exists but cannot be opened (I/O error)."
+        )
+    }
+
+    /**
+     * Canonical check for whether a track's volume is genuinely disconnected/unmounted.
+     * Validated against the authoritative storage availability report.
      */
     fun isRootGenuinelyDisconnected(context: Context, track: Track): Boolean {
-        val path = track.filePath
-        if (path.isBlank() || path.startsWith("demo://") || path.startsWith("http")) return false
-
-        // Internal / emulated storage tracks are never physically disconnected external devices
-        if (path.startsWith("/storage/emulated/") || path.startsWith("file:///storage/emulated/")) return false
-
-        if (path.startsWith("content://")) {
-            // Check if the content URI points to an explicit removable external volume
-            val uri = Uri.parse(path)
-            val segments = uri.pathSegments
-            val volumeId = segments.firstOrNull { it.matches(Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")) }
-            if (volumeId != null) {
-                return !TrackSourceResolver.isRemovableStorageVolumeMounted(context, volumeId)
-            }
-            return false
-        }
-
-        // Direct file paths on external storage
-        if (isExternalStorageTrack(track)) {
-            val volumeInfo = TrackSourceResolver.getStorageVolumeForPath(context, path)
-            if (volumeInfo != null) {
-                return !volumeInfo.isMounted
-            }
-
-            val root = getStorageRoot(path.removePrefix("file://"))
-            if (root != null && !root.contains("emulated")) {
-                val rootDir = File(root)
-                return !rootDir.exists()
-            }
-            // Check UUID volume format /storage/XXXX-XXXX
-            val cleanPath = path.removePrefix("file://")
-            val volumeMatch = Regex(".*/storage/([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})(/.*)?").find(cleanPath)
-            if (volumeMatch != null) {
-                val vol = volumeMatch.groupValues[1]
-                return !TrackSourceResolver.isRemovableStorageVolumeMounted(context, vol)
-            }
-        }
-        return false
+        val report = evaluateStorageAvailability(context, track)
+        return report.state == StorageAvailabilityState.VOLUME_UNMOUNTED
     }
 
     /**
@@ -217,3 +476,28 @@ object StorageAvailabilityHelper {
         return TrackSourceResolver.isGenuinelyRawReadable(file)
     }
 }
+
+/**
+ * Granular physical/SAF availability status for audio tracks.
+ */
+enum class StorageAvailabilityState {
+    CONNECTED_READABLE,
+    PERMISSION_LOST,
+    SOURCE_MISSING,
+    VOLUME_UNMOUNTED,
+    STALE_SOURCE,
+    UNKNOWN
+}
+
+/**
+ * Canonical availability report detailing source usability, volume identity, and permission state.
+ */
+data class StorageAvailabilityReport(
+    val state: StorageAvailabilityState,
+    val sourceType: ResolvedSourceType,
+    val volumeIdentity: String?,
+    val isReadable: Boolean,
+    val hasPermission: Boolean,
+    val mountLabelOrPath: String? = null,
+    val details: String = ""
+)
