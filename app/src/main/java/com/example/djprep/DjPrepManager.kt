@@ -69,6 +69,30 @@ class DjPrepManager private constructor(
         _isMetronomeEnabled.value = !_isMetronomeEnabled.value
     }
 
+    // ── Undo History Management ─────────────────────────────────────────────
+    private val undoStacks = mutableMapOf<String, ArrayDeque<DjPrepTrackData>>()
+
+    private fun pushUndo(data: DjPrepTrackData) {
+        val stack = undoStacks.getOrPut(data.trackId) { ArrayDeque() }
+        if (stack.size >= 20) stack.removeFirst()
+        stack.addLast(data.copy())
+    }
+
+    fun canUndo(trackId: String): Boolean = undoStacks[trackId]?.isNotEmpty() == true
+
+    suspend fun undo(
+        track: Track,
+        customDao: DjPrepDao? = null,
+        customTrackDao: TrackDao? = null
+    ): DjPrepTrackData? = withContext(Dispatchers.IO) {
+        val stack = undoStacks[track.id] ?: return@withContext null
+        if (stack.isEmpty()) return@withContext null
+        val previous = stack.removeLast()
+        saveAndSync(previous, customDao, customTrackDao)
+        _activePrepData.value = previous
+        previous
+    }
+
     // ── Load & Initialize Prep Data ──────────────────────────────────────────
 
     suspend fun getOrInitPrepData(track: Track, customDao: DjPrepDao? = null): DjPrepTrackData = withContext(Dispatchers.IO) {
@@ -138,6 +162,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val cleanSlot = slot.trim().uppercase()
         val defaultColor = when (cleanSlot) {
             "A" -> CuePoint.DEFAULT_HOT_CUE_COLORS[0]
@@ -180,6 +205,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val updatedList = current.hotCues.filter { it.id != cueId }
         val updated = current.copy(
             hotCues = updatedList,
@@ -199,6 +225,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val updatedList = current.hotCues.map {
             if (it.id.equals(cueId, ignoreCase = true)) it.copy(label = newLabel) else it
         }
@@ -222,6 +249,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val newId = "mem_${System.currentTimeMillis()}"
         val newCue = CuePoint(
             id = newId,
@@ -242,6 +270,63 @@ class DjPrepManager private constructor(
         updated
     }
 
+    suspend fun updateMemoryCue(
+        track: Track,
+        cueId: String,
+        newLabel: String? = null,
+        newPositionMs: Long? = null,
+        customDao: DjPrepDao? = null,
+        customTrackDao: TrackDao? = null
+    ): DjPrepTrackData = withContext(Dispatchers.IO) {
+        val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
+        val updatedList = current.memoryCues.map { cue ->
+            if (cue.id == cueId) {
+                cue.copy(
+                    label = newLabel?.ifBlank { null } ?: cue.label,
+                    positionMs = newPositionMs?.coerceAtLeast(0L) ?: cue.positionMs
+                )
+            } else {
+                cue
+            }
+        }.sortedBy { it.positionMs }
+
+        val updated = current.copy(
+            memoryCues = updatedList,
+            updatedAt = System.currentTimeMillis()
+        )
+
+        saveAndSync(updated, customDao, customTrackDao)
+        _activePrepData.value = updated
+        updated
+    }
+
+    suspend fun updateHotCuePosition(
+        track: Track,
+        cueId: String,
+        newPositionMs: Long,
+        customDao: DjPrepDao? = null,
+        customTrackDao: TrackDao? = null
+    ): DjPrepTrackData = withContext(Dispatchers.IO) {
+        val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
+        val updatedList = current.hotCues.map { cue ->
+            if (cue.id.equals(cueId, ignoreCase = true)) {
+                cue.copy(positionMs = newPositionMs.coerceAtLeast(0L))
+            } else {
+                cue
+            }
+        }
+        val updated = current.copy(
+            hotCues = updatedList,
+            updatedAt = System.currentTimeMillis()
+        )
+
+        saveAndSync(updated, customDao, customTrackDao)
+        _activePrepData.value = updated
+        updated
+    }
+
     suspend fun deleteMemoryCue(
         track: Track,
         cueId: String,
@@ -249,6 +334,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val updatedList = current.memoryCues.filter { it.id != cueId }
         val updated = current.copy(
             memoryCues = updatedList,
@@ -277,6 +363,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val updatedGrid = current.grid.copy(
             firstDownbeatMs = downbeatMs.coerceAtLeast(0L),
             isManualOverride = true
@@ -298,6 +385,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val newOffset = current.grid.gridOffsetMs + offsetDeltaMs
         val updatedGrid = current.grid.copy(
             gridOffsetMs = newOffset,
@@ -319,6 +407,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val newBpm = (current.bpm * 2.0).coerceIn(40.0, 300.0)
         val updated = current.copy(
             bpm = newBpm,
@@ -338,6 +427,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val newBpm = (current.bpm / 2.0).coerceIn(40.0, 300.0)
         val updated = current.copy(
             bpm = newBpm,
@@ -358,6 +448,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val clampedBpm = newBpm.coerceIn(40.0, 300.0)
         val updated = current.copy(
             bpm = clampedBpm,
@@ -379,6 +470,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val validBpm = if (analyzedBpm in 40.0..300.0) analyzedBpm else 120.0
         val updated = current.copy(
             bpm = validBpm,
@@ -409,6 +501,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val resolvedCamelot = camelotKey ?: com.example.analysis.TunebatMetadataService.normalizeCamelotKey(musicalKey)
         val updated = current.copy(
             musicalKey = musicalKey,
@@ -431,6 +524,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val updatedList = (current.phraseMarkers + phrase).sortedBy { it.startMs }
         val updated = current.copy(
             phraseMarkers = updatedList,
@@ -449,6 +543,7 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
+        pushUndo(current)
         val updatedList = current.phraseMarkers.filter { it.id != phraseId }
         val updated = current.copy(
             phraseMarkers = updatedList,
@@ -467,7 +562,8 @@ class DjPrepManager private constructor(
         customTrackDao: TrackDao? = null
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
-        val updatedList = current.phraseMarkers.map { if (it.id == phrase.id) phrase else it }
+        pushUndo(current)
+        val updatedList = current.phraseMarkers.map { if (it.id == phrase.id) phrase else it }.sortedBy { it.startMs }
         val updated = current.copy(
             phraseMarkers = updatedList,
             updatedAt = System.currentTimeMillis()

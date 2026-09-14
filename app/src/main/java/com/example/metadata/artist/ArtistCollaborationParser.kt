@@ -13,50 +13,75 @@ object ArtistCollaborationParser {
      */
     private val PROTECTED_ARTIST_NAMES = setOf(
         "above & beyond",
+        "above and beyond",
         "earth, wind & fire",
+        "earth, wind and fire",
         "simon & garfunkel",
+        "simon and garfunkel",
         "crosby, stills, nash & young",
+        "crosby, stills, nash and young",
         "crosby, stills & nash",
+        "crosby, stills and nash",
         "emerson, lake & palmer",
+        "emerson, lake and palmer",
         "hall & oates",
+        "hall and oates",
         "daryl hall & john oates",
+        "daryl hall and john oates",
         "brooks & dunn",
+        "brooks and dunn",
         "huey lewis & the news",
+        "huey lewis and the news",
         "tom petty & the heartbreakers",
+        "tom petty and the heartbreakers",
         "bob marley & the wailers",
+        "bob marley and the wailers",
         "kc & the sunshine band",
+        "kc and the sunshine band",
         "kool & the gang",
+        "kool and the gang",
         "sly & the family stone",
+        "sly and the family stone",
         "joan jett & the blackhearts",
+        "joan jett and the blackhearts",
         "florence + the machine",
+        "florence and the machine",
         "marina and the diamonds",
         "the xx",
         "jamie xx",
         "sunn o)))",
         "ac/dc",
         "blood, sweat & tears",
+        "blood, sweat and tears",
         "katrina and the waves",
         "toots & the maytals",
+        "toots and the maytals",
         "me first and the gimme gimmes",
         "echo & the bunnymen",
+        "echo and the bunnymen",
         "captain & tennille",
+        "captain and tennille",
         "peaches & herb",
+        "peaches and herb",
         "sam & dave",
+        "sam and dave",
         "chas & dave",
+        "chas and dave",
         "twenty one pilots",
         "of monsters and men",
         "iron & wine",
+        "iron and wine",
         "bloodhound gang",
         "m&o",
         "cast, crew"
     )
 
     // Collaboration separator regex:
-    // 1. Featuring phrases: "feat.", "feat", "ft.", "ft", "featuring"
-    private val FEAT_REGEX = Regex("(?i)\\s+(?:feat\\.|feat|ft\\.|ft|featuring)\\s+")
+    // 1. Featuring phrases: "feat.", "feat", "ft.", "ft", "featuring", "with"
+    private val FEAT_REGEX = Regex("(?i)\\s+(?:feat\\.|feat|ft\\.|ft|featuring|with)\\s+")
 
-    // 2. Delimiters: semicolons, commas, " & ", " x ", " X ", " vs ", " vs. "
-    private val DELIMITER_REGEX = Regex("(?i)\\s*(?:;|\\s&\\s|\\s[xX]\\s|\\svs\\.?\\s|,\\s*)\\s*")
+    // 2. Delimiters: semicolons, commas, " & ", " and ", " x ", " X ", " vs ", " vs. "
+    private val DELIMITER_REGEX = Regex("(?i)\\s*(?:;|\\s&\\s|\\sand\\s|\\s[xX]\\s|\\svs\\.?\\s|,\\s*)\\s*")
 
     /**
      * Splits a raw artist metadata string into individual artist names.

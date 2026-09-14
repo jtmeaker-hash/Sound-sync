@@ -311,7 +311,7 @@ fun SideNavigationDrawerContent(
                 // ── 2. TOOLS ─────────────────────────────────────
                 ProCategoryHeader(
                     title = "TOOLS",
-                    badge = "6 TOOLS",
+                    badge = "7 TOOLS",
                     isExpanded = expandedMap["TOOLS"] == true,
                     onToggle = { expandedMap["TOOLS"] = !(expandedMap["TOOLS"] ?: false) }
                 )
@@ -321,6 +321,15 @@ fun SideNavigationDrawerContent(
                     exit = shrinkVertically()
                 ) {
                     Column(modifier = Modifier.padding(start = 8.dp)) {
+                        ProDrawerItem(
+                            title = "DJ Prep",
+                            subtitle = "Track preparation, beat grid, cues & key lock",
+                            icon = Icons.Default.GraphicEq,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.DjPrep)
+                            }
+                        )
                         ProDrawerItem(
                             title = "Metronome",
                             subtitle = "Sample-accurate rhythmic hardware click",
