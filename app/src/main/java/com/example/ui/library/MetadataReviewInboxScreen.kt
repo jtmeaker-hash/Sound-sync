@@ -206,13 +206,22 @@ fun MetadataReviewInboxScreen(
                         },
                         onApprove = {
                             coroutineScope.launch {
-                                reviewManager.acceptAllProposed(item.id)
+                                val success = reviewManager.acceptAllProposed(item.id)
+                                if (success) {
+                                    Toast.makeText(context, "Metadata & artwork embedded successfully!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "File write not completed (item kept in approval queue)", Toast.LENGTH_LONG).show()
+                                }
                             }
                         },
                         onApplySelected = { fields ->
                             coroutineScope.launch {
-                                reviewManager.acceptSelectedFields(item.id, fields)
-                                Toast.makeText(context, "Applied ${fields.size} fields", Toast.LENGTH_SHORT).show()
+                                val success = reviewManager.acceptSelectedFields(item.id, fields)
+                                if (success) {
+                                    Toast.makeText(context, "Applied ${fields.size} fields to file & library", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "File write not completed (item kept in approval queue)", Toast.LENGTH_LONG).show()
+                                }
                             }
                         },
                         onKeepLocal = {
@@ -307,6 +316,15 @@ private fun SafeReviewItemCard(
     onRestore: () -> Unit
 ) {
     val selectedFields = remember { mutableStateListOf<String>() }
+    val isManualCover = item.provider == "Manual Cover"
+
+    LaunchedEffect(item.id) {
+        if (isManualCover || !item.artworkCachePath.isNullOrBlank()) {
+            if (!selectedFields.contains("artwork")) {
+                selectedFields.add("artwork")
+            }
+        }
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -365,82 +383,130 @@ private fun SafeReviewItemCard(
             }
 
             // Side-by-Side Artwork Preview (Section 12)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ArtworkThumbnail(label = "Current Art", pathOrUrl = item.originalArtworkUrl)
-                Icon(Icons.Default.ArrowForward, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
-                ArtworkThumbnail(label = "Proposed Art", pathOrUrl = item.artworkCachePath ?: item.proposedArtworkUrl)
-                if (!item.proposedArtworkUrl.isNullOrBlank() && item.proposedArtworkUrl != item.originalArtworkUrl) {
-                    val artChecked = selectedFields.contains("artwork")
+            val hasArtworkChange = !item.artworkCachePath.isNullOrBlank() ||
+                    (!item.proposedArtworkUrl.isNullOrBlank() && item.proposedArtworkUrl != item.originalArtworkUrl) ||
+                    isManualCover
+
+            if (hasArtworkChange || !item.originalArtworkUrl.isNullOrBlank()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DjSurfaceDark.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable {
-                            if (artChecked) selectedFields.remove("artwork") else selectedFields.add("artwork")
-                        }
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Checkbox(
-                            checked = artChecked,
-                            onCheckedChange = { chk ->
-                                if (chk) selectedFields.add("artwork") else selectedFields.remove("artwork")
+                        Text("Artwork", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Source: ${item.provider}", color = DeckACyan, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        ArtworkThumbnail(label = "OLD", pathOrUrl = item.originalArtworkUrl)
+                        Icon(Icons.Default.ArrowForward, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                        ArtworkThumbnail(label = "NEW", pathOrUrl = item.artworkCachePath ?: item.proposedArtworkUrl)
+
+                        val artChecked = selectedFields.contains("artwork")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable {
+                                if (artChecked) selectedFields.remove("artwork") else selectedFields.add("artwork")
                             }
-                        )
-                        Text("Apply Art", color = TextSecondary, fontSize = 10.sp)
+                        ) {
+                            Checkbox(
+                                checked = artChecked,
+                                onCheckedChange = { chk ->
+                                    if (chk) selectedFields.add("artwork") else selectedFields.remove("artwork")
+                                }
+                            )
+                            Text(if (isManualCover) "Apply Cover" else "Apply Art", color = TextSecondary, fontSize = 10.sp)
+                        }
                     }
                 }
             }
 
-            // Side-by-Side Metadata Comparison with selectable checkboxes (Upgrade 26)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DjSurfaceDark.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                SelectableComparisonRow(
-                    label = "Title",
-                    current = item.originalTitle,
-                    proposed = item.proposedTitle,
-                    isChecked = selectedFields.contains("title"),
-                    onToggle = { chk -> if (chk) selectedFields.add("title") else selectedFields.remove("title") }
-                )
-                SelectableComparisonRow(
-                    label = "Artist",
-                    current = item.originalArtist,
-                    proposed = item.proposedArtist,
-                    isChecked = selectedFields.contains("artist"),
-                    onToggle = { chk -> if (chk) selectedFields.add("artist") else selectedFields.remove("artist") }
-                )
-                SelectableComparisonRow(
-                    label = "Album",
-                    current = item.originalAlbum,
-                    proposed = item.proposedAlbum,
-                    isChecked = selectedFields.contains("album"),
-                    onToggle = { chk -> if (chk) selectedFields.add("album") else selectedFields.remove("album") }
-                )
-                if (item.proposedYear != null) {
+            // Text Metadata Comparison or Artwork Mutation Indicator
+            val isTitleChanged = !item.originalTitle.equals(item.proposedTitle, ignoreCase = true) && item.proposedTitle.isNotBlank()
+            val isArtistChanged = !item.originalArtist.equals(item.proposedArtist, ignoreCase = true) && item.proposedArtist.isNotBlank()
+            val isAlbumChanged = !item.originalAlbum.equals(item.proposedAlbum, ignoreCase = true) && item.proposedAlbum.isNotBlank()
+            val hasTextChanges = isTitleChanged || isArtistChanged || isAlbumChanged || item.proposedYear != null || item.proposedGenre != null
+
+            if (hasTextChanges) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DjSurfaceDark.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     SelectableComparisonRow(
-                        label = "Year",
-                        current = "—",
-                        proposed = item.proposedYear.toString(),
-                        isChecked = selectedFields.contains("year"),
-                        onToggle = { chk -> if (chk) selectedFields.add("year") else selectedFields.remove("year") }
+                        label = "Title",
+                        current = item.originalTitle,
+                        proposed = item.proposedTitle,
+                        isChecked = selectedFields.contains("title"),
+                        onToggle = { chk -> if (chk) selectedFields.add("title") else selectedFields.remove("title") }
                     )
-                }
-                if (item.proposedGenre != null) {
                     SelectableComparisonRow(
-                        label = "Genre",
-                        current = "—",
-                        proposed = item.proposedGenre,
-                        isChecked = selectedFields.contains("genre"),
-                        onToggle = { chk -> if (chk) selectedFields.add("genre") else selectedFields.remove("genre") }
+                        label = "Artist",
+                        current = item.originalArtist,
+                        proposed = item.proposedArtist,
+                        isChecked = selectedFields.contains("artist"),
+                        onToggle = { chk -> if (chk) selectedFields.add("artist") else selectedFields.remove("artist") }
                     )
+                    SelectableComparisonRow(
+                        label = "Album",
+                        current = item.originalAlbum,
+                        proposed = item.proposedAlbum,
+                        isChecked = selectedFields.contains("album"),
+                        onToggle = { chk -> if (chk) selectedFields.add("album") else selectedFields.remove("album") }
+                    )
+                    if (item.proposedYear != null) {
+                        SelectableComparisonRow(
+                            label = "Year",
+                            current = "—",
+                            proposed = item.proposedYear.toString(),
+                            isChecked = selectedFields.contains("year"),
+                            onToggle = { chk -> if (chk) selectedFields.add("year") else selectedFields.remove("year") }
+                        )
+                    }
+                    if (item.proposedGenre != null) {
+                        SelectableComparisonRow(
+                            label = "Genre",
+                            current = "—",
+                            proposed = item.proposedGenre,
+                            isChecked = selectedFields.contains("genre"),
+                            onToggle = { chk -> if (chk) selectedFields.add("genre") else selectedFields.remove("genre") }
+                        )
+                    }
+                    if (item.proposedTrackNumber != null && item.proposedTrackNumber > 0) {
+                        HighlightableComparisonRow("Track #", "—", item.proposedTrackNumber.toString())
+                    }
                 }
-                if (item.proposedTrackNumber != null && item.proposedTrackNumber > 0) {
-                    HighlightableComparisonRow("Track #", "—", item.proposedTrackNumber.toString())
+            } else {
+                Surface(
+                    color = DjSurfaceDark.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Default.Image, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(14.dp))
+                        Text(
+                            text = "Artwork mutation • ${item.originalArtist} - ${item.originalTitle}",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             }
 
@@ -525,7 +591,7 @@ private fun SafeReviewItemCard(
                         colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                     ) {
-                        Text("Approve All", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Text(if (isManualCover) "Approve / Write to Track" else "Approve All", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
                 }
             }

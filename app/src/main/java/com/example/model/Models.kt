@@ -144,10 +144,13 @@ enum class MetadataWriteState(
     WRITING_TO_FILE("Writing to File", "⏳", "Writing metadata to file"),
     FILE_WRITE_SUCCESS("Embedded in file", "✓", "Embedded in file"),
     FILE_WRITE_PARTIAL("Partially embedded", "⚠", "Partially embedded in file"),
-    FILE_WRITE_FAILED("File write failed", "✕", "File write failed"),
+    FILE_WRITE_FAILED("Write failed", "✕", "File write failed"),
     READ_ONLY_FILE("Read-only file", "🔒", "Audio file is read-only"),
-    FORMAT_WRITE_UNSUPPORTED("Format write unsupported", "ℹ", "File format does not support tag writing"),
-    PERMISSION_REQUIRED("Permission required", "⚠", "Permission required to write file")
+    FORMAT_WRITE_UNSUPPORTED("Unsupported format", "ℹ", "File format does not support tag writing"),
+    PERMISSION_REQUIRED("Permission required", "⚠", "Permission required to write file"),
+    PENDING_APPROVAL("Pending approval", "⏳", "Pending approval to embed into file"),
+    WRITING_ARTWORK("Writing artwork...", "⏳", "Writing artwork into audio file"),
+    ARTWORK_SAVED("Artwork saved", "✓", "Artwork embedded in audio file")
 }
 
 enum class AnalysisState {

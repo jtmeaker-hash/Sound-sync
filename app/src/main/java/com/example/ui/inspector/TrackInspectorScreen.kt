@@ -250,24 +250,56 @@ fun TrackInspectorScreen(
                 onFindCover = { showFindCoverDialog = true },
                 onEmbedInFile = {
                     Toast.makeText(context, "Embedding metadata into audio file...", Toast.LENGTH_SHORT).show()
-                    currentTrack = currentTrack.copy(metadataWriteState = com.example.model.MetadataWriteState.WRITING_TO_FILE.name)
-                    MetadataFileWriteQueue.getInstance(context).enqueue(currentTrack) { result ->
-                        coroutineScope.launch(Dispatchers.Main) {
-                            currentTrack = currentTrack.copy(metadataWriteState = result.writeState.name)
-                            val msg = when (result) {
-                                is MetadataWriteResult.Written -> "Successfully embedded metadata in audio file!"
-                                is MetadataWriteResult.AlreadyInSync -> "File metadata is already up to date!"
-                                is MetadataWriteResult.Partial -> "Partially embedded metadata in audio file."
-                                is MetadataWriteResult.Skipped -> "File tag embedding skipped: ${result.reason}"
-                                is MetadataWriteResult.VerificationFailed -> "Verification failed on ${result.field}"
-                                is MetadataWriteResult.PermissionRequired -> "Write permission required!"
-                                is MetadataWriteResult.ReadOnlyFile -> "File is read-only!"
-                                is MetadataWriteResult.Unsupported -> "Format unsupported: ${result.reason}"
-                                is MetadataWriteResult.LibraryOnly -> "Saved to SoundSync library: ${result.reason}"
-                                is MetadataWriteResult.Failed -> "File write failed: ${result.reason}"
-                            }
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    val writingState = if (currentTrack.artworkCachePath != null) {
+                        com.example.model.MetadataWriteState.WRITING_ARTWORK
+                    } else {
+                        com.example.model.MetadataWriteState.WRITING_TO_FILE
+                    }
+                    currentTrack = currentTrack.copy(metadataWriteState = writingState.name)
+
+                    coroutineScope.launch {
+                        val artworkBytes = currentTrack.artworkCachePath?.let { path ->
+                            try { File(path).takeIf { it.exists() }?.readBytes() } catch (_: Exception) { null }
                         }
+                        val result = withContext(Dispatchers.IO) {
+                            MetadataFileWriteQueue.getInstance(context).writeDirect(
+                                track = currentTrack,
+                                artworkBytes = artworkBytes
+                            )
+                        }
+
+                        val finalState = if ((result is MetadataWriteResult.Written || result is MetadataWriteResult.AlreadyInSync) && artworkBytes != null) {
+                            com.example.model.MetadataWriteState.ARTWORK_SAVED
+                        } else {
+                            result.writeState
+                        }
+
+                        currentTrack = currentTrack.copy(
+                            metadataWriteState = finalState.name,
+                            artworkSource = if (finalState == com.example.model.MetadataWriteState.ARTWORK_SAVED) "Embedded Tag" else currentTrack.artworkSource
+                        )
+
+                        if (result is MetadataWriteResult.Written || result is MetadataWriteResult.AlreadyInSync) {
+                            withContext(Dispatchers.IO) {
+                                database.metadataReviewInboxDao().getPendingItemForTrack(currentTrack.id)?.let { pending ->
+                                    database.metadataReviewInboxDao().updateStatus(pending.id, "ACCEPTED")
+                                }
+                            }
+                        }
+
+                        val msg = when (result) {
+                            is MetadataWriteResult.Written -> if (artworkBytes != null) "Successfully embedded artwork in audio file!" else "Successfully embedded metadata in audio file!"
+                            is MetadataWriteResult.AlreadyInSync -> "File metadata is already up to date!"
+                            is MetadataWriteResult.Partial -> "Partially embedded metadata in audio file."
+                            is MetadataWriteResult.Skipped -> "File tag embedding skipped: ${result.reason}"
+                            is MetadataWriteResult.VerificationFailed -> "Verification failed on ${result.field}"
+                            is MetadataWriteResult.PermissionRequired -> "Write permission required!"
+                            is MetadataWriteResult.ReadOnlyFile -> "File is read-only!"
+                            is MetadataWriteResult.Unsupported -> "Format unsupported: ${result.reason}"
+                            is MetadataWriteResult.LibraryOnly -> "Saved to SoundSync library: ${result.reason}"
+                            is MetadataWriteResult.Failed -> "File write failed: ${result.reason}"
+                        }
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -688,10 +720,57 @@ fun TrackInspectorScreen(
             onApplyCandidate = { candidate ->
                 val result = resolver.applyCandidate(currentTrack, candidate)
                 if (result.artworkCachePath != null) {
+                    android.util.Log.i("TrackInspector", "MANUAL_ART_SELECTED: Track ${currentTrack.id} selected cover from ${candidate.provider}")
+
+                    // 1. Detect that the selected artwork differs from the artwork currently embedded in the audio file
+                    val candidateFile = File(result.artworkCachePath)
+                    val candidateBytes = try { if (candidateFile.exists()) candidateFile.readBytes() else null } catch (_: Exception) { null }
+
+                    val embeddedMeta = withContext(Dispatchers.IO) {
+                        com.example.metadata.AudioEmbeddedMetadataReader.read(context, currentTrack.filePath, includeArtworkBytes = true)
+                    }
+                    val isDifferent = if (!embeddedMeta.hasEmbeddedArtwork || embeddedMeta.embeddedArtworkBytes == null || embeddedMeta.embeddedArtworkBytes.isEmpty()) {
+                        true
+                    } else if (candidateBytes == null || candidateBytes.isEmpty()) {
+                        false
+                    } else if (candidateBytes.size != embeddedMeta.embeddedArtworkBytes.size) {
+                        true
+                    } else {
+                        !candidateBytes.contentEquals(embeddedMeta.embeddedArtworkBytes)
+                    }
+
+                    val updatedWriteState: com.example.model.MetadataWriteState
+                    if (isDifferent) {
+                        android.util.Log.i("TrackInspector", "ARTWORK_CHANGE_QUEUED: Detected manual artwork differs from embedded file artwork for track ${currentTrack.id}")
+
+                        // 2. Create/merge pending metadata modification in MD Approval queue
+                        val reviewManager = com.example.metadata.review.MetadataReviewManager(context, database)
+                        val mimeType = if (result.artworkCachePath.endsWith(".png", ignoreCase = true)) "image/png" else "image/jpeg"
+                        withContext(Dispatchers.IO) {
+                            reviewManager.submitManualArtworkChange(
+                                track = currentTrack,
+                                newArtworkCachePath = result.artworkCachePath,
+                                newArtworkUrl = result.artworkUrl ?: result.artworkCachePath,
+                                oldArtworkPathOrUrl = currentTrack.artworkCachePath ?: currentTrack.artworkUrl,
+                                artworkMimeType = mimeType
+                            )
+                        }
+                        updatedWriteState = com.example.model.MetadataWriteState.PENDING_APPROVAL
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Cover selected! Added to MD Approval tool (Pending write)", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        updatedWriteState = com.example.model.MetadataWriteState.ARTWORK_SAVED
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Selected artwork already matches embedded file artwork", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+
                     val updated = currentTrack.copy(
                         artworkCachePath = result.artworkCachePath,
                         artworkUrl = result.artworkUrl ?: result.artworkCachePath,
-                        artworkSource = result.artworkSource,
+                        artworkSource = "Manual Cover",
+                        metadataWriteState = updatedWriteState.name,
                         userConfirmedMetadata = true
                     )
                     withContext(Dispatchers.Main) {
@@ -759,6 +838,26 @@ private fun InspectorHeaderCard(
                     )
                 } else {
                     Icon(Icons.Default.MusicNote, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(36.dp))
+                }
+
+                // Pending write indicator badge
+                if (track.metadataWriteState == com.example.model.MetadataWriteState.PENDING_APPROVAL.name) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(4.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(DjObsidian.copy(alpha = 0.85f))
+                            .border(0.5.dp, NeonAmber, RoundedCornerShape(3.dp))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "PENDING WRITE",
+                            color = NeonAmber,
+                            fontSize = 7.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
 
                 // Small edit badge overlay in bottom-right corner

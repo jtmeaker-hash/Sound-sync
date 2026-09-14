@@ -9,7 +9,11 @@ import com.example.metadata.MetadataSettingsStore
 import com.example.metadata.backup.MetadataBackupManager
 import com.example.metadata.history.MetadataHistoryManager
 import com.example.metadata.parser.TrackIdentityParser
+import com.example.metadata.MetadataFileWriteQueue
+import com.example.metadata.MetadataWriteResult
 import com.example.model.MetadataScanState
+import com.example.model.MetadataWriteState
+import com.example.model.Track
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -79,6 +83,70 @@ class MetadataReviewManager(
         id
     }
 
+    /**
+     * Submits or merges a manual cover art modification into the MD Approval queue.
+     * Merges with any existing pending metadata changes for the same track to prevent duplicates.
+     */
+    suspend fun submitManualArtworkChange(
+        track: Track,
+        newArtworkCachePath: String,
+        newArtworkUrl: String,
+        oldArtworkPathOrUrl: String?,
+        artworkMimeType: String = "image/jpeg"
+    ): String = withContext(Dispatchers.IO) {
+        val existingItem = inboxDao.getPendingItemForTrack(track.id)
+        val id = if (existingItem != null) {
+            val mergedEvidence = if (existingItem.evidenceSummary.contains("Manual Cover", ignoreCase = true)) {
+                existingItem.evidenceSummary
+            } else {
+                "${existingItem.evidenceSummary} + Manual Cover"
+            }
+            val mergedItem = existingItem.copy(
+                proposedArtworkUrl = newArtworkUrl,
+                artworkCachePath = newArtworkCachePath,
+                originalArtworkUrl = oldArtworkPathOrUrl ?: existingItem.originalArtworkUrl ?: track.artworkUrl ?: track.artworkCachePath,
+                timestamp = System.currentTimeMillis(),
+                evidenceSummary = mergedEvidence
+            )
+            inboxDao.insertItem(mergedItem)
+            Log.i(TAG, "METADATA_APPROVAL_CREATED: Merged manual artwork into pending approval item ${existingItem.id} for track ${track.id}")
+            existingItem.id
+        } else {
+            val newId = UUID.randomUUID().toString()
+            val newItem = MetadataReviewItemEntity(
+                id = newId,
+                trackId = track.id,
+                filePath = track.filePath,
+                originalArtist = track.artist,
+                originalTitle = track.title,
+                originalAlbum = track.album,
+                proposedArtist = track.artist,
+                proposedTitle = track.title,
+                proposedAlbum = track.album,
+                proposedGenre = track.genre,
+                proposedYear = track.releaseYear,
+                proposedTrackNumber = track.trackNumber.takeIf { it > 0 },
+                proposedArtworkUrl = newArtworkUrl,
+                provider = "Manual Cover",
+                confidenceScore = 100.0,
+                evidenceSummary = "Manual cover selected in Track Inspector",
+                status = "PENDING",
+                timestamp = System.currentTimeMillis(),
+                originalArtworkUrl = oldArtworkPathOrUrl ?: track.artworkUrl ?: track.artworkCachePath,
+                artworkCachePath = newArtworkCachePath,
+                matchStatus = "REVIEW_REQUIRED"
+            )
+            inboxDao.insertItem(newItem)
+            Log.i(TAG, "METADATA_APPROVAL_CREATED: Created pending approval item $newId for track ${track.id} (Manual Cover)")
+            newId
+        }
+
+        try {
+            trackDao.updateMetadataWriteState(track.id, MetadataWriteState.PENDING_APPROVAL.name)
+        } catch (_: Throwable) {}
+        id
+    }
+
     suspend fun acceptAllProposed(itemId: String): Boolean = withContext(Dispatchers.IO) {
         val item = inboxDao.getItemById(itemId) ?: return@withContext false
         val track = trackDao.getTrackById(item.trackId) ?: return@withContext false
@@ -86,7 +154,7 @@ class MetadataReviewManager(
 
         val finalTitle = item.proposedTitle.takeIf { it.isNotBlank() } ?: track.title
         val finalArtist = item.proposedArtist.takeIf { it.isNotBlank() } ?: track.artist
-        val shouldReplaceArtwork = settings.replaceExistingArtwork || track.artworkUrl.isNullOrBlank()
+        val shouldReplaceArtwork = settings.replaceExistingArtwork || track.artworkUrl.isNullOrBlank() || item.provider == "Manual Cover"
         val finalArtworkUrl = if (shouldReplaceArtwork) (item.proposedArtworkUrl ?: track.artworkUrl) else track.artworkUrl
         val finalArtworkCachePath = if (shouldReplaceArtwork) (item.artworkCachePath ?: track.artworkCachePath) else track.artworkCachePath
 
@@ -126,21 +194,37 @@ class MetadataReviewManager(
             metadataScanState = MetadataScanState.APPLIED.name,
             userConfirmedMetadata = true
         )
-        trackDao.updateTrack(updated)
-        inboxDao.updateStatus(itemId, "ACCEPTED")
-        com.example.util.AlbumArtHelper.invalidateTrack(updated.id, updated.artist, updated.album)
 
-        // 2. Physical File Writing with Transactional Rollback (Section 11)
-        if (File(track.filePath).exists() && File(track.filePath).canWrite()) {
+        // 2. Physical File Writing with Scoped Storage MediaStore Permission Handling
+        val hasPhysicalFile = (File(track.filePath).exists() && File(track.filePath).isFile) || track.filePath.startsWith("content://")
+        if (hasPhysicalFile) {
             val artworkBytes = item.artworkCachePath?.let { path ->
-                try { File(path).readBytes() } catch (_: Exception) { null }
+                try { File(path).takeIf { it.exists() }?.readBytes() } catch (_: Exception) { null }
             }
-            val writeResult = backupManager.writeWithTransactionalRollback(
+            val writeQueue = try {
+                MetadataFileWriteQueue.getInstance(context)
+            } catch (_: Throwable) { null }
+
+            val writeResult = writeQueue?.writeDirect(
                 track = updated.toTrack(),
                 artworkBytes = artworkBytes
             )
-            Log.d(TAG, "Write result after approval for ${track.filePath}: $writeResult")
+
+            if (writeResult != null && writeResult !is MetadataWriteResult.Written && writeResult !is MetadataWriteResult.AlreadyInSync && writeResult !is MetadataWriteResult.Partial) {
+                Log.e(TAG, "ARTWORK_WRITE_FAILED: Physical file write failed for item $itemId: $writeResult")
+                return@withContext false
+            }
         }
+
+        val finalWriteState = if (item.provider == "Manual Cover" || item.artworkCachePath != null) {
+            MetadataWriteState.ARTWORK_SAVED.name
+        } else {
+            MetadataWriteState.FILE_WRITE_SUCCESS.name
+        }
+        val finalTrackToSave = updated.copy(metadataWriteState = finalWriteState)
+        trackDao.updateTrack(finalTrackToSave)
+        inboxDao.updateStatus(itemId, "ACCEPTED")
+        com.example.util.AlbumArtHelper.invalidateTrack(finalTrackToSave.id, finalTrackToSave.artist, finalTrackToSave.album)
 
         Log.i(TAG, "Approved and applied metadata for item $itemId (track ${track.id})")
         true
@@ -222,21 +306,39 @@ class MetadataReviewManager(
             metadataScanState = MetadataScanState.APPLIED.name,
             userConfirmedMetadata = true
         )
-        trackDao.updateTrack(finalTrack)
-        inboxDao.updateStatus(itemId, "ACCEPTED")
-        com.example.util.AlbumArtHelper.invalidateTrack(finalTrack.id, finalTrack.artist, finalTrack.album)
-
-        if (File(finalTrack.filePath).exists() && File(finalTrack.filePath).canWrite()) {
+        // Physical File Writing with Scoped Storage MediaStore Permission Handling
+        val hasPhysicalFile = (File(finalTrack.filePath).exists() && File(finalTrack.filePath).isFile) || finalTrack.filePath.startsWith("content://")
+        if (hasPhysicalFile) {
             val artworkBytes = if (fieldNames.contains("artwork")) {
                 item.artworkCachePath?.let { path ->
-                    try { File(path).readBytes() } catch (_: Exception) { null }
+                    try { File(path).takeIf { it.exists() }?.readBytes() } catch (_: Exception) { null }
                 }
             } else null
-            backupManager.writeWithTransactionalRollback(
+
+            val writeQueue = try {
+                MetadataFileWriteQueue.getInstance(context)
+            } catch (_: Throwable) { null }
+
+            val writeResult = writeQueue?.writeDirect(
                 track = finalTrack.toTrack(),
                 artworkBytes = artworkBytes
             )
+
+            if (writeResult != null && writeResult !is MetadataWriteResult.Written && writeResult !is MetadataWriteResult.AlreadyInSync && writeResult !is MetadataWriteResult.Partial) {
+                Log.e(TAG, "ARTWORK_WRITE_FAILED: Physical file write failed for item $itemId with fields $fieldNames: $writeResult")
+                return@withContext false
+            }
         }
+
+        val finalWriteState = if (fieldNames.contains("artwork") || item.provider == "Manual Cover") {
+            MetadataWriteState.ARTWORK_SAVED.name
+        } else {
+            finalTrack.metadataWriteState
+        }
+        val finalTrackToSave = finalTrack.copy(metadataWriteState = finalWriteState)
+        trackDao.updateTrack(finalTrackToSave)
+        inboxDao.updateStatus(itemId, "ACCEPTED")
+        com.example.util.AlbumArtHelper.invalidateTrack(finalTrackToSave.id, finalTrackToSave.artist, finalTrackToSave.album)
 
         Log.i(TAG, "Accepted selected fields ($fieldNames) for item $itemId (track ${track.id})")
         true
