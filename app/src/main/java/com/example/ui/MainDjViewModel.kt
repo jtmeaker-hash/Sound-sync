@@ -9,6 +9,8 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.command.PaletteCommand
+import com.example.ui.sidemenu.SideMenuDestination
 import com.example.analysis.AiAutoTagger
 import com.example.analysis.DuplicateDetector
 import com.example.analysis.TrackPlaybackHealthManager
@@ -360,6 +362,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     // Step 2 Core Managers
     val persistentQueueManager = com.example.player.PersistentQueueManager.getInstance(application)
+    val queueManager get() = persistentQueueManager
     val parametricEqManager = com.example.audio.ParametricEqManager.getInstance(application)
     val smartCrateManager = com.example.smartcrate.SmartCrateManager.getInstance(application)
 
@@ -657,6 +660,34 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _bulkEditingTracks = MutableStateFlow<List<Track>?>(null)
     val bulkEditingTracks = _bulkEditingTracks.asStateFlow()
+
+    private val _isCommandPaletteOpen = MutableStateFlow(false)
+    val isCommandPaletteOpen = _isCommandPaletteOpen.asStateFlow()
+
+    private val _commandPaletteQuery = MutableStateFlow("")
+    val commandPaletteQuery = _commandPaletteQuery.asStateFlow()
+
+    private val _djPrepTrack = MutableStateFlow<Track?>(null)
+    val djPrepTrack = _djPrepTrack.asStateFlow()
+
+    fun setDjPrepTrack(track: Track?) {
+        _djPrepTrack.value = track
+    }
+
+    fun openCommandPalette(query: String? = null) {
+        if (query != null) {
+            _commandPaletteQuery.value = query
+        }
+        _isCommandPaletteOpen.value = true
+    }
+
+    fun closeCommandPalette() {
+        _isCommandPaletteOpen.value = false
+    }
+
+    fun setCommandPaletteQuery(query: String) {
+        _commandPaletteQuery.value = query
+    }
 
     fun openBulkEditor(tracks: List<Track>) {
         _bulkEditingTracks.value = tracks
@@ -3843,6 +3874,139 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     fun dismissPlaybackIssue() {
         _playbackIssueDiagnostic.value = null
         _playbackIssueTrack.value = null
+    }
+
+    fun rescanSelectedTracks() {
+        val ids = _selectedTrackIds.value.toList()
+        if (ids.isEmpty()) {
+            showSnackbar("No tracks selected. Select tracks in the library first.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val tracks = trackDao.getTracksByIds(ids).map { it.toTrack() }
+            var updatedCount = 0
+            for (t in tracks) {
+                val file = java.io.File(t.filePath)
+                if (file.exists() && file.canRead()) {
+                    val scanned = com.example.metadata.AudioEmbeddedMetadataReader.read(getApplication(), t.filePath)
+                    val updated = t.copy(
+                        title = if (!scanned.title.isNullOrBlank() && scanned.title != "Unknown Title") scanned.title!! else t.title,
+                        artist = if (!scanned.artist.isNullOrBlank() && scanned.artist != "Unknown Artist") scanned.artist!! else t.artist,
+                        album = if (!scanned.album.isNullOrBlank()) scanned.album!! else t.album,
+                        bpm = if ((scanned.bpm ?: 0.0) > 0.0) scanned.bpm!! else t.bpm,
+                        camelotKey = if (!scanned.camelotKey.isNullOrBlank()) scanned.camelotKey!! else t.camelotKey
+                    )
+                    trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                    updatedCount++
+                }
+            }
+            withContext(Dispatchers.Main) {
+                showSnackbar("Rescanned $updatedCount selected tracks from file tags")
+            }
+        }
+    }
+
+    fun enrichSelectedTracksWithOnlineMetadata() {
+        val ids = _selectedTrackIds.value.toList()
+        if (ids.isEmpty()) {
+            showSnackbar("No tracks selected. Select tracks in the library first.")
+            return
+        }
+        viewModelScope.launch {
+            _isTaggingInProgress.value = true
+            val targets = allTracks.value.filter { it.id in ids }
+            showSnackbar("Enriching ${targets.size} selected tracks with online metadata...")
+            for (track in targets) {
+                try {
+                    val result = withContext(Dispatchers.IO) {
+                        metadataResolver.resolveTrackMetadata(
+                            track = track,
+                            forceRefresh = false,
+                            embedArtworkToFile = metadataSettings.value.writeToFileEnabled
+                        )
+                    }
+                    withContext(Dispatchers.IO) {
+                        trackDao.updateTrack(TrackEntity.fromTrack(result.updatedTrack))
+                    }
+                } catch (e: Exception) {
+                    Log.w("MainDjViewModel", "Online enrichment failed for ${track.title}: ${e.message}")
+                }
+            }
+            _isTaggingInProgress.value = false
+            showSnackbar("Online metadata search completed for ${targets.size} tracks")
+        }
+    }
+
+    fun executePaletteCommand(
+        command: PaletteCommand,
+        onNavigateSide: (SideMenuDestination) -> Unit
+    ) {
+        when (command.id) {
+            "rescan_selected" -> {
+                rescanSelectedTracks()
+            }
+            "rescan_library" -> {
+                scanDeviceMediaStore()
+            }
+            "analyse_selected" -> {
+                val selectedIds = _selectedTrackIds.value.toList()
+                if (selectedIds.isEmpty()) {
+                    showSnackbar("No tracks selected. Select tracks in the library first.")
+                } else {
+                    trackAnalysisManager.enqueueDiscoveredTracks(selectedIds)
+                    trackAnalysisManager.triggerQueueProcessing()
+                    showSnackbar("Enqueued ${selectedIds.size} selected tracks for analysis")
+                }
+            }
+            "find_metadata_selected" -> {
+                enrichSelectedTracksWithOnlineMetadata()
+            }
+            "clear_queue" -> {
+                queueManager.clearQueue(clearCurrent = false)
+                showSnackbar("Cleared upcoming playback queue")
+            }
+            "shuffle_queue" -> {
+                queueManager.setShuffle(true)
+                showSnackbar("Shuffle enabled and queue randomized")
+            }
+            "open_dj_prep" -> {
+                val target = _selectedTrackIds.value.firstOrNull()?.let { id -> allTracks.value.find { it.id == id } }
+                    ?: audioEngine.currentTrack.value
+                    ?: allTracks.value.firstOrNull()
+                setDjPrepTrack(target)
+                onNavigateSide(SideMenuDestination.DjPrep)
+            }
+            "open_car_mode" -> {
+                carModeManager.enterCarMode(manual = true)
+            }
+            "open_downloads_folder" -> {
+                navigateToDirectory("/storage/emulated/0/Download")
+                toggleFolderExplorer(true)
+            }
+            "reanalyse_all" -> {
+                trackAnalysisManager.reanalyseAllTracks()
+                showSnackbar("Enqueued entire library for reanalysis")
+            }
+            "analyse_missing" -> {
+                trackAnalysisManager.analyseMissingTracks()
+                showSnackbar("Enqueued tracks missing BPM/key for analysis")
+            }
+            "open_library_doctor" -> {
+                onNavigateSide(SideMenuDestination.LibraryDoctor)
+            }
+            "open_metadata_review" -> {
+                onNavigateSide(SideMenuDestination.MetadataReviewInbox)
+            }
+            "open_developer_diagnostics" -> {
+                onNavigateSide(SideMenuDestination.DeveloperDiagnostics)
+            }
+            "open_library_settings" -> {
+                onNavigateSide(SideMenuDestination.LibrarySettings)
+            }
+            else -> {
+                showSnackbar("Executed: ${command.title}")
+            }
+        }
     }
 
     override fun onCleared() {

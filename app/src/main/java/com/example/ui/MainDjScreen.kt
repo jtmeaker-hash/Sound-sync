@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -79,6 +80,7 @@ import com.example.model.UpdateState
 import com.example.ui.components.ApiConfigDialog
 import com.example.ui.components.DjMiniPlayer
 import com.example.ui.components.GoogleDriveBrowserView
+import com.example.ui.command.CommandPaletteDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
@@ -162,6 +164,11 @@ fun MainDjScreen(
     val inspectingTrackForProperties by viewModel.inspectingTrackForProperties.collectAsState()
     val playbackIssueDiagnostic by viewModel.playbackIssueDiagnostic.collectAsState()
     val playbackIssueTrack by viewModel.playbackIssueTrack.collectAsState()
+    val isCommandPaletteOpen by viewModel.isCommandPaletteOpen.collectAsState()
+    val commandPaletteQuery by viewModel.commandPaletteQuery.collectAsState()
+    val selectedTrackIds by viewModel.selectedTrackIds.collectAsState()
+    val playbackHistory by viewModel.queueManager.playbackHistory.collectAsState()
+    val recentTrackIds = remember(playbackHistory) { playbackHistory.map { it.id }.toSet() }
 
     // Song Finds States
     val songFinds by viewModel.songFinds.collectAsState()
@@ -282,6 +289,7 @@ fun MainDjScreen(
                             currentTab = selectedTab,
                             isScanning = isScanning,
                             onOpenMenu = { coroutineScope.launch { drawerState.open() } },
+                            onOpenCommandPalette = { viewModel.openCommandPalette() },
                             onOpenConfig = { viewModel.openApiConfigDialog() },
                             onRescan = { viewModel.scanDeviceMediaStore() }
                         )
@@ -617,6 +625,39 @@ fun MainDjScreen(
                 )
             }
 
+            // Command & Search Palette Dialog
+            CommandPaletteDialog(
+                isOpen = isCommandPaletteOpen,
+                initialQuery = commandPaletteQuery,
+                allTracks = allTracks,
+                selectedTrackIds = selectedTrackIds,
+                recentTrackIds = recentTrackIds,
+                onDismiss = { viewModel.closeCommandPalette() },
+                onQueryChanged = { viewModel.setCommandPaletteQuery(it) },
+                onExecuteCommand = { cmd ->
+                    viewModel.executePaletteCommand(cmd) { dest -> activeSideDestination = dest }
+                },
+                onPlayTrack = { track ->
+                    viewModel.playTrack(track)
+                },
+                onPlayNext = { track ->
+                    viewModel.queueManager.playNext(track)
+                    viewModel.showSnackbar("Play next: '${track.title}'")
+                },
+                onAddToQueue = { track ->
+                    viewModel.queueManager.addToQueue(track)
+                    viewModel.showSnackbar("Added to queue: '${track.title}'")
+                },
+                onOpenDjPrep = { track ->
+                    viewModel.setDjPrepTrack(track)
+                    activeSideDestination = SideMenuDestination.DjPrep
+                },
+                onOpenFolder = { path ->
+                    viewModel.navigateToDirectory(path)
+                    viewModel.toggleFolderExplorer(true)
+                }
+            )
+
             // Save Song Find Dialog
             pendingShare?.let { share ->
                 SaveSongFindDialog(
@@ -925,6 +966,7 @@ private fun DjTopAppBar(
     currentTab: DjTab,
     isScanning: Boolean,
     onOpenMenu: () -> Unit,
+    onOpenCommandPalette: () -> Unit,
     onOpenConfig: () -> Unit,
     onRescan: () -> Unit
 ) {
@@ -1009,6 +1051,18 @@ private fun DjTopAppBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                IconButton(
+                    onClick = onOpenCommandPalette,
+                    modifier = Modifier.size(32.dp).testTag("command_palette_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search & Commands",
+                        tint = theme.accent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
                 IconButton(onClick = onOpenConfig, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Default.Settings, contentDescription = "API Config", tint = theme.textSecondary, modifier = Modifier.size(18.dp))
                 }
@@ -1594,6 +1648,21 @@ private fun SideDestinationScreen(
                     com.example.ui.diagnostics.SelfTestScreen(
                         onBack = onClose
                     )
+                }
+                SideMenuDestination.DjPrep -> {
+                    val track = viewModel.djPrepTrack.collectAsState().value ?: playingTrack ?: allTracks.firstOrNull()
+                    if (track != null) {
+                        com.example.ui.inspector.TrackInspectorScreen(
+                            initialTrack = track,
+                            viewModel = viewModel,
+                            audioEngine = viewModel.audioEngine,
+                            onClose = onClose
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No track selected for DJ Prep", color = TextSecondary)
+                        }
+                    }
                 }
             }
         }

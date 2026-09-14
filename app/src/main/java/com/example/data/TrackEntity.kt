@@ -18,7 +18,13 @@ import com.example.model.Track
         Index(value = ["analysisState"]),
         Index(value = ["playabilityStatus"]),
         Index(value = ["physicalMediaKey"]),
-        Index(value = ["mediaStoreId"])
+        Index(value = ["mediaStoreId"]),
+        Index(value = ["title"]),
+        Index(value = ["artist"]),
+        Index(value = ["album"]),
+        Index(value = ["bpm"]),
+        Index(value = ["camelotKey"]),
+        Index(value = ["musicalKey"])
     ]
 )
 data class TrackEntity(

@@ -11,6 +11,7 @@ sealed class SideMenuDestination(val title: String) {
     object Eq : SideMenuDestination("Multipoint EQ")
     object HaasSurround : SideMenuDestination("Haas Surround")
     object CarMode : SideMenuDestination("Car Mode")
+    object DjPrep : SideMenuDestination("DJ Prep")
 
     // Settings
     object ListeningStats : SideMenuDestination("Listening Statistics")
