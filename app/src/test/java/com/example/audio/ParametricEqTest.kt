@@ -280,20 +280,140 @@ class ParametricEqTest {
     }
 
     @Test
-    fun testDefault8BandsAndPresets() {
-        val bands = ParametricEq.DEFAULT_8_BANDS
-        assertEquals(8, bands.size)
-        assertEquals("Sub-Bass", bands[0].name)
-        assertEquals(EqFilterType.LOW_SHELF, bands[0].type)
-        assertEquals("Air", bands[7].name)
-        assertEquals(EqFilterType.HIGH_SHELF, bands[7].type)
+    fun testDefault10BandsAndPresets() {
+        val bands8 = ParametricEq.DEFAULT_8_BANDS
+        assertEquals(8, bands8.size)
+
+        val bands10 = ParametricEq.DEFAULT_10_BANDS
+        assertEquals(10, bands10.size)
+        assertEquals("Sub-Bass", bands10[0].name)
+        assertEquals(EqFilterType.LOW_SHELF, bands10[0].type)
+        assertEquals("Air", bands10[9].name)
+        assertEquals(EqFilterType.HIGH_SHELF, bands10[9].type)
 
         // Verify presets
         val presets = ParametricEqManager.BUILT_IN_PRESETS
-        assertTrue(presets.isNotEmpty())
+        assertEquals("Must have 13 professional presets", 13, presets.size)
         for (p in presets) {
-            assertEquals("Preset ${p.name} must have 8 bands", 8, p.bands.size)
+            assertEquals("Preset ${p.name} must have 10 bands", 10, p.bands.size)
         }
+    }
+
+    @Test
+    fun testBandPassFilterAttenuation() {
+        val sampleRate = 44100
+        val centerFreq = 1000.0
+        val frames = 1024
+
+        val eq = ParametricEq(sampleRate)
+        eq.resetToFlat()
+        // Replace band 0 with a narrow BAND_PASS at 1000 Hz, Q = 2.0
+        val bandPassBand = EqBand(
+            id = 0,
+            name = "Bandpass 1k",
+            type = EqFilterType.BAND_PASS,
+            frequencyHz = centerFreq,
+            gainDb = 0.0,
+            q = 2.0,
+            isEnabled = true
+        )
+        eq.setBands(listOf(bandPassBand))
+
+        // Process center frequency (1000 Hz)
+        val centerBuf = generateSineWave(sampleRate, centerFreq, frames, 8000.0)
+        eq.processStereo(centerBuf, 0, frames)
+        val centerRms = computeRms(centerBuf)
+
+        // Reset and process out-of-band low frequency (100 Hz)
+        eq.resetFilters()
+        val lowBuf = generateSineWave(sampleRate, 100.0, frames, 8000.0)
+        eq.processStereo(lowBuf, 0, frames)
+        val lowRms = computeRms(lowBuf)
+
+        // Reset and process out-of-band high frequency (10000 Hz)
+        eq.resetFilters()
+        val highBuf = generateSineWave(sampleRate, 10000.0, frames, 8000.0)
+        eq.processStereo(highBuf, 0, frames)
+        val highRms = computeRms(highBuf)
+
+        assertTrue("Center frequency must pass with high RMS ($centerRms)", centerRms > 2000.0)
+        assertTrue("100 Hz out-of-band must be heavily attenuated ($lowRms vs $centerRms)", lowRms < centerRms * 0.2)
+        assertTrue("10 kHz out-of-band must be heavily attenuated ($highRms vs $centerRms)", highRms < centerRms * 0.2)
+    }
+
+    @Test
+    fun testDynamicAddAndRemoveBands() {
+        val eq = ParametricEq(44100)
+        assertEquals(10, eq.getBands().size)
+
+        val newBand = EqBand(
+            id = 10,
+            name = "Presence Boost",
+            type = EqFilterType.PEAKING,
+            frequencyHz = 3500.0,
+            gainDb = 4.0,
+            q = 1.5,
+            isEnabled = true
+        )
+        eq.addBand(newBand)
+        assertEquals(11, eq.getBands().size)
+        assertEquals(3500.0, eq.getBands()[10].frequencyHz, 0.001)
+
+        val removed = eq.removeBand(10)
+        assertTrue(removed)
+        assertEquals(10, eq.getBands().size)
+
+        // Cannot remove beyond 1 band minimum
+        while (eq.getBands().size > 1) {
+            eq.removeBand(0)
+        }
+        assertEquals(1, eq.getBands().size)
+        val cannotRemoveLast = eq.removeBand(0)
+        assertFalse(cannotRemoveLast)
+        assertEquals(1, eq.getBands().size)
+    }
+
+    @Test
+    fun testSoloBandAudition() {
+        val sampleRate = 44100
+        val frames = 1024
+        val eq = ParametricEq(sampleRate)
+
+        // Band 0: cut -18dB at 100 Hz
+        // Band 4: boost +12dB at 1000 Hz
+        eq.updateBand(0, 100.0, -18.0, 1.0, true)
+        eq.updateBand(4, 1000.0, 12.0, 2.0, true)
+
+        // When solo is null, all bands are active
+        eq.soloBandIndex = null
+        val fullBuf = generateSineWave(sampleRate, 1000.0, frames, 5000.0)
+        eq.processStereo(fullBuf, 0, frames)
+        val fullRms = computeRms(fullBuf)
+
+        // Solo band 4 (1000 Hz boost)
+        eq.resetFilters()
+        eq.soloBandIndex = 4
+        val soloBuf = generateSineWave(sampleRate, 1000.0, frames, 5000.0)
+        eq.processStereo(soloBuf, 0, frames)
+        val soloRms = computeRms(soloBuf)
+
+        // Both should have boosted 1000 Hz
+        assertTrue(soloRms > 4000.0)
+
+        // Now test 100 Hz when soloing band 4: band 0 cut is ignored during solo of band 4!
+        eq.resetFilters()
+        val solo100Buf = generateSineWave(sampleRate, 100.0, frames, 5000.0)
+        eq.processStereo(solo100Buf, 0, frames)
+        val solo100Rms = computeRms(solo100Buf)
+
+        // Now test 100 Hz without solo: band 0 cut is active!
+        eq.resetFilters()
+        eq.soloBandIndex = null
+        val cut100Buf = generateSineWave(sampleRate, 100.0, frames, 5000.0)
+        eq.processStereo(cut100Buf, 0, frames)
+        val cut100Rms = computeRms(cut100Buf)
+
+        assertTrue("When soloing band 4, band 0 cut is bypassed ($solo100Rms vs $cut100Rms)", solo100Rms > cut100Rms * 1.5)
     }
 
     @Test

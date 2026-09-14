@@ -1143,12 +1143,14 @@ class DjAudioEngine(private val context: Context) {
                                         dspEq.preampDb = parametricEqManager.preampDb.value
                                         dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
                                         dspEq.setBands(parametricEqManager.currentBands.value)
+                                        dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
                                     }
                                     dspEq.processStereo(pcmStereo, 0, filled)
                                 }
                                 if (haasEffect.isActive) {
                                     haasEffect.process(pcmStereo, 0, filled, sampleRate)
                                 }
+                                parametricEqManager.updateLiveSpectrum(pcmStereo, filled, sampleRate)
 
                                 // ── Live RMS & Clipping Metrics ────────
                                 val nowMs = System.currentTimeMillis()
@@ -1240,10 +1242,12 @@ class DjAudioEngine(private val context: Context) {
                                 dspEq.preampDb = parametricEqManager.preampDb.value
                                 dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
                                 dspEq.setBands(parametricEqManager.currentBands.value)
+                                dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
                             }
                             dspEq.processStereo(pcmStereo, 0, nextFrames)
                         }
                         if (haasEffect.isActive) haasEffect.process(pcmStereo, 0, nextFrames, sampleRate)
+                        parametricEqManager.updateLiveSpectrum(pcmStereo, nextFrames, sampleRate)
                         if (generationGate.isCurrent(session)) {
                             writePcmBlocking(at, pcmStereo, nextFrames * 2)
                             nextOnlyPositionFrames += nextFrames
@@ -1548,12 +1552,14 @@ class DjAudioEngine(private val context: Context) {
                             dspEq.preampDb = parametricEqManager.preampDb.value
                             dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
                             dspEq.setBands(parametricEqManager.currentBands.value)
+                            dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
                         }
                         dspEq.processStereo(pcmStereo, 0, filled)
                     }
                     if (haasEffect.isActive) {
                         haasEffect.process(pcmStereo, 0, filled, sampleRate)
                     }
+                    parametricEqManager.updateLiveSpectrum(pcmStereo, filled, sampleRate)
 
                     val nowMs = System.currentTimeMillis()
                     if (nowMs - lastMetricsPublishTimeMs >= 40L && filled > 0) {
@@ -1629,10 +1635,12 @@ class DjAudioEngine(private val context: Context) {
                                 dspEq.preampDb = parametricEqManager.preampDb.value
                                 dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
                                 dspEq.setBands(parametricEqManager.currentBands.value)
+                                dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
                             }
                             dspEq.processStereo(pcmStereo, 0, nextFrames)
                         }
                         if (haasEffect.isActive) haasEffect.process(pcmStereo, 0, nextFrames, sampleRate)
+                        parametricEqManager.updateLiveSpectrum(pcmStereo, nextFrames, sampleRate)
                         if (generationGate.isCurrent(session)) {
                             writePcmBlocking(at, pcmStereo, nextFrames * 2, session)
                             nextOnlyPositionFrames += nextFrames

@@ -23,9 +23,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LyricsEntity::class,
         MetadataBackupEntity::class,
         TrackBrainStatusEntity::class,
-        com.example.djprep.DjPrepEntity::class
+        com.example.djprep.DjPrepEntity::class,
+        ArtistEntity::class,
+        TrackArtistEntity::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -42,6 +44,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun metadataBackupDao(): MetadataBackupDao
     abstract fun trackBrainDao(): TrackBrainDao
     abstract fun djPrepDao(): com.example.djprep.DjPrepDao
+    abstract fun artistDao(): ArtistDao
 
     companion object {
         @Volatile
@@ -807,6 +810,51 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `artists` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `name` TEXT NOT NULL,
+                        `normalizedName` TEXT NOT NULL,
+                        `songCount` INTEGER NOT NULL DEFAULT 0,
+                        `albumCount` INTEGER NOT NULL DEFAULT 0,
+                        `totalDurationSeconds` INTEGER NOT NULL DEFAULT 0,
+                        `updatedAt` INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_artists_name` ON `artists` (`name`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_artists_normalizedName` ON `artists` (`normalizedName`)")
+                } catch (_: Exception) {}
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `track_artists` (
+                        `trackId` TEXT NOT NULL,
+                        `artistId` TEXT NOT NULL,
+                        `artistName` TEXT NOT NULL,
+                        `role` TEXT NOT NULL DEFAULT 'PRIMARY',
+                        PRIMARY KEY(`trackId`, `artistId`)
+                    )
+                    """.trimIndent()
+                )
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_artists_trackId` ON `track_artists` (`trackId`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_artists_artistId` ON `track_artists` (`artistId`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_artists_artistName` ON `track_artists` (`artistName`)")
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -834,7 +882,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_17_18,
                     MIGRATION_18_19,
                     MIGRATION_19_20,
-                    MIGRATION_20_21
+                    MIGRATION_20_21,
+                    MIGRATION_21_22
                 )
                 .fallbackToDestructiveMigration()
                 .build()

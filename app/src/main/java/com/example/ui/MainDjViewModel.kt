@@ -911,29 +911,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }.flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // Dynamically grouped Artists from Real indexed tracks (O(N+M) lookup using pre-grouped map)
+    // Dynamically grouped Artists splitting collaborations into individual artist entities
     val allArtists: StateFlow<List<com.example.model.Artist>> = combine(allTracks, allAlbums) { tracks, albums ->
         val startNs = System.nanoTime()
-        val albumsByArtist = albums.groupBy { it.artist.trim().lowercase() }
-        val artists = tracks.groupBy { it.artist.trim().lowercase() }
-            .map { entry ->
-                val artistSongs = entry.value.sortedBy { it.title.lowercase() }
-                val artistName = artistSongs.firstOrNull()?.artist?.ifBlank { "Unknown Artist" } ?: "Unknown Artist"
-                val artistAlbums = albumsByArtist[entry.key] ?: emptyList()
-                val totalSec = artistSongs.sumOf { it.durationSeconds }
-                com.example.model.Artist(
-                    id = "artist_${artistName.hashCode()}",
-                    name = artistName,
-                    albumCount = artistAlbums.size,
-                    songCount = artistSongs.size,
-                    totalDurationSeconds = totalSec,
-                    albums = artistAlbums,
-                    songs = artistSongs
-                )
-            }
-            .sortedBy { if (it.name.equals("Unknown Artist", ignoreCase = true)) "zzzz" else it.name.lowercase() }
+        val artists = com.example.metadata.artist.ArtistIndexManager.buildArtistsFromTracks(tracks, albums)
         val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
-        Log.d("SoundSyncPerf", "artist grouping in ${elapsedMs}ms (${artists.size} artists)")
+        Log.d("SoundSyncPerf", "individual artist grouping in ${elapsedMs}ms (${artists.size} individual artists)")
         artists
     }.flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -1260,7 +1243,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private fun setupAutoBackupObserver() {
         viewModelScope.launch(Dispatchers.IO) {
             var initialTracksEmitted = false
-            trackDao.getAllTracks().collect {
+            trackDao.getAllTracks().collect { tracks ->
+                try {
+                    com.example.metadata.artist.ArtistIndexManager.getInstance(getApplication()).rebuildIndex(tracks)
+                } catch (_: Exception) {}
                 if (!initialTracksEmitted) {
                     initialTracksEmitted = true
                 } else {
@@ -2244,14 +2230,20 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
         val currentArtists = allArtists.value
         val exactMatch = currentArtists.firstOrNull { it.name.equals(targetName, ignoreCase = true) }
-        val catalogMatch = if (exactMatch == null && track.appleArtistId != null) {
+        val collabMatch = if (exactMatch == null) {
+            val individualNames = com.example.metadata.artist.ArtistCollaborationParser.splitArtists(targetName)
+            individualNames.firstNotNullOfOrNull { ind ->
+                currentArtists.firstOrNull { it.name.equals(ind, ignoreCase = true) }
+            }
+        } else null
+        val catalogMatch = if (exactMatch == null && collabMatch == null && track.appleArtistId != null) {
             currentArtists.firstOrNull { a -> a.songs.any { it.appleArtistId == track.appleArtistId } }
         } else null
-        val containsMatch = if (exactMatch == null && catalogMatch == null) {
+        val containsMatch = if (exactMatch == null && collabMatch == null && catalogMatch == null) {
             currentArtists.firstOrNull { it.name.contains(targetName, ignoreCase = true) || targetName.contains(it.name, ignoreCase = true) }
         } else null
 
-        val resolvedArtist = exactMatch ?: catalogMatch ?: containsMatch ?: run {
+        val resolvedArtist = exactMatch ?: collabMatch ?: catalogMatch ?: containsMatch ?: run {
             val songs = allTracks.value.filter {
                 it.artist.contains(targetName, ignoreCase = true) || it.albumArtist.contains(targetName, ignoreCase = true)
             }.ifEmpty { listOf(track) }

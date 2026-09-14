@@ -84,6 +84,8 @@ class HaasSurroundEffect {
     // Biquad filters for spatial band-limiting and mono-bass protection
     private val spatialHpFilter = BiquadFilter()
     private val spatialLpFilter = BiquadFilter()
+    private val spatialHpFilterR = BiquadFilter()
+    private val spatialLpFilterR = BiquadFilter()
     private val sideHpFilter = BiquadFilter()
     private var lastSampleRate = -1
 
@@ -144,10 +146,12 @@ class HaasSurroundEffect {
         val safeSampleRate = sampleRate.coerceIn(8000, 192000)
         if (safeSampleRate != lastSampleRate) {
             val srFloat = safeSampleRate.toFloat()
-            // 2nd-order Butterworth HP filter for spatial delay line (cutoff ~220 Hz)
+            // 2nd-order Butterworth HP filter for spatial delay lines (cutoff ~220 Hz)
             spatialHpFilter.configureHighPass(220f, srFloat)
+            spatialHpFilterR.configureHighPass(220f, srFloat)
             // 2nd-order Butterworth LP filter for tone damping (cutoff ~7500 Hz)
             spatialLpFilter.configureLowPass(7500f, srFloat)
+            spatialLpFilterR.configureLowPass(7500f, srFloat)
             // 2nd-order Butterworth HP crossover for side channel mono-bass protection (cutoff ~160 Hz)
             sideHpFilter.configureHighPass(160f, srFloat)
             lastSampleRate = safeSampleRate
@@ -159,7 +163,7 @@ class HaasSurroundEffect {
             val idx = offset + i * 2
             if (idx + 1 >= buffer.size) break
 
-            // Smooth live parameters
+            // Smooth live parameters to ensure zero clicks/pops
             currentAmount += (targetAmount - currentAmount) * smoothingRate
             currentDelayMs += (targetDelayMs - currentDelayMs) * smoothingRate
 
@@ -178,33 +182,45 @@ class HaasSurroundEffect {
             // 2. Write mid signal into circular spatial delay buffer
             spatialDelayBuffer[writePos] = mid
 
-            // 3. Read delayed signal with sub-sample fractional interpolation
-            val delaySamples = (currentDelayMs / 1000f * srFloat).coerceIn(1f, (BUFFER_SIZE - 2).toFloat())
-            val intDelay = delaySamples.toInt()
-            val frac = delaySamples - intDelay
+            // 3. Dual-tap decorrelation: primary tap + complementary offset tap for balanced soundstage
+            val delaySamplesL = (currentDelayMs / 1000f * srFloat).coerceIn(1f, (BUFFER_SIZE - 4).toFloat())
+            val intDelayL = delaySamplesL.toInt()
+            val fracL = delaySamplesL - intDelayL
+            val readIdxL0 = (writePos - intDelayL + BUFFER_SIZE) and BUFFER_MASK
+            val readIdxL1 = (readIdxL0 - 1 + BUFFER_SIZE) and BUFFER_MASK
+            val rawDelayedL = spatialDelayBuffer[readIdxL0] * (1f - fracL) + spatialDelayBuffer[readIdxL1] * fracL
 
-            val readIdx0 = (writePos - intDelay + BUFFER_SIZE) and BUFFER_MASK
-            val readIdx1 = (readIdx0 - 1 + BUFFER_SIZE) and BUFFER_MASK
-            val rawDelayed = spatialDelayBuffer[readIdx0] * (1f - frac) + spatialDelayBuffer[readIdx1] * frac
+            val delaySamplesR = (currentDelayMs * 1.25f / 1000f * srFloat).coerceIn(1f, (BUFFER_SIZE - 4).toFloat())
+            val intDelayR = delaySamplesR.toInt()
+            val fracR = delaySamplesR - intDelayR
+            val readIdxR0 = (writePos - intDelayR + BUFFER_SIZE) and BUFFER_MASK
+            val readIdxR1 = (readIdxR0 - 1 + BUFFER_SIZE) and BUFFER_MASK
+            val rawDelayedR = spatialDelayBuffer[readIdxR0] * (1f - fracR) + spatialDelayBuffer[readIdxR1] * fracR
 
             writePos = (writePos + 1) and BUFFER_MASK
 
-            // 4. Band-limit the spatial delay line:
-            // 2nd-order High-Pass filter removes low-end mud, boxiness, and sub-bass comb filtering
-            val hpOut = spatialHpFilter.process(rawDelayed)
-            // Tone damping filter softens brittle high frequencies
-            val filteredSpatial = spatialLpFilter.process(hpOut)
+            // 4. Band-limit the spatial delay lines:
+            // High-Pass removes sub-bass comb filtering, Low-Pass tone-damps brittle highs
+            val hpOutL = spatialHpFilter.process(rawDelayedL)
+            val filteredSpatialL = spatialLpFilter.process(hpOutL)
 
-            // 5. Side channel processing & mono-bass protection
-            val widthScale = 1.0f + currentAmount * 0.5f
-            val spatialMix = currentAmount * 0.40f
+            val hpOutR = spatialHpFilterR.process(rawDelayedR)
+            val filteredSpatialR = spatialLpFilterR.process(hpOutR)
+
+            val spatialDifference = (filteredSpatialL - filteredSpatialR) * 0.5f
+
+            // 5. Progressive widening curve:
+            // Gentle and subtle in lower range (0.0..0.3), dramatically expansive and immersive in upper range (0.5..1.0)
+            val progressiveAmount = currentAmount * (0.35f + 0.65f * currentAmount)
+            val widthScale = 1.0f + progressiveAmount * 1.35f // 1.0x (neutral) up to 2.35x at max
+            val spatialMix = progressiveAmount * 0.70f // 0.0 to 0.70 spatial decorrelation
 
             val sideProcessed = if (bassProtect) {
-                // High-pass the side channel so low-end remains 100% mono centered
+                // High-pass the side channel so bass (<160 Hz) remains 100% centered mono
                 val sideHp = sideHpFilter.process(side)
-                sideHp * widthScale + filteredSpatial * spatialMix
+                sideHp * widthScale + spatialDifference * spatialMix
             } else {
-                side * widthScale + filteredSpatial * spatialMix
+                side * widthScale + spatialDifference * spatialMix
             }
 
             // 6. Stereo reconstruction: L = Mid + Side, R = Mid - Side
@@ -212,8 +228,8 @@ class HaasSurroundEffect {
             val leftOut = mid + sideProcessed
             val rightOut = mid - sideProcessed
 
-            // 7. Equal-energy gain normalization
-            val gainComp = 1.0f / sqrt(1.0f + 0.35f * currentAmount * currentAmount)
+            // 7. Equal-energy gain normalization: prevents loudness jump and maintains clean headroom
+            val gainComp = 1.0f / sqrt(1.0f + 0.55f * currentAmount * currentAmount)
             val leftNormalized = leftOut * gainComp
             val rightNormalized = rightOut * gainComp
 
@@ -243,6 +259,8 @@ class HaasSurroundEffect {
         writePos = 0
         spatialHpFilter.reset()
         spatialLpFilter.reset()
+        spatialHpFilterR.reset()
+        spatialLpFilterR.reset()
         sideHpFilter.reset()
         currentAmount = 0f
         targetAmount = if (isEnabled) configuredAmount else 0f

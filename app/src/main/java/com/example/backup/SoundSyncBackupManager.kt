@@ -70,6 +70,7 @@ class SoundSyncBackupManager(
         private const val TAG = "SoundSyncBackupManager"
         private const val PREFS_NAME = "soundsync_backup_prefs"
         private const val KEY_AUTO_BACKUP_ENABLED = "auto_backup_enabled"
+        private const val KEY_AUTO_BACKUP_EXPLICIT_SET = "auto_backup_explicit_set"
         private const val KEY_CUSTOM_TREE_URI = "custom_backup_tree_uri"
         private const val KEY_LAST_BACKUP_TIME = "last_backup_time"
         private const val KEY_LAST_BACKUP_TRACKS = "last_backup_tracks"
@@ -89,14 +90,31 @@ class SoundSyncBackupManager(
                 }
             }
         }
+
+        @androidx.annotation.VisibleForTesting
+        fun resetInstance() {
+            INSTANCE = null
+        }
     }
 
     fun isAutoBackupEnabled(): Boolean {
-        return prefs.getBoolean(KEY_AUTO_BACKUP_ENABLED, true)
+        // Stage 1 requirement: Auto Backup MUST default to OFF.
+        // If the user has not explicitly configured it, default conservatively to false (OFF).
+        if (!prefs.contains(KEY_AUTO_BACKUP_EXPLICIT_SET)) {
+            return false
+        }
+        return prefs.getBoolean(KEY_AUTO_BACKUP_ENABLED, false)
     }
 
     fun setAutoBackupEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_AUTO_BACKUP_ENABLED, enabled).apply()
+        prefs.edit()
+            .putBoolean(KEY_AUTO_BACKUP_ENABLED, enabled)
+            .putBoolean(KEY_AUTO_BACKUP_EXPLICIT_SET, true)
+            .commit()
+        if (!enabled) {
+            autoBackupJob?.cancel()
+            autoBackupJob = null
+        }
         _summaryFlow.value = loadSummary()
     }
 

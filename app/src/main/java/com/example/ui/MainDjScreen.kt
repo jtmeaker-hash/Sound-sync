@@ -98,6 +98,7 @@ import com.example.ui.djtools.TapBpmTool
 import com.example.ui.settings.AppearanceSettingsScreen
 import com.example.ui.settings.GitHubSettingsScreen
 import com.example.ui.settings.LibrarySettingsScreen
+import com.example.ui.settings.MetadataSettingsScreen
 import com.example.ui.settings.PlaybackSettingsScreen
 import com.example.ui.sidemenu.SideMenuDestination
 import com.example.ui.sidemenu.SideNavigationDrawerContent
@@ -1453,7 +1454,6 @@ private fun SideDestinationScreen(
                         onAnalyseIncompleteBrain = { viewModel.analyseIncompleteBrain() },
                         onReanalyseBrainCategory = { viewModel.reanalyseBrainCategory(it) },
                         onCancelBrainWork = { viewModel.cancelBrainWork() },
-                        focusMetadataOnly = false,
                         onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
                         onSetAppleSearchEnabled = viewModel::setAppleSearchEnabled,
                         onSetTheAudioDbEnabled = viewModel::setTheAudioDbEnabled,
@@ -1492,10 +1492,7 @@ private fun SideDestinationScreen(
                     )
                 }
                 SideMenuDestination.MetadataSettings -> {
-                    LibrarySettingsScreen(
-                        storageSources = storageSources,
-                        operationJournal = operationJournal,
-                        scanServiceState = scanServiceState,
+                    MetadataSettingsScreen(
                         metadataSettings = viewModel.metadataSettings.collectAsState().value,
                         brainSummary = viewModel.brainSummary.collectAsState().value,
                         onPauseBrain = { viewModel.pauseBrainAnalysis() },
@@ -1504,7 +1501,6 @@ private fun SideDestinationScreen(
                         onAnalyseIncompleteBrain = { viewModel.analyseIncompleteBrain() },
                         onReanalyseBrainCategory = { viewModel.reanalyseBrainCategory(it) },
                         onCancelBrainWork = { viewModel.cancelBrainWork() },
-                        focusMetadataOnly = true,
                         onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
                         onSetAppleSearchEnabled = viewModel::setAppleSearchEnabled,
                         onSetTheAudioDbEnabled = viewModel::setTheAudioDbEnabled,
@@ -1514,20 +1510,6 @@ private fun SideDestinationScreen(
                         onSetShowProvenanceBadges = viewModel::setShowProvenanceBadges,
                         onSetConcurrency = viewModel::setEnrichmentConcurrency,
                         onSetBpmRange = viewModel::setBpmRange,
-                        onTriggerSync = { viewModel.triggerCloudSync() },
-                        onUndoOperation = { viewModel.undoJournalOperation(it) },
-                        onMountSaf = onPickSafFolder,
-                        onPickAudioFiles = onPickAudioFiles,
-                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
-                        onCleanMissingFiles = { viewModel.cleanMissingFiles() },
-                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
-                        onClearLibrary = { viewModel.clearLibrary() },
-                        onPauseScan = { viewModel.pauseScanService() },
-                        onResumeScan = { viewModel.resumeScanService() },
-                        onCancelScan = { viewModel.cancelScanService() },
-                        onOpenGoogleDrive = { viewModel.openGoogleDriveBrowser() },
-                        onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
-                        onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() },
                         isPushingMetadata = viewModel.isPushingMetadata.collectAsState().value,
                         pushProgress = viewModel.pushMetadataProgress.collectAsState().value,
                         pushReport = viewModel.pushMetadataReport.collectAsState().value,

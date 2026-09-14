@@ -219,6 +219,7 @@ class SoundSyncStep1FoundationTest {
             override fun metadataBackupDao(): com.example.data.MetadataBackupDao = java.lang.reflect.Proxy.newProxyInstance(com.example.data.MetadataBackupDao::class.java.classLoader, arrayOf(com.example.data.MetadataBackupDao::class.java)) { _, _, _ -> null } as com.example.data.MetadataBackupDao
             override fun trackBrainDao(): com.example.data.TrackBrainDao = java.lang.reflect.Proxy.newProxyInstance(com.example.data.TrackBrainDao::class.java.classLoader, arrayOf(com.example.data.TrackBrainDao::class.java)) { _, _, _ -> null } as com.example.data.TrackBrainDao
             override fun djPrepDao(): com.example.djprep.DjPrepDao = java.lang.reflect.Proxy.newProxyInstance(com.example.djprep.DjPrepDao::class.java.classLoader, arrayOf(com.example.djprep.DjPrepDao::class.java)) { _, _, _ -> null } as com.example.djprep.DjPrepDao
+            override fun artistDao(): com.example.data.ArtistDao = java.lang.reflect.Proxy.newProxyInstance(com.example.data.ArtistDao::class.java.classLoader, arrayOf(com.example.data.ArtistDao::class.java)) { _, _, _ -> null } as com.example.data.ArtistDao
             override fun clearAllTables() {
                 tracks.clear()
                 playlists.clear()
