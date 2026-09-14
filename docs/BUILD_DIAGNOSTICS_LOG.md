@@ -719,3 +719,79 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 34839546832 — FAIL
+
+- **Date:** 2026-09-14T11:47:46.544068+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `Debug`
+- **Commit:** [`c590410e30`](https://github.com/jtmeaker-hash/Sound-sync/commit/c590410e304ab4ad53db3ef0eaef685791a1777a)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/34839546832)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `ExampleRobolectricTest > ScanStateManager correctly recovers from interrupted scan FAILED`
+- `java.lang.AssertionError at ExampleRobolectricTest.kt:215`
+- `StorageDiagnosticsAndScanLifecycleTest > testAppKilledReopenedDuringScan FAILED`
+- `java.lang.AssertionError at StorageDiagnosticsAndScanLifecycleTest.kt:266`
+- `481 tests completed, 2 failed, 2 skipped`
+- `> Task :app:testDebugUnitTest FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+- `Execution failed for task ':app:testDebugUnitTest'.`
+- `BUILD FAILED in 3m 58s`
+
+### Summary of changes
+
+SoundSync Update Pack: Stages 1 & 2 Completed
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+c590410 SoundSync Update Pack: Stages 1 & 2 Completed
+ SOUNDSYNC_UPDATE_PACK_STATUS.md                    |   62 ++
+ .../main/java/com/example/audio/DjAudioEngine.kt   |    8 +
+ .../java/com/example/audio/HaasSurroundEffect.kt   |   64 +-
+ .../main/java/com/example/audio/ParametricEq.kt    |  102 +-
+ .../java/com/example/audio/ParametricEqManager.kt  |  438 ++++++--
+ .../com/example/backup/SoundSyncBackupManager.kt   |   22 +-
+ app/src/main/java/com/example/data/AppDatabase.kt  |   55 +-
+ app/src/main/java/com/example/data/ArtistDao.kt    |   59 ++
+ app/src/main/java/com/example/data/ArtistEntity.kt |   45 +
+ .../metadata/artist/ArtistCollaborationParser.kt   |  125 +++
+ .../example/metadata/artist/ArtistIndexManager.kt  |  202 ++++
+ app/src/main/java/com/example/ui/MainDjScreen.kt   |   22 +-
+ .../main/java/com/example/ui/MainDjViewModel.kt    |   40 +-
+ .../example/ui/components/ParametricEqDialog.kt    | 1050 +++++++++++++++-----
+ .../example/ui/settings/LibrarySettingsScreen.kt   |   58 +-
+ .../example/ui/settings/MetadataSettingsScreen.kt  |  126 +++
+ .../com/example/LocalFirstMetadataMergeTest.kt     |    1 +
+ .../ManualCoverArtMdApprovalIntegrationTest.kt     |    1 +
+ .../java/com/example/MetadataSafetyPipelineTest.kt |    1 +
+ .../com/example/SoundSyncStep1FoundationTest.kt    |    1 +
+ .../example/Stage1LibraryMetadataSettingsTest.kt   |  284 ++++++
+ .../java/com/example/audio/ParametricEqTest.kt     |  138 ++-
+ 22 files changed, 2437 insertions(+), 467 deletions(-)
+```
+
+---
