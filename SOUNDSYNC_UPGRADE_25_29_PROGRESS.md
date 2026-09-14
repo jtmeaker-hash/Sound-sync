@@ -2,8 +2,8 @@
 
 ## Status Overview
 - **Branch**: `Debug`
-- **Active Stage**: Stage 27 — Full Persistent Session State
-- **Completed Stages**: Stage 25 — Command / Search Palette, Stage 26 — Local-First Metadata Merging
+- **Active Stage**: Stage 29 — Queue / Shuffle / Playback History Architecture
+- **Completed Stages**: Stage 25 — Command / Search Palette, Stage 26 — Local-First Metadata Merging, Stage 27 — Persistent Application & Playback State, Stage 28 — DJ Prep Environment
 
 ---
 
@@ -117,10 +117,58 @@
   - `LocalFirstMetadataMergeTest`: ALL PASSED.
 
 ### Stage 28 — DJ Prep Environment
-- **Status**: PENDING
+- **Status**: COMPLETE
+- **Delivered Capabilities**:
+  - **Dedicated DJ Prep Screen** (`DjPrepScreen.kt`): Professional, utilitarian mini-track preparation workspace accessible via side menu (`SideMenuDestination.DjPrep`), track context menus, and global command palette.
+  - **Zoomable/Scrollable Waveform with Superimposed Beat Grid**: Interactive canvas supporting horizontal pinch/slider zoom, showing playback playhead, downbeat markers with bar numbering, intermediate beat ticks, and color-coded cue flags.
+  - **8 Hot Cue Markers (A–H)**: Distinct color badges (Red, Orange, Yellow, Green, Teal, Cyan, Indigo, Purple). Tap pad to jump or set at playhead; dialog for renaming or deleting cues.
+  - **Ordered Memory Cues**: Chronologically sorted reference markers with dedicated Previous / Next jump buttons and comment annotations.
+  - **Beat Grid Manipulation & Auditory Metronome**:
+    - Shift first downbeat to current playhead position.
+    - Fine nudge grid offset (±1ms, ±10ms).
+    - BPM double (×2) and halve (÷2) actions with immediate grid recalculation and manual override flag setting.
+    - Reset grid to analyzed detected BPM and Key.
+    - Real-time auditory metronome synthesizing 16-bit mono PCM clicks (2200 Hz accented downbeat, 1200 Hz beats 2–4) for audible verification against audio.
+  - **Native Key Lock (Master Tempo)**: Powered by native Android `AudioTrack.playbackParams` (API 23+) maintaining 1.0f pitch while adjusting tempo, or tracking pitch with tempo when disabled.
+  - **Phrase Markers**: Structural region markers (Intro, Verse, Build, Drop, Breakdown, Chorus, Outro, Custom) rendered as an interactive colored ribbon above the waveform with full CRUD editing.
+  - **Analysis & Manual Override Protection**: `isManualBpm` and `isManualKey` are strictly preserved in `TrackDao.upsertPhysicalTrack` and `TrackAnalysisManager`, guaranteeing that background rescans never overwrite DJ-corrected BPM, keys, grids, or cue points.
+  - **Prep Status Workflow**: Tracks advance through `NOT_ANALYSED` -> `ANALYSED` -> `NEEDS_REVIEW` -> `PREPPED`. Supports single-track status toggling and batch updates from library selection or command palette (`mark_prepped_selected`).
+  - **Durable Persistence**: Stored in Room DB `dj_prep_data` table via `DjPrepEntity`, `DjPrepDao`, and `MIGRATION_20_21` (AppDatabase bumped to v21).
+- **Files Changed / Added**:
+  - `app/src/main/java/com/example/djprep/DjPrepModels.kt` (New)
+  - `app/src/main/java/com/example/djprep/DjPrepEntity.kt` (New)
+  - `app/src/main/java/com/example/djprep/DjPrepDao.kt` (New)
+  - `app/src/main/java/com/example/djprep/DjPrepManager.kt` (New)
+  - `app/src/main/java/com/example/ui/djprep/DjPrepScreen.kt` (New)
+  - `app/src/main/java/com/example/data/AppDatabase.kt` (Added `DjPrepEntity`, `djPrepDao()`, `MIGRATION_20_21`, DB v21)
+  - `app/src/main/java/com/example/data/TrackDao.kt` (Preserve manual BPM/key flags in `upsertPhysicalTrack`)
+  - `app/src/main/java/com/example/analysis/TrackAnalysisManager.kt` (Analysis loop respects manual BPM/key overrides)
+  - `app/src/main/java/com/example/audio/DjAudioEngine.kt` (Added native `playbackParams` key lock support and `keyLockEnabled` state flow)
+  - `app/src/main/java/com/example/ui/MainDjScreen.kt` (Integrated `DjPrep` screen routing)
+  - `app/src/main/java/com/example/ui/MainDjViewModel.kt` (Integrated prep actions and batch command palette trigger)
+  - `app/src/test/java/com/example/DjPrepEnvironmentTest.kt` (New test suite with 11 comprehensive tests)
+  - `app/src/test/java/com/example/LocalFirstMetadataMergeTest.kt` (Implemented `djPrepDao()` in test DB stub)
+  - `app/src/test/java/com/example/MetadataSafetyPipelineTest.kt` (Implemented `djPrepDao()` in test DB stub)
+  - `app/src/test/java/com/example/SoundSyncStep1FoundationTest.kt` (Implemented `djPrepDao()` in test DB stub)
+- **Tests Performed**:
+  - `DjPrepEnvironmentTest`:
+    1. `testHotCueCrudAndNavigation`: Set, rename, delete, jump Hot Cues A-H.
+    2. `testMemoryCuesOrderedNavigation`: Chronological sorting and Previous/Next navigation.
+    3. `testSetFirstDownbeatAndNudgeGrid`: Downbeat repositioning, ±1ms, -10ms offset nudges, beat timestamp calculations.
+    4. `testDoubleAndHalveBpm`: BPM doubling, halving, manual override flags, and reset to analyzed.
+    5. `testManualBpmAndKeyRescanImmunity`: Manual BPM/key survive library rescan.
+    6. `testPhraseMarkerCrudAndColorPersistence`: Phrase markers CRUD and ribbon visualization data.
+    7. `testKeyLockAudioEngine`: Native Key Lock toggle and audio engine state flow.
+    8. `testPrepStatusWorkflowAndBatchUpdate`: Single and batch status transitions to PREPPED.
+    9. `testMissingMetadataTrackGracefulHandling`: Safe defaults for tracks missing BPM, key, or duration.
+    10. `testMetronomeClickPcmGeneration`: Synthesized 16-bit mono PCM click audio (accented vs standard).
+    11. `testDjPrepEntityJsonSerialization`: Lossless Room entity round-trip conversion.
+    (ALL 11 PASSED)
+  - `PersistentAppStateTest`: ALL PASSED (0 regressions).
+  - `LocalFirstMetadataMergeTest`: ALL PASSED (0 regressions).
 
 ### Stage 29 — Queue / Shuffle / Playback History Architecture
-- **Status**: PENDING
+- **Status**: IN PROGRESS
 
 ---
 
@@ -129,4 +177,6 @@
 - Stage 25 compilation and unit tests passed without regressions.
 - Stage 26 compilation and unit tests passed without regressions.
 - Stage 27 compilation and unit tests passed without regressions.
+- Stage 28 compilation and unit tests passed without regressions.
+
 

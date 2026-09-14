@@ -615,11 +615,11 @@ class TrackAnalysisManager private constructor(
                 if (embedded != null) {
                     var modified = false
                     var t = updatedTrack
-                    if (t.bpm <= 0.0 && embedded.hasBpm) {
+                    if (!t.isManualBpm && t.bpm <= 0.0 && embedded.hasBpm) {
                         t = t.copy(bpm = embedded.bpm ?: 0.0, isManualBpm = false)
                         modified = true
                     }
-                    if (t.musicalKey.isBlank() && embedded.hasKey) {
+                    if (!t.isManualKey && t.musicalKey.isBlank() && embedded.hasKey) {
                         t = t.copy(
                             musicalKey = embedded.musicalKey.orEmpty(),
                             camelotKey = embedded.camelotKey.orEmpty(),
@@ -652,12 +652,12 @@ class TrackAnalysisManager private constructor(
             }
 
             // 2. Perform DSP detection for BPM and Key if still missing
-            if (!updatedTrack.hasValidBpm || !updatedTrack.hasValidKey) {
+            if ((!updatedTrack.isManualBpm && !updatedTrack.hasValidBpm) || (!updatedTrack.isManualKey && !updatedTrack.hasValidKey)) {
                 dspSemaphore.withPermit {
                     try {
                         val dspResult = pcmAnalyzer.analyze(updatedTrack)
                         var t = updatedTrack
-                        if (t.bpm <= 0.0 && (dspResult.bpm ?: 0.0) > 0.0) {
+                        if (!t.isManualBpm && t.bpm <= 0.0 && (dspResult.bpm ?: 0.0) > 0.0) {
                             t = t.copy(
                                 bpm = dspResult.bpm ?: 0.0,
                                 bpmConfidence = dspResult.bpmConfidence,
@@ -665,7 +665,7 @@ class TrackAnalysisManager private constructor(
                                 bpmLastAnalyzed = System.currentTimeMillis()
                             )
                         }
-                        if (t.musicalKey.isBlank() && !dspResult.musicalKey.isNullOrBlank()) {
+                        if (!t.isManualKey && t.musicalKey.isBlank() && !dspResult.musicalKey.isNullOrBlank()) {
                             t = t.copy(
                                 musicalKey = dspResult.musicalKey.orEmpty(),
                                 camelotKey = dspResult.camelotKey.orEmpty(),

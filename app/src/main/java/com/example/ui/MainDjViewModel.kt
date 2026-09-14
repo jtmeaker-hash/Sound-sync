@@ -714,8 +714,32 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _djPrepTrack = MutableStateFlow<Track?>(null)
     val djPrepTrack = _djPrepTrack.asStateFlow()
 
+    val djPrepManager = com.example.djprep.DjPrepManager.getInstance(application)
+
     fun setDjPrepTrack(track: Track?) {
         _djPrepTrack.value = track
+    }
+
+    fun markTrackPrepped(trackId: String, status: com.example.djprep.PrepStatus = com.example.djprep.PrepStatus.PREPPED) {
+        viewModelScope.launch {
+            val track = allTracks.value.find { it.id == trackId }
+            if (track != null) {
+                djPrepManager.setPrepStatus(track, status)
+                showSnackbar("Track '${track.title}' marked as ${status.label}")
+            }
+        }
+    }
+
+    fun markSelectedTracksPrepped(status: com.example.djprep.PrepStatus = com.example.djprep.PrepStatus.PREPPED) {
+        val selected = _selectedTrackIds.value.toList()
+        if (selected.isEmpty()) {
+            showSnackbar("No tracks selected. Select tracks in library first.")
+            return
+        }
+        viewModelScope.launch {
+            djPrepManager.batchSetPrepStatus(selected, status)
+            showSnackbar("Marked ${selected.size} tracks as ${status.label}")
+        }
     }
 
     fun openCommandPalette(query: String? = null) {
@@ -4118,6 +4142,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     ?: allTracks.value.firstOrNull()
                 setDjPrepTrack(target)
                 onNavigateSide(SideMenuDestination.DjPrep)
+            }
+            "mark_prepped_selected" -> {
+                markSelectedTracksPrepped(com.example.djprep.PrepStatus.PREPPED)
             }
             "open_car_mode" -> {
                 carModeManager.enterCarMode(manual = true)

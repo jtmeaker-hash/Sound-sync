@@ -319,6 +319,9 @@ class DjAudioEngine(private val context: Context) {
     private val _pitchPercent = MutableStateFlow(0.0f)
     val pitchPercent = _pitchPercent.asStateFlow()
 
+    private val _keyLockEnabled = MutableStateFlow(true)
+    val keyLockEnabled = _keyLockEnabled.asStateFlow()
+
     private val _effectiveBpm = MutableStateFlow(126.0)
     val effectiveBpm = _effectiveBpm.asStateFlow()
 
@@ -651,6 +654,30 @@ class DjAudioEngine(private val context: Context) {
         _pitchPercent.value = percent.coerceIn(-16f, 16f)
         val base = _currentTrack.value?.bpm ?: 126.0
         _effectiveBpm.value = base * (1.0 + _pitchPercent.value / 100.0)
+        applyPitchAndKeyLock()
+    }
+
+    fun setKeyLock(enabled: Boolean) {
+        _keyLockEnabled.value = enabled
+        applyPitchAndKeyLock()
+    }
+
+    fun applyPitchAndKeyLock(track: AudioTrack? = activeAudioTrack) {
+        track?.let { at ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val speed = (1f + _pitchPercent.value / 100f).coerceIn(0.5f, 2.0f)
+                val pitch = if (_keyLockEnabled.value) 1.0f else speed
+                val params = android.media.PlaybackParams().apply {
+                    this.speed = speed
+                    this.pitch = pitch
+                }
+                runCatching { at.playbackParams = params }
+            } else {
+                val sampleRate = if (activeSampleRate > 0) activeSampleRate else 44100
+                val desiredRate = (sampleRate * (1f + _pitchPercent.value / 100f)).toInt().coerceIn(4000, 192000)
+                runCatching { at.playbackRate = desiredRate }
+            }
+        }
     }
 
     fun setEqEnabled(enabled: Boolean) {

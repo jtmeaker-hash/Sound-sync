@@ -22,9 +22,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WatchedFolderEntity::class,
         LyricsEntity::class,
         MetadataBackupEntity::class,
-        TrackBrainStatusEntity::class
+        TrackBrainStatusEntity::class,
+        com.example.djprep.DjPrepEntity::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -40,6 +41,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun lyricsDao(): LyricsDao
     abstract fun metadataBackupDao(): MetadataBackupDao
     abstract fun trackBrainDao(): TrackBrainDao
+    abstract fun djPrepDao(): com.example.djprep.DjPrepDao
 
     companion object {
         @Volatile
@@ -770,6 +772,41 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `dj_prep_data` (
+                        `trackId` TEXT NOT NULL PRIMARY KEY,
+                        `bpm` REAL NOT NULL DEFAULT 0.0,
+                        `isManualBpm` INTEGER NOT NULL DEFAULT 0,
+                        `musicalKey` TEXT NOT NULL DEFAULT '',
+                        `camelotKey` TEXT NOT NULL DEFAULT '',
+                        `isManualKey` INTEGER NOT NULL DEFAULT 0,
+                        `firstDownbeatMs` INTEGER NOT NULL DEFAULT 0,
+                        `gridOffsetMs` INTEGER NOT NULL DEFAULT 0,
+                        `isManualGrid` INTEGER NOT NULL DEFAULT 0,
+                        `hotCuesJson` TEXT NOT NULL DEFAULT '[]',
+                        `memoryCuesJson` TEXT NOT NULL DEFAULT '[]',
+                        `phraseMarkersJson` TEXT NOT NULL DEFAULT '[]',
+                        `prepStatus` TEXT NOT NULL DEFAULT 'NOT_ANALYSED',
+                        `notes` TEXT NOT NULL DEFAULT '',
+                        `updatedAt` INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                try {
+                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_dj_prep_data_trackId` ON `dj_prep_data` (`trackId`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_dj_prep_data_prepStatus` ON `dj_prep_data` (`prepStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_dj_prep_data_updatedAt` ON `dj_prep_data` (`updatedAt`)")
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -796,7 +833,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_16_17,
                     MIGRATION_17_18,
                     MIGRATION_18_19,
-                    MIGRATION_19_20
+                    MIGRATION_19_20,
+                    MIGRATION_20_21
                 )
                 .fallbackToDestructiveMigration()
                 .build()

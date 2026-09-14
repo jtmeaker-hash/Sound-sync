@@ -196,6 +196,7 @@ class LocalFirstMetadataMergeTest {
             override fun bulkOperationHistoryDao(): BulkOperationHistoryDao = Proxy.newProxyInstance(BulkOperationHistoryDao::class.java.classLoader, arrayOf(BulkOperationHistoryDao::class.java)) { _, _, _ -> null } as BulkOperationHistoryDao
             override fun lyricsDao(): LyricsDao = Proxy.newProxyInstance(LyricsDao::class.java.classLoader, arrayOf(LyricsDao::class.java)) { _, _, _ -> null } as LyricsDao
             override fun trackBrainDao(): TrackBrainDao = Proxy.newProxyInstance(TrackBrainDao::class.java.classLoader, arrayOf(TrackBrainDao::class.java)) { _, _, _ -> null } as TrackBrainDao
+            override fun djPrepDao(): com.example.djprep.DjPrepDao = Proxy.newProxyInstance(com.example.djprep.DjPrepDao::class.java.classLoader, arrayOf(com.example.djprep.DjPrepDao::class.java)) { _, _, _ -> null } as com.example.djprep.DjPrepDao
             override fun clearAllTables() {
                 tracks.clear()
                 reviewEntries.clear()

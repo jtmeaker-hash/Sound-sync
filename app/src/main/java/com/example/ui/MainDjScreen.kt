@@ -1652,8 +1652,8 @@ private fun SideDestinationScreen(
                 SideMenuDestination.DjPrep -> {
                     val track = viewModel.djPrepTrack.collectAsState().value ?: playingTrack ?: allTracks.firstOrNull()
                     if (track != null) {
-                        com.example.ui.inspector.TrackInspectorScreen(
-                            initialTrack = track,
+                        com.example.ui.djprep.DjPrepScreen(
+                            track = track,
                             viewModel = viewModel,
                             audioEngine = viewModel.audioEngine,
                             onClose = onClose
