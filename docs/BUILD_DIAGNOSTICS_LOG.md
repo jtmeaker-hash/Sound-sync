@@ -598,3 +598,63 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 34808655063 — FAIL
+
+- **Date:** 2026-09-14T05:17:49.499650+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `Debug`
+- **Commit:** [`53e0fb9234`](https://github.com/jtmeaker-hash/Sound-sync/commit/53e0fb9234ebe374d804bade4e1c5c0dff473bec)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/34808655063)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `ExampleRobolectricTest > ScanStateManager correctly recovers from interrupted scan FAILED`
+- `java.lang.AssertionError at ExampleRobolectricTest.kt:215`
+- `StorageDiagnosticsAndScanLifecycleTest > testAppKilledReopenedDuringScan FAILED`
+- `java.lang.AssertionError at StorageDiagnosticsAndScanLifecycleTest.kt:266`
+- `456 tests completed, 2 failed, 2 skipped`
+- `> Task :app:testDebugUnitTest FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+- `Execution failed for task ':app:testDebugUnitTest'.`
+- `BUILD FAILED in 5m 3s`
+
+### Summary of changes
+
+feat: Stage 29 - Queue, Shuffle Order, and Playback History Architecture
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+53e0fb9 feat: Stage 29 - Queue, Shuffle Order, and Playback History Architecture
+ SOUNDSYNC_UPGRADE_25_29_PROGRESS.md                |  49 ++-
+ .../com/example/player/PersistentQueueManager.kt   | 258 +++++++++++--
+ .../com/example/state/PersistentSessionManager.kt  |  38 +-
+ .../com/example/state/PersistentSessionModels.kt   |   4 +-
+ .../main/java/com/example/ui/MainDjViewModel.kt    | 194 +++-------
+ .../example/QueueShuffleHistoryArchitectureTest.kt | 425 +++++++++++++++++++++
+ 6 files changed, 793 insertions(+), 175 deletions(-)
+```
+
+---
