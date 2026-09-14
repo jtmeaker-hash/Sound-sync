@@ -120,6 +120,8 @@ class PersistentSessionManager(
         originalQueueTrackIds: List<String>,
         repeatMode: QueueRepeatMode,
         smartContinueMode: SmartContinueMode,
+        historyCursor: Int = -1,
+        forwardHistory: List<Track> = emptyList(),
         immediate: Boolean = true
     ) {
         val current = _sessionState.value
@@ -127,12 +129,14 @@ class PersistentSessionManager(
             currentTrack = currentTrack,
             upcomingQueue = upcomingQueue,
             playbackHistory = playbackHistory,
+            forwardHistory = forwardHistory,
             isShuffleEnabled = isShuffleEnabled,
             shuffleSequenceTrackIds = shuffleSequenceTrackIds,
             shuffleIndex = shuffleIndex,
             originalQueueTrackIds = originalQueueTrackIds,
             repeatMode = repeatMode,
-            smartContinueMode = smartContinueMode
+            smartContinueMode = smartContinueMode,
+            historyCursor = if (historyCursor >= 0) historyCursor else (if (playbackHistory.isNotEmpty()) playbackHistory.lastIndex else -1)
         )
         val updatedPlayback = current.playback.copy(currentTrack = currentTrack)
         _sessionState.value = current.copy(queue = updatedQueue, playback = updatedPlayback)
@@ -305,11 +309,17 @@ class PersistentSessionManager(
             }
         }
 
-        // 2. Repair history
+        // 2. Repair history & forward history
         val repairedHistory = mutableListOf<Track>()
         for (item in session.queue.playbackHistory) {
             if (isAccessible(item)) {
                 repairedHistory.add(item)
+            }
+        }
+        val repairedForward = mutableListOf<Track>()
+        for (item in session.queue.forwardHistory) {
+            if (isAccessible(item)) {
+                repairedForward.add(item)
             }
         }
 
@@ -318,7 +328,10 @@ class PersistentSessionManager(
         var repairedPos = session.playback.playbackPositionMs
         if (repairedCurrent != null && !isAccessible(repairedCurrent)) {
             Log.w(TAG, "Restored current track '${repairedCurrent.title}' is inaccessible. Promoting next upcoming track.")
-            if (repairedUpcomingList.isNotEmpty()) {
+            if (repairedForward.isNotEmpty()) {
+                repairedCurrent = repairedForward.removeAt(0)
+                repairedPos = 0L
+            } else if (repairedUpcomingList.isNotEmpty()) {
                 repairedCurrent = repairedUpcomingList.removeAt(0)
                 repairedPos = 0L
             } else {
@@ -331,7 +344,7 @@ class PersistentSessionManager(
         val repairedUpcoming = repairedUpcomingList.toList()
 
             // 4. Repair shuffle sequence
-            val validIds = (listOfNotNull(repairedCurrent) + repairedUpcoming + repairedHistory).map { it.id }.toSet()
+            val validIds = (listOfNotNull(repairedCurrent) + repairedUpcoming + repairedHistory + repairedForward).map { it.id }.toSet()
             val repairedShuffleSeq = session.queue.shuffleSequenceTrackIds.filter { validIds.contains(it) }
             val repairedShuffleIdx = if (repairedShuffleSeq.isNotEmpty()) {
                 session.queue.shuffleIndex.coerceIn(0, repairedShuffleSeq.lastIndex)
@@ -366,6 +379,7 @@ class PersistentSessionManager(
                     currentTrack = repairedCurrent,
                     upcomingQueue = repairedUpcoming,
                     playbackHistory = repairedHistory,
+                    forwardHistory = repairedForward,
                     shuffleSequenceTrackIds = repairedShuffleSeq,
                     shuffleIndex = repairedShuffleIdx
                 ),
@@ -516,6 +530,10 @@ class PersistentSessionManager(
                 session.queue.playbackHistory.take(100).forEach { histArr.put(trackToJson(it)) }
                 put("playbackHistory", histArr)
 
+                val fwdArr = JSONArray()
+                session.queue.forwardHistory.take(100).forEach { fwdArr.put(trackToJson(it)) }
+                put("forwardHistory", fwdArr)
+
                 put("isShuffleEnabled", session.queue.isShuffleEnabled)
                 val shuffleSeqArr = JSONArray()
                 session.queue.shuffleSequenceTrackIds.forEach { shuffleSeqArr.put(it) }
@@ -528,6 +546,7 @@ class PersistentSessionManager(
 
                 put("repeatMode", session.queue.repeatMode.name)
                 put("smartContinueMode", session.queue.smartContinueMode.name)
+                put("historyCursor", session.queue.historyCursor)
             })
 
             // Library UI
@@ -634,16 +653,25 @@ class PersistentSessionManager(
                     origQueue.add(arr.optString(i))
                 }
             }
+            val fwdArr = qObj.optJSONArray("forwardHistory")
+            val forwardHistory = mutableListOf<Track>()
+            if (fwdArr != null) {
+                for (i in 0 until fwdArr.length()) {
+                    fwdArr.optJSONObject(i)?.let { forwardHistory.add(trackFromJson(it)) }
+                }
+            }
             PersistentQueueSession(
                 currentTrack = track,
                 upcomingQueue = upcoming,
                 playbackHistory = history,
+                forwardHistory = forwardHistory,
                 isShuffleEnabled = qObj.optBoolean("isShuffleEnabled", false),
                 shuffleSequenceTrackIds = shuffleSeq,
                 shuffleIndex = qObj.optInt("shuffleIndex", 0),
                 originalQueueTrackIds = origQueue,
                 repeatMode = runCatching { QueueRepeatMode.valueOf(qObj.optString("repeatMode", "OFF")) }.getOrDefault(QueueRepeatMode.OFF),
-                smartContinueMode = runCatching { SmartContinueMode.valueOf(qObj.optString("smartContinueMode", "OFF")) }.getOrDefault(SmartContinueMode.OFF)
+                smartContinueMode = runCatching { SmartContinueMode.valueOf(qObj.optString("smartContinueMode", "OFF")) }.getOrDefault(SmartContinueMode.OFF),
+                historyCursor = qObj.optInt("historyCursor", if (history.isNotEmpty()) history.lastIndex else -1)
             )
         } else {
             PersistentQueueSession()

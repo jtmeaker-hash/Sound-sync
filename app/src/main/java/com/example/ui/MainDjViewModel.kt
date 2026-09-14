@@ -1354,14 +1354,23 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private var nextTrackForCrossfade: Track? = null
 
     private fun setupMediaEngineCallbacks() {
+        persistentQueueManager.contextTrackProvider = {
+            val q = playbackQueue.value
+            if (q.isNotEmpty()) q else {
+                val filtered = filteredTracks.value
+                if (filtered.isNotEmpty()) filtered else allTracks.value
+            }
+        }
         audioEngine.onNextTrackProvider = {
             provideNextTrackForEngine()
         }
         audioEngine.onTrackStartedCallback = { startedTrack ->
             viewModelScope.launch(Dispatchers.Main) {
-                val queue = playbackQueue.value
-                val index = queue.indexOfFirst { it.id == startedTrack.id }
-                if (index >= 0) queueIndex.value = index
+                persistentQueueManager.recordTrackPlayed(startedTrack)
+                val cur = persistentQueueManager.currentTrack.value
+                val upcoming = persistentQueueManager.upcomingQueue.value
+                playbackQueue.value = listOfNotNull(cur) + upcoming
+                queueIndex.value = 0
                 nextTrackForCrossfade = null
 
                 // Only perform heavy real-time STFT calculation if the Spectrogram tab is actively open
@@ -1390,11 +1399,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
         audioEngine.onPreviousTrackCallback = {
             viewModelScope.launch(Dispatchers.Main) {
-                if (playbackQueue.value.isNotEmpty() && queueIndex.value - 1 in playbackQueue.value.indices) {
-                    playPreviousInQueue()
-                } else {
-                    previousTrack()
-                }
+                previousTrack()
             }
         }
         audioEngine.onTrackUnavailableCallback = { unplayableTrack ->
@@ -1497,28 +1502,20 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             originalQueueTrackIds = persistentQueueManager.originalQueueTrackIds.value,
             repeatMode = persistentQueueManager.repeatMode.value,
             smartContinueMode = persistentQueueManager.smartContinueMode.value,
+            historyCursor = persistentQueueManager.historyCursor.value,
+            forwardHistory = persistentQueueManager.forwardHistory.value,
             immediate = true
         )
     }
 
     private fun provideNextTrackForEngine(): Track? {
         nextTrackForCrossfade?.let { return it }
-        val queue = playbackQueue.value
-        val currentId = audioEngine.currentTrack.value?.id
-        val candidates = if (queue.isNotEmpty()) queue else filteredTracks.value.ifEmpty { allTracks.value }
-        val currentIndex = candidates.indexOfFirst { it.id == currentId }
-        if (currentIndex < 0) return null
-        nextTrackForCrossfade = if (_isShuffleEnabled.value && candidates.size > 1) {
-            candidates.filter { it.id != currentId }.shuffled().firstOrNull { isTrackAvailableForQueue(it) }
-        } else {
-            val forward = candidates.drop(currentIndex + 1).firstOrNull { isTrackAvailableForQueue(it) }
-            if (forward == null && _repeatMode.value == RepeatMode.ALL) {
-                candidates.firstOrNull { isTrackAvailableForQueue(it) }
-            } else {
-                forward
-            }
+        val peek = persistentQueueManager.peekNextTrack()
+        if (peek != null && isTrackAvailableForQueue(peek)) {
+            nextTrackForCrossfade = peek
+            return peek
         }
-        return nextTrackForCrossfade
+        return null
     }
 
     /** Starts a Drive item while preserving the visible folder listing as its queue. */
@@ -1572,58 +1569,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        val queue = playbackQueue.value
-        val list = if (queue.isNotEmpty()) queue else {
-            val library = filteredTracks.value
-            if (library.isNotEmpty()) library else allTracks.value
-        }
-        if (list.isEmpty()) {
-            audioEngine.pause()
-            return
-        }
-
-        val currentId = current?.id
-        var currentIndex = list.indexOfFirst { it.id == currentId }
-        val activeList = if (currentIndex < 0) {
-            val all = allTracks.value
-            val fallbackIdx = all.indexOfFirst { it.id == currentId }
-            if (fallbackIdx >= 0) {
-                currentIndex = fallbackIdx
-                playbackQueue.value = all
-                all
-            } else {
-                list
-            }
-        } else {
-            list
-        }
-
-        if (currentIndex < 0) {
-            if (_repeatMode.value == RepeatMode.ALL && activeList.isNotEmpty()) {
-                currentIndex = -1
-            } else {
-                audioEngine.pause()
-                return
-            }
-        }
-
-        val next: Track? = if (_isShuffleEnabled.value && activeList.size > 1) {
-            val otherCandidates = activeList.filter { it.id != currentId }
-            withContext(Dispatchers.IO) {
-                otherCandidates.shuffled().firstOrNull { isTrackAvailableForQueue(it) }
-            }
-        } else {
-            val candidates = activeList.drop(currentIndex + 1)
-            val forwardNext = withContext(Dispatchers.IO) {
-                candidates.firstOrNull { isTrackAvailableForQueue(it) }
-            }
-            if (forwardNext == null && _repeatMode.value == RepeatMode.ALL) {
-                withContext(Dispatchers.IO) {
-                    activeList.firstOrNull { isTrackAvailableForQueue(it) }
-                }
-            } else {
-                forwardNext
-            }
+        val next = withContext(Dispatchers.IO) {
+            persistentQueueManager.nextTrack()
         }
 
         withContext(Dispatchers.Main) {
@@ -1632,9 +1579,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 audioEngine.pause()
                 audioEngine.seekToSecond(0)
             } else {
-                val nextIdx = activeList.indexOfFirst { it.id == next.id }
-                if (nextIdx >= 0) queueIndex.value = nextIdx
+                val q = persistentQueueManager.upcomingQueue.value
+                playbackQueue.value = listOf(next) + q
+                queueIndex.value = 0
                 nextTrackForCrossfade = null
+                syncQueueToSession()
                 audioEngine.loadTrack(next, autoPlay = true)
                 inspectTrackSpectrogram(next, showTab = false)
                 resolveBpmAndKeyForTrack(next)
@@ -2504,25 +2453,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun playNextInQueue() {
-        val q = playbackQueue.value
-        val idx = queueIndex.value
-        if (idx + 1 in q.indices) {
-            queueIndex.value = idx + 1
-            persistentQueueManager.nextTrack()
-            syncQueueToSession()
-            playOrPreviewTrack(q[idx + 1], preserveQueue = true)
-        }
+        nextTrack()
     }
 
     fun playPreviousInQueue() {
-        val q = playbackQueue.value
-        val idx = queueIndex.value
-        if (idx - 1 in q.indices) {
-            queueIndex.value = idx - 1
-            persistentQueueManager.previousTrack()
-            syncQueueToSession()
-            playOrPreviewTrack(q[idx - 1], preserveQueue = true)
-        }
+        previousTrack()
     }
 
     // ==========================================
@@ -2792,35 +2727,20 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun nextTrack() {
-        val current = audioEngine.currentTrack.value ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            val queue = playbackQueue.value
-            val list = if (queue.isNotEmpty()) queue else {
-                val filtered = filteredTracks.value
-                if (filtered.isNotEmpty()) filtered else allTracks.value
+        viewModelScope.launch(Dispatchers.Main) {
+            val next = withContext(Dispatchers.IO) {
+                persistentQueueManager.nextTrack()
             }
-            val currentIndex = list.indexOfFirst { it.id == current.id }
-            if (currentIndex < 0 && list.isEmpty()) return@launch
-
-            val next: Track? = if (_isShuffleEnabled.value && list.size > 1) {
-                val otherCandidates = list.filter { it.id != current.id }
-                otherCandidates.shuffled().firstOrNull { isTrackAvailableForQueue(it) }
-            } else {
-                val candidates = list.drop(currentIndex + 1)
-                val forwardNext = candidates.firstOrNull { isTrackAvailableForQueue(it) }
-                if (forwardNext == null && _repeatMode.value == RepeatMode.ALL) {
-                    list.firstOrNull { isTrackAvailableForQueue(it) }
-                } else {
-                    forwardNext
-                }
-            }
-
             if (next != null) {
-                withContext(Dispatchers.Main) {
-                    if (queue.isNotEmpty()) queueIndex.value = list.indexOf(next)
-                    nextTrackForCrossfade = null
-                    playOrPreviewTrack(next, preserveQueue = queue.isNotEmpty())
-                }
+                val q = persistentQueueManager.upcomingQueue.value
+                playbackQueue.value = listOf(next) + q
+                queueIndex.value = 0
+                nextTrackForCrossfade = null
+                syncQueueToSession()
+                playOrPreviewTrack(next, preserveQueue = true)
+            } else {
+                audioEngine.pause()
+                audioEngine.seekToSecond(0)
             }
         }
     }
@@ -2831,22 +2751,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             audioEngine.seekToSecond(0)
             return
         }
-        val list = if (playbackQueue.value.isNotEmpty()) playbackQueue.value else {
-            val filtered = filteredTracks.value
-            if (filtered.isNotEmpty()) filtered else allTracks.value
+        viewModelScope.launch(Dispatchers.Main) {
+            val prev = withContext(Dispatchers.IO) {
+                persistentQueueManager.previousTrack(audioEngine.currentPositionMs.value)
+            }
+            if (prev != null) {
+                val q = persistentQueueManager.upcomingQueue.value
+                playbackQueue.value = listOf(prev) + q
+                queueIndex.value = 0
+                nextTrackForCrossfade = null
+                syncQueueToSession()
+                playOrPreviewTrack(prev, preserveQueue = true)
+            }
         }
-        if (list.isEmpty()) return
-        val currentIndex = list.indexOfFirst { it.id == current.id }
-        val prevIndex = if (currentIndex - 1 in list.indices) {
-            currentIndex - 1
-        } else if (_repeatMode.value == RepeatMode.ALL && list.isNotEmpty()) {
-            list.lastIndex
-        } else {
-            -1
-        }
-        if (prevIndex !in list.indices) return
-        if (playbackQueue.value.isNotEmpty()) queueIndex.value = prevIndex
-        playOrPreviewTrack(list[prevIndex], preserveQueue = playbackQueue.value.isNotEmpty())
     }
 
     fun updateTrackInPlaybackQueue(updatedTrack: Track) {
@@ -2889,9 +2806,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
 
-            if (!preserveQueue && playbackQueue.value.isNotEmpty()) {
-                playbackQueue.value = emptyList()
+            // Manual track selection branches playback without clearing upcoming queue
+            if (!preserveQueue) {
+                persistentQueueManager.recordTrackPlayed(effectiveTrack)
+                playbackQueue.value = listOf(effectiveTrack) + persistentQueueManager.upcomingQueue.value
                 queueIndex.value = 0
+                syncQueueToSession()
             }
             val currentLoaded = audioEngine.currentTrack.value
             if (currentLoaded?.id == effectiveTrack.id &&

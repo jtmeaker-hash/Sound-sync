@@ -29,12 +29,14 @@ data class PersistentQueueSession(
     val currentTrack: Track? = null,
     val upcomingQueue: List<Track> = emptyList(),
     val playbackHistory: List<Track> = emptyList(),
+    val forwardHistory: List<Track> = emptyList(),
     val isShuffleEnabled: Boolean = false,
     val shuffleSequenceTrackIds: List<String> = emptyList(),
     val shuffleIndex: Int = 0,
     val originalQueueTrackIds: List<String> = emptyList(),
     val repeatMode: QueueRepeatMode = QueueRepeatMode.OFF,
-    val smartContinueMode: SmartContinueMode = SmartContinueMode.OFF
+    val smartContinueMode: SmartContinueMode = SmartContinueMode.OFF,
+    val historyCursor: Int = -1
 )
 
 data class PersistentLibraryUiSession(

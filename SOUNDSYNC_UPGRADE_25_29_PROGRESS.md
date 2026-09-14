@@ -2,8 +2,13 @@
 
 ## Status Overview
 - **Branch**: `Debug`
-- **Active Stage**: Stage 29 — Queue / Shuffle / Playback History Architecture
-- **Completed Stages**: Stage 25 — Command / Search Palette, Stage 26 — Local-First Metadata Merging, Stage 27 — Persistent Application & Playback State, Stage 28 — DJ Prep Environment
+- **Active Stage**: None (All Upgrades 25–29 COMPLETE!)
+- **Completed Stages**:
+  - Stage 25 — Command / Search Palette
+  - Stage 26 — Local-First Metadata Merging
+  - Stage 27 — Persistent Application & Playback State
+  - Stage 28 — DJ Prep Environment
+  - Stage 29 — Queue, Shuffle Order, and Playback History Architecture
 
 ---
 
@@ -168,7 +173,42 @@
   - `LocalFirstMetadataMergeTest`: ALL PASSED (0 regressions).
 
 ### Stage 29 — Queue / Shuffle / Playback History Architecture
-- **Status**: IN PROGRESS
+- **Status**: COMPLETE
+- **Delivered Capabilities**:
+  - **Decoupled Three-Pillar Playback Navigation**: Completely decoupled Queue, Shuffle Session, and Playback History into separate architectural domains, permanently eliminating index-decrement bugs and random jumps on Previous.
+  - **True Historical "Previous" Navigation**: Previous strictly traverses `_playbackHistory` (LIFO), guaranteed to resolve to the track the user actually heard previously, immune to shuffle status, library sorting changes, list index shifts, or queue alterations.
+  - **Browser-Style Forward/Back Traversal**: Navigating backward via `previousTrack()` pushes tracks to `_forwardHistory`. Pressing `nextTrack()` steps forward through known history before advancing to upcoming queue or new shuffle items.
+  - **Manual Selection Branching**: Manually selecting a track branches playback: archives the prior active track into history, truncates the forward history branch, and preserves the user's scheduled upcoming queue without unnecessary loss.
+  - **Deterministic Shuffle Session**: Explicit shuffle permutation sequence (`shuffleSequenceTrackIds`) keeping the current track fixed at index 0. Disabling shuffle restores natural sequential order without corrupting history. Turning shuffle back on constructs a fresh deterministic cycle avoiding immediate repeats.
+  - **Anti-Spam Threshold**: Seeks, buffer stalls, and re-binding/re-selecting the currently active track never append duplicate entries to history.
+  - **Queue Edits During Playback**: Removing upcoming tracks, reordering queue, adding "Play Next" or "Add to Queue", and clearing the upcoming queue while playing never corrupt historical Previous behavior.
+  - **Repeat Mode Integrity**: Repeat ONE replays current track; Repeat ALL loops the queue cycle without wiping or corrupting playback history.
+  - **Full Persistence Across App Restarts**: Serialized to v4 JSON schema (`persistent_playback_queue.json`) and synced with `persistent_app_session.json`: persists upcoming queue, current track, playback history, forward history, shuffle sequence, shuffle index, and repeat modes. Restores seamlessly after process kill.
+  - **Pruning Safety**: Missing or deleted tracks are safely pruned across current track, upcoming queue, playback history, and forward history stacks.
+- **Files Changed / Added**:
+  - `app/src/main/java/com/example/player/PersistentQueueManager.kt` (Refactored navigation, forward history, non-destructive repeat ALL, anti-spam threshold, v4 persistence)
+  - `app/src/main/java/com/example/state/PersistentSessionModels.kt` (Added `forwardHistory` and `historyCursor` to `PersistentQueueSession`)
+  - `app/src/main/java/com/example/state/PersistentSessionManager.kt` (Added `forwardHistory` and `historyCursor` serialization, deserialization, and repair)
+  - `app/src/main/java/com/example/ui/MainDjViewModel.kt` (Unified `nextTrack`, `previousTrack`, `advanceAfterNaturalEnd`, `playNextInQueue`, and `playPreviousInQueue` to delegate directly to `persistentQueueManager`)
+  - `app/src/test/java/com/example/QueueShuffleHistoryArchitectureTest.kt` (New test suite with 11 comprehensive tests covering Scenarios A–E and edge cases)
+- **Tests Performed**:
+  - `QueueShuffleHistoryArchitectureTest`:
+    1. `testScenarioA_shuffleNavigationPreviousLifo`: Start A -> shuffle -> Next to G -> Next to C -> Prev to G -> Prev to A.
+    2. `testScenarioB_forwardHistoryAfterPrevious`: Shuffle A -> G -> C -> Prev to G -> Next to C (moves forward through history, not random track).
+    3. `testScenarioC_librarySortImmunity`: Play A -> B -> C -> change library sort order -> Prev to B.
+    4. `testScenarioD_persistenceAcrossAppRestart`: Play A -> B -> kill app -> relaunch -> Prev to A.
+    5. `testScenarioE_queueSameTrackTwice`: Queue same track twice -> history handles occurrences correctly.
+    6. `testQueueEditsDuringPlayback_preserveHistory`: Queue edits and queue clearing do not corrupt historical Previous.
+    7. `testAntiSpamThreshold_seeksAndRebuffersDoNotDuplicateHistory`: Seeks and rebuffers do not duplicate history entries.
+    8. `testManualTrackSelection_branchesForwardHistory`: Manual selection truncates forward history and preserves upcoming queue.
+    9. `testShuffleToggling_deterministicOrderAndRestoresTraversal`: Enabling shuffle keeps current fixed; disabling restores natural traversal.
+    10. `testRepeatAll_doesNotWipePlaybackHistory`: Repeat ALL cycles without wiping playback history.
+    11. `testPruneDeletedTrack_cleansCurrentUpcomingHistoryAndForward`: Prunes deleted track across all structures.
+    (ALL 11 PASSED, 0 failures, 0 errors)
+  - `PersistentAppStateTest`: ALL 14 PASSED (0 regressions).
+  - `DjPrepEnvironmentTest`: ALL 11 PASSED (0 regressions).
+  - `LocalFirstMetadataMergeTest`: ALL 10 PASSED (0 regressions).
+  - `CommandPaletteEngineTest`: ALL 10 PASSED (0 regressions).
 
 ---
 
@@ -178,5 +218,8 @@
 - Stage 26 compilation and unit tests passed without regressions.
 - Stage 27 compilation and unit tests passed without regressions.
 - Stage 28 compilation and unit tests passed without regressions.
+- Stage 29 compilation and unit tests passed without regressions.
+- Full debug APK assembled successfully (`assembleDebug`).
+
 
 

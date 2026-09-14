@@ -45,7 +45,10 @@ data class QueueSnapshot(
     val playbackHistory: List<Track>,
     val isShuffle: Boolean,
     val repeatMode: QueueRepeatMode,
-    val smartContinueMode: SmartContinueMode = SmartContinueMode.OFF
+    val smartContinueMode: SmartContinueMode = SmartContinueMode.OFF,
+    val forwardHistory: List<Track> = emptyList(),
+    val shuffleSequenceTrackIds: List<String> = emptyList(),
+    val shuffleIndex: Int = 0
 )
 
 /**
@@ -93,6 +96,12 @@ class PersistentQueueManager(
     private val _playbackHistory = MutableStateFlow<List<Track>>(emptyList())
     val playbackHistory: StateFlow<List<Track>> = _playbackHistory.asStateFlow()
 
+    private val _forwardHistory = MutableStateFlow<List<Track>>(emptyList())
+    val forwardHistory: StateFlow<List<Track>> = _forwardHistory.asStateFlow()
+
+    private val _historyCursor = MutableStateFlow(-1)
+    val historyCursor: StateFlow<Int> = _historyCursor.asStateFlow()
+
     private val _isShuffleEnabled = MutableStateFlow(false)
     val isShuffleEnabled: StateFlow<Boolean> = _isShuffleEnabled.asStateFlow()
 
@@ -130,12 +139,61 @@ class PersistentQueueManager(
         }
     }
 
+    /**
+     * Records that a track has started playback.
+     * Anti-spam threshold: seeking, rebuffering, or re-binding the same track does not
+     * append duplicate entries to history.
+     * Manual selection branches off and truncates forward history while preserving the upcoming queue.
+     */
+    fun recordTrackPlayed(track: Track, fromNavigation: Boolean = false) {
+        val prev = _currentTrack.value
+        if (prev?.id == track.id) {
+            // Anti-spam guard: same continuous track
+            _currentTrack.value = track
+            return
+        }
+
+        if (prev != null && !fromNavigation) {
+            val history = _playbackHistory.value.toMutableList()
+            history.add(0, prev)
+            if (history.size > MAX_HISTORY_SIZE) {
+                history.removeAt(history.lastIndex)
+            }
+            _playbackHistory.value = history
+            _historyCursor.value = if (history.isNotEmpty()) history.lastIndex else -1
+            // Manual selection: truncate forward history branch
+            _forwardHistory.value = emptyList()
+        }
+
+        _currentTrack.value = track
+        _playbackPositionMs.value = 0L
+
+        // If the selected track was in upcoming queue, remove its first occurrence
+        val upcoming = _upcomingQueue.value.toMutableList()
+        val upcomingIdx = upcoming.indexOfFirst { it.id == track.id }
+        if (upcomingIdx >= 0) {
+            upcoming.removeAt(upcomingIdx)
+            _upcomingQueue.value = upcoming
+        }
+
+        if (_isShuffleEnabled.value) {
+            val seqIdx = _shuffleSequenceTrackIds.value.indexOf(track.id)
+            if (seqIdx >= 0) {
+                _shuffleIndex.value = seqIdx
+            } else {
+                _shuffleSequenceTrackIds.value = listOf(track.id) + _shuffleSequenceTrackIds.value
+                _shuffleIndex.value = 0
+            }
+        }
+
+        saveToDiskAsync()
+    }
+
     fun pruneDeletedTrack(trackId: String): Boolean {
         var modified = false
         if (_currentTrack.value?.id == trackId) {
-            val upcoming = _upcomingQueue.value.toMutableList()
-            val next = if (upcoming.isNotEmpty()) upcoming.removeAt(0) else null
-            _upcomingQueue.value = upcoming
+            val next = _forwardHistory.value.firstOrNull { it.id != trackId }
+                ?: _upcomingQueue.value.firstOrNull { it.id != trackId }
             _currentTrack.value = next
             _playbackPositionMs.value = 0L
             modified = true
@@ -150,6 +208,13 @@ class PersistentQueueManager(
         val filteredHistory = curHistory.filter { it.id != trackId }
         if (curHistory.size != filteredHistory.size) {
             _playbackHistory.value = filteredHistory
+            _historyCursor.value = if (filteredHistory.isNotEmpty()) filteredHistory.lastIndex else -1
+            modified = true
+        }
+        val curForward = _forwardHistory.value
+        val filteredForward = curForward.filter { it.id != trackId }
+        if (curForward.size != filteredForward.size) {
+            _forwardHistory.value = filteredForward
             modified = true
         }
         val curShuffle = _shuffleSequenceTrackIds.value
@@ -174,8 +239,14 @@ class PersistentQueueManager(
 
     /**
      * Initializes the queue with a list of tracks, setting currentTrack to the chosen start item.
+     * Optionally preserves previous playback history (default true) while clearing forward history branch.
      */
-    fun setQueue(tracks: List<Track>, startTrack: Track?, shuffle: Boolean = false) {
+    fun setQueue(
+        tracks: List<Track>,
+        startTrack: Track?,
+        shuffle: Boolean = false,
+        preserveHistory: Boolean = true
+    ) {
         if (tracks.isEmpty()) {
             clearQueue()
             return
@@ -183,6 +254,21 @@ class PersistentQueueManager(
 
         _isShuffleEnabled.value = shuffle
         val current = startTrack ?: tracks.first()
+        val prevTrack = _currentTrack.value
+        if (prevTrack != null && prevTrack.id != current.id && preserveHistory) {
+            val history = _playbackHistory.value.toMutableList()
+            history.add(0, prevTrack)
+            if (history.size > MAX_HISTORY_SIZE) {
+                history.removeAt(history.lastIndex)
+            }
+            _playbackHistory.value = history
+            _historyCursor.value = if (history.isNotEmpty()) history.lastIndex else -1
+        } else if (!preserveHistory) {
+            _playbackHistory.value = emptyList()
+            _historyCursor.value = -1
+        }
+
+        _forwardHistory.value = emptyList()
         _currentTrack.value = current
         _originalQueueTrackIds.value = tracks.map { it.id }
 
@@ -288,23 +374,48 @@ class PersistentQueueManager(
     }
 
     /**
-     * Clears playback history.
+     * Clears playback history and forward history.
      */
     fun clearHistory() {
         _playbackHistory.value = emptyList()
+        _forwardHistory.value = emptyList()
+        _historyCursor.value = -1
         saveToDiskAsync()
     }
 
     fun setShuffle(enabled: Boolean) {
         if (_isShuffleEnabled.value == enabled) return
         _isShuffleEnabled.value = enabled
-        if (enabled && _upcomingQueue.value.isNotEmpty()) {
-            val current = _currentTrack.value
-            val shuffled = _upcomingQueue.value.shuffled()
-            _upcomingQueue.value = shuffled
-            _shuffleSequenceTrackIds.value = (if (current != null) listOf(current.id) else emptyList()) + shuffled.map { it.id }
-            _shuffleIndex.value = 0
-        } else if (!enabled) {
+        val current = _currentTrack.value
+
+        if (enabled) {
+            val tracksToShuffle = if (_upcomingQueue.value.isNotEmpty()) {
+                _upcomingQueue.value
+            } else {
+                contextTrackProvider?.invoke()?.filter { it.id != current?.id } ?: emptyList()
+            }
+
+            if (tracksToShuffle.isNotEmpty()) {
+                if (_originalQueueTrackIds.value.isEmpty()) {
+                    _originalQueueTrackIds.value = (if (current != null) listOf(current.id) else emptyList()) +
+                        tracksToShuffle.map { it.id }
+                }
+                val shuffled = tracksToShuffle.shuffled()
+                _upcomingQueue.value = shuffled
+                _shuffleSequenceTrackIds.value = (if (current != null) listOf(current.id) else emptyList()) + shuffled.map { it.id }
+                _shuffleIndex.value = 0
+            }
+        } else {
+            // Turning shuffle off: restore natural order if original order was recorded
+            if (_originalQueueTrackIds.value.isNotEmpty()) {
+                val remainingIds = _upcomingQueue.value.map { it.id }.toSet()
+                val orderedUpcoming = _originalQueueTrackIds.value
+                    .filter { it in remainingIds && it != current?.id }
+                    .mapNotNull { id -> _upcomingQueue.value.firstOrNull { it.id == id } }
+                if (orderedUpcoming.isNotEmpty()) {
+                    _upcomingQueue.value = orderedUpcoming
+                }
+            }
             _shuffleSequenceTrackIds.value = emptyList()
             _shuffleIndex.value = 0
         }
@@ -337,6 +448,10 @@ class PersistentQueueManager(
         if (_repeatMode.value == QueueRepeatMode.ONE) {
             return _currentTrack.value
         }
+        val forward = _forwardHistory.value
+        if (forward.isNotEmpty()) {
+            return forward.first()
+        }
         val upcoming = _upcomingQueue.value
         if (upcoming.isNotEmpty()) {
             return upcoming.first()
@@ -352,7 +467,12 @@ class PersistentQueueManager(
     }
 
     /**
-     * Advances to the next track, archiving the current track into playback history.
+     * Advances to the next track:
+     * 1. Checks Repeat ONE.
+     * 2. Checks Forward History (browser-style forward step from previous history navigation).
+     * 3. Checks Upcoming Queue (normal / shuffled order).
+     * 4. Checks Repeat ALL, Smart Continue, and Context Provider when queue is exhausted.
+     * Archives the current track into playback history (LIFO).
      */
     fun nextTrack(): Track? {
         val current = _currentTrack.value
@@ -360,6 +480,33 @@ class PersistentQueueManager(
         // Repeat ONE: replay current track
         if (_repeatMode.value == QueueRepeatMode.ONE && current != null) {
             return current
+        }
+
+        // 1. Forward History check (Scenario B)
+        val forward = _forwardHistory.value.toMutableList()
+        if (forward.isNotEmpty()) {
+            val next = forward.removeAt(0)
+            _forwardHistory.value = forward
+
+            if (current != null) {
+                val history = _playbackHistory.value.toMutableList()
+                history.add(0, current)
+                if (history.size > MAX_HISTORY_SIZE) {
+                    history.removeAt(history.lastIndex)
+                }
+                _playbackHistory.value = history
+                _historyCursor.value = if (history.isNotEmpty()) history.lastIndex else -1
+            }
+
+            _currentTrack.value = next
+            _playbackPositionMs.value = 0L
+            if (_isShuffleEnabled.value) {
+                val idx = _shuffleSequenceTrackIds.value.indexOf(next.id)
+                if (idx >= 0) _shuffleIndex.value = idx
+            }
+            saveToDiskAsync()
+            Log.d(TAG, "Next track from forward history: '${next.title}' (Forward left: ${forward.size})")
+            return next
         }
 
         // Archive current to history (LIFO for Previous navigation)
@@ -370,39 +517,55 @@ class PersistentQueueManager(
                 history.removeAt(history.lastIndex)
             }
             _playbackHistory.value = history
+            _historyCursor.value = if (history.isNotEmpty()) history.lastIndex else -1
         }
 
+        // 2. Upcoming Queue check
         val upcoming = _upcomingQueue.value.toMutableList()
         if (upcoming.isNotEmpty()) {
             val next = upcoming.removeAt(0)
             _upcomingQueue.value = upcoming
             _currentTrack.value = next
+            _playbackPositionMs.value = 0L
             if (_isShuffleEnabled.value) {
                 _shuffleIndex.value = _shuffleIndex.value + 1
             }
             saveToDiskAsync()
+            Log.d(TAG, "Next track from upcoming queue: '${next.title}' (Upcoming left: ${upcoming.size})")
             return next
         }
 
-        // Queue exhausted: Check Repeat ALL
+        // 3. Queue exhausted: Check Repeat ALL
         if (_repeatMode.value == QueueRepeatMode.ALL) {
             val allPlayed = _playbackHistory.value.reversed()
             if (allPlayed.isNotEmpty()) {
-                val newQueue = if (_isShuffleEnabled.value) allPlayed.shuffled() else allPlayed
+                val newQueue = if (_isShuffleEnabled.value) {
+                    var shuffledCycle = allPlayed.shuffled()
+                    if (shuffledCycle.size > 1 && shuffledCycle.first().id == current?.id) {
+                        val rot = shuffledCycle.toMutableList()
+                        val f = rot.removeAt(0)
+                        rot.add(f)
+                        shuffledCycle = rot
+                    }
+                    shuffledCycle
+                } else {
+                    allPlayed
+                }
                 val next = newQueue.first()
                 _upcomingQueue.value = newQueue.drop(1)
                 _currentTrack.value = next
-                _playbackHistory.value = emptyList()
+                _playbackPositionMs.value = 0L
                 if (_isShuffleEnabled.value) {
                     _shuffleSequenceTrackIds.value = listOf(next.id) + newQueue.drop(1).map { it.id }
                     _shuffleIndex.value = 0
                 }
                 saveToDiskAsync()
+                Log.d(TAG, "Repeat ALL cycle started: '${next.title}'")
                 return next
             }
         }
 
-        // Smart Queue Assistance (Step 3 Part F)
+        // 4. Smart Queue Assistance (Step 3 Part F)
         if (_smartContinueMode.value != SmartContinueMode.OFF && current != null) {
             val libraryPool = contextTrackProvider?.invoke() ?: emptyList()
             if (libraryPool.isNotEmpty()) {
@@ -428,6 +591,7 @@ class PersistentQueueManager(
                     }
                     if (recommended != null) {
                         _currentTrack.value = recommended
+                        _playbackPositionMs.value = 0L
                         saveToDiskAsync()
                         Log.i(TAG, "Smart Continue [${_smartContinueMode.value.label}]: '${recommended.title}'")
                         return recommended
@@ -436,14 +600,16 @@ class PersistentQueueManager(
             }
         }
 
-        // Context fallback (e.g. continue playing library/folder)
+        // 5. Context fallback (e.g. continue playing library/folder)
         val contextTracks = contextTrackProvider?.invoke()
         if (!contextTracks.isNullOrEmpty()) {
             val available = if (_isShuffleEnabled.value) contextTracks.shuffled() else contextTracks
             val next = available.first()
             _upcomingQueue.value = available.drop(1)
             _currentTrack.value = next
+            _playbackPositionMs.value = 0L
             saveToDiskAsync()
+            Log.d(TAG, "Next track from context provider: '${next.title}'")
             return next
         }
 
@@ -455,11 +621,15 @@ class PersistentQueueManager(
 
     /**
      * Navigates to the previous track.
-     * CRITICAL STEP 2 REQUIREMENT:
-     * In shuffle mode, Previous MUST return to the actual previously played track from history,
-     * NOT a new random track!
+     * CRITICAL UPGRADE 29 REQUIREMENT:
+     * Previous MUST return to the actual previously played track from playback history,
+     * NOT a decrement of list index, and NOT a random track in shuffle!
+     * Pushes current track to forward history for browser-style traversal.
      */
-    fun previousTrack(): Track? {
+    fun previousTrack(currentPositionMs: Long = 0L, forceHistory: Boolean = false): Track? {
+        if (currentPositionMs > 3000L && !forceHistory) {
+            return _currentTrack.value
+        }
         val history = _playbackHistory.value.toMutableList()
         if (history.isEmpty()) {
             return _currentTrack.value
@@ -467,22 +637,38 @@ class PersistentQueueManager(
 
         val prev = history.removeAt(0)
         _playbackHistory.value = history
+        _historyCursor.value = if (history.isNotEmpty()) history.lastIndex else -1
 
-        // Current moves to top of upcoming queue
+        // Current moves to forward history (browser-style forward step)
         val current = _currentTrack.value
         if (current != null) {
-            val upcoming = _upcomingQueue.value.toMutableList()
-            upcoming.add(0, current)
-            _upcomingQueue.value = upcoming
+            val forward = _forwardHistory.value.toMutableList()
+            forward.add(0, current)
+            _forwardHistory.value = forward
         }
 
         _currentTrack.value = prev
+        _playbackPositionMs.value = 0L
         if (_isShuffleEnabled.value) {
             _shuffleIndex.value = (_shuffleIndex.value - 1).coerceAtLeast(0)
         }
         saveToDiskAsync()
-        Log.d(TAG, "Previous track selected: '${prev.title}' (History left: ${history.size})")
+        Log.d(TAG, "Previous track selected: '${prev.title}' (History left: ${history.size}, Forward: ${_forwardHistory.value.size})")
         return prev
+    }
+
+    fun getSnapshot(): QueueSnapshot {
+        return QueueSnapshot(
+            currentTrack = _currentTrack.value,
+            upcomingQueue = _upcomingQueue.value,
+            playbackHistory = _playbackHistory.value,
+            isShuffle = _isShuffleEnabled.value,
+            repeatMode = _repeatMode.value,
+            smartContinueMode = _smartContinueMode.value,
+            forwardHistory = _forwardHistory.value,
+            shuffleSequenceTrackIds = _shuffleSequenceTrackIds.value,
+            shuffleIndex = _shuffleIndex.value
+        )
     }
 
     // ── Playlist Export ───────────────────────────────────────────────────────
@@ -541,7 +727,7 @@ class PersistentQueueManager(
                 }
 
                 val root = JSONObject().apply {
-                    put("version", 3)
+                    put("version", 4)
                     put("isShuffle", _isShuffleEnabled.value)
                     put("repeatMode", _repeatMode.value.name)
                     put("smartContinueMode", _smartContinueMode.value.name)
@@ -566,6 +752,10 @@ class PersistentQueueManager(
                     val historyArr = JSONArray()
                     _playbackHistory.value.take(MAX_HISTORY_SIZE).forEach { historyArr.put(trackToJson(it)) }
                     put("playbackHistory", historyArr)
+
+                    val forwardArr = JSONArray()
+                    _forwardHistory.value.take(MAX_HISTORY_SIZE).forEach { forwardArr.put(trackToJson(it)) }
+                    put("forwardHistory", forwardArr)
                 }
 
                 val tempFile = File(filesDir, "$QUEUE_FILENAME.${UUID.randomUUID()}.tmp")
@@ -664,6 +854,16 @@ class PersistentQueueManager(
                         historyArr.optJSONObject(i)?.let { list.add(trackFromJson(it)) }
                     }
                     _playbackHistory.value = list
+                    _historyCursor.value = if (list.isNotEmpty()) list.lastIndex else -1
+                }
+
+                val forwardArr = root.optJSONArray("forwardHistory")
+                if (forwardArr != null) {
+                    val list = mutableListOf<Track>()
+                    for (i in 0 until forwardArr.length()) {
+                        forwardArr.optJSONObject(i)?.let { list.add(trackFromJson(it)) }
+                    }
+                    _forwardHistory.value = list
                 }
 
                 Log.i(TAG, "Restored queue: current='${_currentTrack.value?.title}', upcoming=${_upcomingQueue.value.size}, history=${_playbackHistory.value.size}, shuffleSeq=${_shuffleSequenceTrackIds.value.size}")
