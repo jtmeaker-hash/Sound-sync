@@ -658,3 +658,64 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 34816120284 — FAIL
+
+- **Date:** 2026-09-14T07:11:39.817304+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `Debug`
+- **Commit:** [`1f7276099c`](https://github.com/jtmeaker-hash/Sound-sync/commit/1f7276099c13f1caa2102b67259de07951ee4a62)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/34816120284)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `DjPrepEnvironmentTest > testMemoryCuesOrderedNavigation FAILED`
+- `java.lang.AssertionError at DjPrepEnvironmentTest.kt:264`
+- `ExampleRobolectricTest > ScanStateManager correctly recovers from interrupted scan FAILED`
+- `java.lang.AssertionError at ExampleRobolectricTest.kt:215`
+- `StorageDiagnosticsAndScanLifecycleTest > testAppKilledReopenedDuringScan FAILED`
+- `java.lang.AssertionError at StorageDiagnosticsAndScanLifecycleTest.kt:266`
+- `463 tests completed, 3 failed, 2 skipped`
+- `> Task :app:testDebugUnitTest FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+
+### Summary of changes
+
+fix(metadata): integrate manual cover art selection with MD Approval queue and physical tag embedding
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+1f72760 fix(metadata): integrate manual cover art selection with MD Approval queue and physical tag embedding
+ .../com/example/metadata/MetadataFileWriteQueue.kt |  72 ++-
+ .../metadata/review/MetadataReviewManager.kt       | 134 ++++-
+ app/src/main/java/com/example/model/Models.kt      |   9 +-
+ .../ui/components/MetadataProvenanceBadge.kt       |  10 +-
+ .../example/ui/inspector/TrackInspectorScreen.kt   | 133 ++++-
+ .../ui/library/MetadataReviewInboxScreen.kt        | 202 ++++---
+ .../ManualCoverArtMdApprovalIntegrationTest.kt     | 580 +++++++++++++++++++++
+ 7 files changed, 1032 insertions(+), 108 deletions(-)
+```
+
+---
