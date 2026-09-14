@@ -145,7 +145,8 @@ data class TrackBackupItem(
     val analysisFailureReason: String? = null,
     val analysisRetryCount: Int = 0,
     val fileModifiedTimestamp: Long = 0L,
-    val metadataWriteState: String = "NOT_ANALYSED"
+    val metadataWriteState: String = "NOT_ANALYSED",
+    val fieldProvenanceJson: String = "{}"
 ) {
     fun toEntity(): TrackEntity = TrackEntity(
         id = id,
@@ -214,7 +215,8 @@ data class TrackBackupItem(
         resolvedArtist = resolvedArtist,
         metadataSource = metadataSource,
         metadataConfidence = metadataConfidence,
-        metadataWriteState = metadataWriteState
+        metadataWriteState = metadataWriteState,
+        fieldProvenanceJson = fieldProvenanceJson
     )
 
     companion object {
@@ -285,7 +287,8 @@ data class TrackBackupItem(
             analysisFailureReason = entity.analysisFailureReason,
             analysisRetryCount = entity.analysisRetryCount,
             fileModifiedTimestamp = entity.fileModifiedTimestamp,
-            metadataWriteState = entity.metadataWriteState
+            metadataWriteState = entity.metadataWriteState,
+            fieldProvenanceJson = entity.fieldProvenanceJson
         )
 
         fun fromJson(json: JSONObject): TrackBackupItem = TrackBackupItem(

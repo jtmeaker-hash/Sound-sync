@@ -24,7 +24,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MetadataBackupEntity::class,
         TrackBrainStatusEntity::class
     ],
-    version = 19,
+    version = 20,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -759,6 +759,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    db.execSQL("ALTER TABLE `tracks` ADD COLUMN `fieldProvenanceJson` TEXT NOT NULL DEFAULT '{}'")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("ALTER TABLE `metadata_backups` ADD COLUMN `fieldProvenanceJson` TEXT")
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -784,7 +795,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_15_16,
                     MIGRATION_16_17,
                     MIGRATION_17_18,
-                    MIGRATION_18_19
+                    MIGRATION_18_19,
+                    MIGRATION_19_20
                 )
                 .fallbackToDestructiveMigration()
                 .build()

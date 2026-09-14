@@ -242,7 +242,8 @@ data class Track(
     val validationModifiedTimestamp: Long = 0L,
     val physicalMediaKey: String = "",
     val mediaStoreId: Long? = null,
-    val mediaStoreVolume: String? = null
+    val mediaStoreVolume: String? = null,
+    val fieldProvenanceJson: String = "{}"
 ) {
     val playability: PlayabilityStatus
         get() = try { PlayabilityStatus.valueOf(playabilityStatus) } catch (_: Exception) { PlayabilityStatus.UNKNOWN }
@@ -313,6 +314,28 @@ data class Track(
 
     val keyShortDisplay: String
         get() = if (hasValidKey) musicalKey else "—"
+
+    fun getFieldProvenance(fieldName: String): com.example.metadata.merge.MetadataSourceProvenance {
+        return com.example.metadata.merge.TrackFieldProvenance.parse(fieldProvenanceJson)[fieldName.lowercase()]
+            ?: com.example.metadata.merge.LocalFirstMetadataMerger.inferFieldProvenance(this, fieldName)
+    }
+
+    fun withFieldProvenance(fieldName: String, provenance: com.example.metadata.merge.MetadataSourceProvenance): Track {
+        val current = com.example.metadata.merge.TrackFieldProvenance.parse(fieldProvenanceJson).toMutableMap()
+        current[fieldName.lowercase()] = provenance
+        return this.copy(fieldProvenanceJson = com.example.metadata.merge.TrackFieldProvenance.toJson(current))
+    }
+
+    fun getAllFieldProvenances(): Map<String, com.example.metadata.merge.MetadataSourceProvenance> {
+        val map = com.example.metadata.merge.TrackFieldProvenance.parse(fieldProvenanceJson).toMutableMap()
+        val fields = listOf("title", "artist", "album", "genre", "year", "bpm", "key", "artwork")
+        for (f in fields) {
+            if (!map.containsKey(f)) {
+                map[f] = com.example.metadata.merge.LocalFirstMetadataMerger.inferFieldProvenance(this, f)
+            }
+        }
+        return map
+    }
 }
 
 data class Album(

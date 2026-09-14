@@ -32,5 +32,6 @@ data class MetadataBackupEntity(
     val artworkCachePath: String? = null,
     val hasEmbeddedArtwork: Boolean = false,
     val timestamp: Long = System.currentTimeMillis(),
-    val isOriginalScanBackup: Boolean = false
+    val isOriginalScanBackup: Boolean = false,
+    val fieldProvenanceJson: String? = null
 )

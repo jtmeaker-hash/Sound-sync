@@ -108,7 +108,8 @@ data class TrackEntity(
     val validationModifiedTimestamp: Long = 0L,
     val physicalMediaKey: String = "",
     val mediaStoreId: Long? = null,
-    val mediaStoreVolume: String? = null
+    val mediaStoreVolume: String? = null,
+    val fieldProvenanceJson: String = "{}"
 ) {
     fun toTrack(): Track {
         val syncEnum = try { SyncState.valueOf(syncState) } catch (e: Exception) { SyncState.LOCAL_ONLY }
@@ -217,7 +218,8 @@ data class TrackEntity(
             validationModifiedTimestamp = validationModifiedTimestamp,
             physicalMediaKey = physicalMediaKey,
             mediaStoreId = mediaStoreId,
-            mediaStoreVolume = mediaStoreVolume
+            mediaStoreVolume = mediaStoreVolume,
+            fieldProvenanceJson = fieldProvenanceJson
         )
     }
 
@@ -303,7 +305,8 @@ data class TrackEntity(
                 validationModifiedTimestamp = track.validationModifiedTimestamp,
                 physicalMediaKey = track.physicalMediaKey,
                 mediaStoreId = track.mediaStoreId,
-                mediaStoreVolume = track.mediaStoreVolume
+                mediaStoreVolume = track.mediaStoreVolume,
+                fieldProvenanceJson = track.fieldProvenanceJson
             )
         }
     }

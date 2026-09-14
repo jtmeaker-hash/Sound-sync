@@ -220,7 +220,8 @@ interface TrackDao {
                 userConfirmedMetadata = existing.userConfirmedMetadata || track.userConfirmedMetadata,
                 contentFingerprint = if (existing.contentFingerprint.isNotBlank()) existing.contentFingerprint else track.contentFingerprint,
                 playabilityStatus = if (existing.playabilityStatus == "PLAYABLE") existing.playabilityStatus else track.playabilityStatus,
-                resolvedUri = track.resolvedUri ?: existing.resolvedUri
+                resolvedUri = track.resolvedUri ?: existing.resolvedUri,
+                fieldProvenanceJson = if (existing.fieldProvenanceJson.isNotBlank() && existing.fieldProvenanceJson != "{}") existing.fieldProvenanceJson else track.fieldProvenanceJson
             )
             updateTrack(merged)
             return 0L

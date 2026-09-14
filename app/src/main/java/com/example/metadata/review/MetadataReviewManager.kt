@@ -147,40 +147,121 @@ class MetadataReviewManager(
     }
 
     suspend fun acceptSpecificField(itemId: String, fieldName: String): Boolean = withContext(Dispatchers.IO) {
+        acceptSelectedFields(itemId, setOf(fieldName))
+    }
+
+    /**
+     * Applies only the explicitly selected fields from the proposed candidate (Upgrade 26).
+     * Protected by pre-write backup, history recording, and transactional file rollback.
+     */
+    suspend fun acceptSelectedFields(itemId: String, fieldNames: Set<String>): Boolean = withContext(Dispatchers.IO) {
         val item = inboxDao.getItemById(itemId) ?: return@withContext false
         val track = trackDao.getTrackById(item.trackId) ?: return@withContext false
+        val settings = settingsStore.load()
+
+        if (settings.keepOriginalMetadataBackup) {
+            backupManager.savePreWriteBackup(track)
+        }
 
         var updated = track
-        when (fieldName.lowercase()) {
-            "title" -> {
-                historyManager.recordChange(track.id, track.filePath, "title", track.title, item.proposedTitle, item.provider, false)
-                updated = updated.copy(title = item.proposedTitle)
-            }
-            "artist" -> {
-                historyManager.recordChange(track.id, track.filePath, "artist", track.artist, item.proposedArtist, item.provider, false)
-                updated = updated.copy(artist = item.proposedArtist)
-            }
-            "album" -> {
-                historyManager.recordChange(track.id, track.filePath, "album", track.album, item.proposedAlbum, item.provider, false)
-                updated = updated.copy(album = item.proposedAlbum)
-            }
-            "genre" -> {
-                item.proposedGenre?.let {
-                    historyManager.recordChange(track.id, track.filePath, "genre", track.genre, it, item.provider, false)
-                    updated = updated.copy(genre = it)
+        val provMap = com.example.metadata.merge.TrackFieldProvenance.parse(track.fieldProvenanceJson).toMutableMap()
+
+        for (field in fieldNames) {
+            when (field.lowercase()) {
+                "title" -> {
+                    if (item.proposedTitle.isNotBlank()) {
+                        historyManager.recordChange(track.id, track.filePath, "title", track.title, item.proposedTitle, item.provider, false)
+                        updated = updated.copy(title = item.proposedTitle)
+                        provMap["title"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
                 }
-            }
-            "year" -> {
-                item.proposedYear?.let {
-                    historyManager.recordChange(track.id, track.filePath, "year", track.releaseYear?.toString(), it.toString(), item.provider, false)
-                    updated = updated.copy(releaseYear = it)
+                "artist" -> {
+                    if (item.proposedArtist.isNotBlank()) {
+                        historyManager.recordChange(track.id, track.filePath, "artist", track.artist, item.proposedArtist, item.provider, false)
+                        updated = updated.copy(artist = item.proposedArtist)
+                        provMap["artist"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
+                }
+                "album" -> {
+                    if (item.proposedAlbum.isNotBlank()) {
+                        historyManager.recordChange(track.id, track.filePath, "album", track.album, item.proposedAlbum, item.provider, false)
+                        updated = updated.copy(album = item.proposedAlbum)
+                        provMap["album"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
+                }
+                "genre" -> {
+                    item.proposedGenre?.let {
+                        historyManager.recordChange(track.id, track.filePath, "genre", track.genre, it, item.provider, false)
+                        updated = updated.copy(genre = it)
+                        provMap["genre"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
+                }
+                "year" -> {
+                    item.proposedYear?.let {
+                        historyManager.recordChange(track.id, track.filePath, "year", track.releaseYear?.toString(), it.toString(), item.provider, false)
+                        updated = updated.copy(releaseYear = it)
+                        provMap["year"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
+                }
+                "artwork" -> {
+                    val artUrl = item.artworkCachePath ?: item.proposedArtworkUrl
+                    if (!artUrl.isNullOrBlank()) {
+                        updated = updated.copy(
+                            artworkUrl = item.proposedArtworkUrl ?: updated.artworkUrl,
+                            artworkCachePath = item.artworkCachePath ?: updated.artworkCachePath,
+                            artworkSource = item.provider
+                        )
+                        provMap["artwork"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
                 }
             }
         }
-        trackDao.updateTrack(updated)
-        if (File(updated.filePath).exists() && File(updated.filePath).canWrite()) {
-            backupManager.writeWithTransactionalRollback(updated.toTrack())
+
+        val finalTrack = updated.copy(
+            fieldProvenanceJson = com.example.metadata.merge.TrackFieldProvenance.toJson(provMap),
+            metadataScanState = MetadataScanState.APPLIED.name,
+            userConfirmedMetadata = true
+        )
+        trackDao.updateTrack(finalTrack)
+        inboxDao.updateStatus(itemId, "ACCEPTED")
+        com.example.util.AlbumArtHelper.invalidateTrack(finalTrack.id, finalTrack.artist, finalTrack.album)
+
+        if (File(finalTrack.filePath).exists() && File(finalTrack.filePath).canWrite()) {
+            val artworkBytes = if (fieldNames.contains("artwork")) {
+                item.artworkCachePath?.let { path ->
+                    try { File(path).readBytes() } catch (_: Exception) { null }
+                }
+            } else null
+            backupManager.writeWithTransactionalRollback(
+                track = finalTrack.toTrack(),
+                artworkBytes = artworkBytes
+            )
         }
+
+        Log.i(TAG, "Accepted selected fields ($fieldNames) for item $itemId (track ${track.id})")
+        true
+    }
+
+    /**
+     * Explicitly dismisses the candidate proposal and confirms the existing local metadata (Upgrade 26).
+     */
+    suspend fun keepLocal(itemId: String): Boolean = withContext(Dispatchers.IO) {
+        val item = inboxDao.getItemById(itemId) ?: return@withContext false
+        val track = trackDao.getTrackById(item.trackId)
+        if (track != null) {
+            val provMap = com.example.metadata.merge.TrackFieldProvenance.parse(track.fieldProvenanceJson).toMutableMap()
+            provMap["title"] = com.example.metadata.merge.LocalFirstMetadataMerger.inferFieldProvenance(track.toTrack(), "title")
+            provMap["artist"] = com.example.metadata.merge.LocalFirstMetadataMerger.inferFieldProvenance(track.toTrack(), "artist")
+            trackDao.updateTrack(
+                track.copy(
+                    metadataScanState = MetadataScanState.APPROVED.name,
+                    userConfirmedMetadata = true,
+                    fieldProvenanceJson = com.example.metadata.merge.TrackFieldProvenance.toJson(provMap)
+                )
+            )
+        }
+        inboxDao.updateStatus(itemId, "KEPT_LOCAL")
+        Log.i(TAG, "Dismissed proposal and kept local metadata for item $itemId (track ${item.trackId})")
         true
     }
 

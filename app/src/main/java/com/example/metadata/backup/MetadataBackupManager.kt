@@ -79,7 +79,8 @@ class MetadataBackupManager(
             artworkCachePath = track.artworkCachePath,
             hasEmbeddedArtwork = physicalMetadata?.hasEmbeddedArtwork ?: false,
             timestamp = System.currentTimeMillis(),
-            isOriginalScanBackup = shouldMarkBaseline
+            isOriginalScanBackup = shouldMarkBaseline,
+            fieldProvenanceJson = track.fieldProvenanceJson
         )
 
         backupDao.insertBackup(backup)
@@ -234,7 +235,8 @@ class MetadataBackupManager(
             artworkCachePath = backup.artworkCachePath,
             metadataScanState = MetadataScanState.RESTORED.name,
             metadataConfidence = 100.0,
-            userConfirmedMetadata = true
+            userConfirmedMetadata = true,
+            fieldProvenanceJson = backup.fieldProvenanceJson ?: trackEntity?.fieldProvenanceJson ?: "{}"
         )
 
         trackDao.updateTrack(restoredEntity)
