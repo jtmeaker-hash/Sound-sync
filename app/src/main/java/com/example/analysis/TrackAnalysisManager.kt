@@ -437,6 +437,27 @@ class TrackAnalysisManager private constructor(
                     failedCount = failedTerminal
                 )
 
+                scanStateManager.saveCheckpoint(newProcessed, totalEligible, track.id, track.filePath)
+                try {
+                    com.example.state.PersistentSessionManager.getInstance(context).saveScannerCheckpoint(
+                        com.example.state.PersistentScannerCheckpoint(
+                            scanType = "METADATA_ANALYSIS",
+                            status = com.example.storage.ScanStatus.RUNNING,
+                            isRunning = true,
+                            isPaused = false,
+                            lastProcessedTrackId = track.id,
+                            lastProcessedFilePath = track.filePath,
+                            processedCount = newProcessed,
+                            totalDiscoveredCount = totalEligible,
+                            completedSuccess = completedSuccess,
+                            completedSkipped = completedSkipped,
+                            failedCount = failedTerminal,
+                            timestamp = System.currentTimeMillis()
+                        ),
+                        immediate = false
+                    )
+                } catch (_: Exception) {}
+
                 onProgressUpdate?.invoke(newProcessed, totalEligible, track.title)
                 delay(if (isPlaying) 200 else 60)
             }
@@ -457,6 +478,31 @@ class TrackAnalysisManager private constructor(
                 ScanLifecycleState.FAILED -> "Metadata scan failed"
                 ScanLifecycleState.PAUSED -> "Metadata scan paused"
                 else -> "Metadata scan complete"
+            }
+
+            if (terminalState == ScanLifecycleState.COMPLETE || terminalState == ScanLifecycleState.COMPLETE_WITH_ERRORS) {
+                scanStateManager.clearCheckpoint()
+                try {
+                    com.example.state.PersistentSessionManager.getInstance(context).clearScannerCheckpoint(immediate = true)
+                } catch (_: Exception) {}
+            } else if (terminalState == ScanLifecycleState.PAUSED) {
+                try {
+                    com.example.state.PersistentSessionManager.getInstance(context).saveScannerCheckpoint(
+                        com.example.state.PersistentScannerCheckpoint(
+                            scanType = "METADATA_ANALYSIS",
+                            status = com.example.storage.ScanStatus.PAUSED,
+                            isRunning = false,
+                            isPaused = true,
+                            processedCount = totalFinal,
+                            totalDiscoveredCount = totalEligible,
+                            completedSuccess = completedSuccess,
+                            completedSkipped = completedSkipped,
+                            failedCount = failedTerminal,
+                            timestamp = System.currentTimeMillis()
+                        ),
+                        immediate = true
+                    )
+                } catch (_: Exception) {}
             }
 
             scanStateManager.status = when (terminalState) {

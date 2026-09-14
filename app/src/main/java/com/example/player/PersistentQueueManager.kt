@@ -102,9 +102,69 @@ class PersistentQueueManager(
     private val _smartContinueMode = MutableStateFlow(SmartContinueMode.OFF)
     val smartContinueMode: StateFlow<SmartContinueMode> = _smartContinueMode.asStateFlow()
 
+    private val _shuffleSequenceTrackIds = MutableStateFlow<List<String>>(emptyList())
+    val shuffleSequenceTrackIds: StateFlow<List<String>> = _shuffleSequenceTrackIds.asStateFlow()
+
+    private val _shuffleIndex = MutableStateFlow(0)
+    val shuffleIndex: StateFlow<Int> = _shuffleIndex.asStateFlow()
+
+    private val _originalQueueTrackIds = MutableStateFlow<List<String>>(emptyList())
+    val originalQueueTrackIds: StateFlow<List<String>> = _originalQueueTrackIds.asStateFlow()
+
+    private val _playbackPositionMs = MutableStateFlow(0L)
+    val playbackPositionMs: StateFlow<Long> = _playbackPositionMs.asStateFlow()
+
+    private val _wasPlaying = MutableStateFlow(false)
+    val wasPlaying: StateFlow<Boolean> = _wasPlaying.asStateFlow()
+
     fun setSmartContinueMode(mode: SmartContinueMode) {
         _smartContinueMode.value = mode
         saveToDiskAsync()
+    }
+
+    fun updatePlaybackPosition(positionMs: Long, wasPlaying: Boolean = false, immediate: Boolean = false) {
+        _playbackPositionMs.value = positionMs
+        _wasPlaying.value = wasPlaying
+        if (immediate) {
+            saveToDiskAsync()
+        }
+    }
+
+    fun pruneDeletedTrack(trackId: String): Boolean {
+        var modified = false
+        if (_currentTrack.value?.id == trackId) {
+            val upcoming = _upcomingQueue.value.toMutableList()
+            val next = if (upcoming.isNotEmpty()) upcoming.removeAt(0) else null
+            _upcomingQueue.value = upcoming
+            _currentTrack.value = next
+            _playbackPositionMs.value = 0L
+            modified = true
+        }
+        val curUpcoming = _upcomingQueue.value
+        val filteredUpcoming = curUpcoming.filter { it.id != trackId }
+        if (curUpcoming.size != filteredUpcoming.size) {
+            _upcomingQueue.value = filteredUpcoming
+            modified = true
+        }
+        val curHistory = _playbackHistory.value
+        val filteredHistory = curHistory.filter { it.id != trackId }
+        if (curHistory.size != filteredHistory.size) {
+            _playbackHistory.value = filteredHistory
+            modified = true
+        }
+        val curShuffle = _shuffleSequenceTrackIds.value
+        val filteredShuffle = curShuffle.filter { it != trackId }
+        if (curShuffle.size != filteredShuffle.size) {
+            _shuffleSequenceTrackIds.value = filteredShuffle
+            _shuffleIndex.value = if (filteredShuffle.isNotEmpty()) {
+                _shuffleIndex.value.coerceIn(0, filteredShuffle.lastIndex)
+            } else 0
+            modified = true
+        }
+        if (modified) {
+            saveToDiskAsync()
+        }
+        return modified
     }
 
     // Context fallback provider when the upcoming queue is empty (e.g. playing from an album/folder)
@@ -124,10 +184,16 @@ class PersistentQueueManager(
         _isShuffleEnabled.value = shuffle
         val current = startTrack ?: tracks.first()
         _currentTrack.value = current
+        _originalQueueTrackIds.value = tracks.map { it.id }
 
         val remaining = if (shuffle) {
-            tracks.filter { it.id != current.id }.shuffled()
+            val shuffledRemaining = tracks.filter { it.id != current.id }.shuffled()
+            _shuffleSequenceTrackIds.value = listOf(current.id) + shuffledRemaining.map { it.id }
+            _shuffleIndex.value = 0
+            shuffledRemaining
         } else {
+            _shuffleSequenceTrackIds.value = emptyList()
+            _shuffleIndex.value = 0
             val idx = tracks.indexOfFirst { it.id == current.id }
             if (idx >= 0 && idx < tracks.lastIndex) {
                 tracks.subList(idx + 1, tracks.size)
@@ -233,7 +299,14 @@ class PersistentQueueManager(
         if (_isShuffleEnabled.value == enabled) return
         _isShuffleEnabled.value = enabled
         if (enabled && _upcomingQueue.value.isNotEmpty()) {
-            _upcomingQueue.value = _upcomingQueue.value.shuffled()
+            val current = _currentTrack.value
+            val shuffled = _upcomingQueue.value.shuffled()
+            _upcomingQueue.value = shuffled
+            _shuffleSequenceTrackIds.value = (if (current != null) listOf(current.id) else emptyList()) + shuffled.map { it.id }
+            _shuffleIndex.value = 0
+        } else if (!enabled) {
+            _shuffleSequenceTrackIds.value = emptyList()
+            _shuffleIndex.value = 0
         }
         saveToDiskAsync()
     }
@@ -304,6 +377,9 @@ class PersistentQueueManager(
             val next = upcoming.removeAt(0)
             _upcomingQueue.value = upcoming
             _currentTrack.value = next
+            if (_isShuffleEnabled.value) {
+                _shuffleIndex.value = _shuffleIndex.value + 1
+            }
             saveToDiskAsync()
             return next
         }
@@ -317,6 +393,10 @@ class PersistentQueueManager(
                 _upcomingQueue.value = newQueue.drop(1)
                 _currentTrack.value = next
                 _playbackHistory.value = emptyList()
+                if (_isShuffleEnabled.value) {
+                    _shuffleSequenceTrackIds.value = listOf(next.id) + newQueue.drop(1).map { it.id }
+                    _shuffleIndex.value = 0
+                }
                 saveToDiskAsync()
                 return next
             }
@@ -397,6 +477,9 @@ class PersistentQueueManager(
         }
 
         _currentTrack.value = prev
+        if (_isShuffleEnabled.value) {
+            _shuffleIndex.value = (_shuffleIndex.value - 1).coerceAtLeast(0)
+        }
         saveToDiskAsync()
         Log.d(TAG, "Previous track selected: '${prev.title}' (History left: ${history.size})")
         return prev
@@ -458,10 +541,22 @@ class PersistentQueueManager(
                 }
 
                 val root = JSONObject().apply {
-                    put("version", 2)
+                    put("version", 3)
                     put("isShuffle", _isShuffleEnabled.value)
                     put("repeatMode", _repeatMode.value.name)
                     put("smartContinueMode", _smartContinueMode.value.name)
+                    put("playbackPositionMs", _playbackPositionMs.value)
+                    put("wasPlaying", _wasPlaying.value)
+                    put("shuffleIndex", _shuffleIndex.value)
+
+                    val shuffleSeqArr = JSONArray()
+                    _shuffleSequenceTrackIds.value.forEach { shuffleSeqArr.put(it) }
+                    put("shuffleSequenceTrackIds", shuffleSeqArr)
+
+                    val origArr = JSONArray()
+                    _originalQueueTrackIds.value.forEach { origArr.put(it) }
+                    put("originalQueueTrackIds", origArr)
+
                     _currentTrack.value?.let { put("currentTrack", trackToJson(it)) }
 
                     val upcomingArr = JSONArray()
@@ -526,6 +621,28 @@ class PersistentQueueManager(
                     SmartContinueMode.valueOf(root.optString("smartContinueMode", "OFF"))
                 }.getOrDefault(SmartContinueMode.OFF)
 
+                _playbackPositionMs.value = root.optLong("playbackPositionMs", 0L)
+                _wasPlaying.value = root.optBoolean("wasPlaying", false)
+                _shuffleIndex.value = root.optInt("shuffleIndex", 0)
+
+                val shuffleSeqArr = root.optJSONArray("shuffleSequenceTrackIds")
+                if (shuffleSeqArr != null) {
+                    val list = mutableListOf<String>()
+                    for (i in 0 until shuffleSeqArr.length()) {
+                        list.add(shuffleSeqArr.optString(i))
+                    }
+                    _shuffleSequenceTrackIds.value = list
+                }
+
+                val origArr = root.optJSONArray("originalQueueTrackIds")
+                if (origArr != null) {
+                    val list = mutableListOf<String>()
+                    for (i in 0 until origArr.length()) {
+                        list.add(origArr.optString(i))
+                    }
+                    _originalQueueTrackIds.value = list
+                }
+
                 val currentObj = root.optJSONObject("currentTrack")
                 if (currentObj != null) {
                     _currentTrack.value = trackFromJson(currentObj)
@@ -549,7 +666,7 @@ class PersistentQueueManager(
                     _playbackHistory.value = list
                 }
 
-                Log.i(TAG, "Restored queue: current='${_currentTrack.value?.title}', upcoming=${_upcomingQueue.value.size}, history=${_playbackHistory.value.size}")
+                Log.i(TAG, "Restored queue: current='${_currentTrack.value?.title}', upcoming=${_upcomingQueue.value.size}, history=${_playbackHistory.value.size}, shuffleSeq=${_shuffleSequenceTrackIds.value.size}")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed restoring queue from disk: ${e.message}")
             }

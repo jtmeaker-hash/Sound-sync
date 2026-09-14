@@ -272,11 +272,17 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         Log.d(TAG, "onPause: Activity losing focus.")
+        try {
+            com.example.state.PersistentSessionManager.getInstance(this).flushImmediate()
+        } catch (_: Exception) {}
     }
 
     override fun onStop() {
         super.onStop()
         Log.d(TAG, "onStop: Activity in background.")
+        try {
+            com.example.state.PersistentSessionManager.getInstance(this).flushImmediate()
+        } catch (_: Exception) {}
     }
 
     override fun onDestroy() {

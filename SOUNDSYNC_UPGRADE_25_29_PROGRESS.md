@@ -76,7 +76,45 @@
   - `CommandPaletteEngineTest`: ALL PASSED.
 
 ### Stage 27 — Persistent Application & Playback State
-- **Status**: PENDING
+- **Status**: COMPLETE
+- **Delivered Capabilities**:
+  - `PersistentSessionManager` & `PersistentSessionModels`: Versioned (v1) atomic JSON state persistence (`persistent_app_session.json`) decoupled from high-frequency SQLite writes to prevent DB churn and corruption.
+  - Playback State Persistence: Current track (stable ID + file path), exact playback position with 3-second debouncing, and `wasPlaying` state. On relaunch, position is restored with strict `autoPlay = false` and paused audio to prevent blasting.
+  - Completed Track Guard: Resets restored position to 0L if saved within 2 seconds of track duration, preventing looping/stuck fractional ends.
+  - Upgraded `PersistentQueueManager`: Preserves full manual queue order, current track, upcoming items, exact generated shuffle sequence (`shuffleSequenceTrackIds`) and index (`shuffleIndex`) preventing random re-shuffling on relaunch, separate ordered LIFO playback history, and repeat modes (OFF, ALL, ONE).
+  - Library UI State Persistence: Sort option (`ExplorerSortOption`), sort direction, active search query, selected crate (`selectedCrateId`), genre filter, platform filter, hidden unavailable tracks toggle, last browsed folder path (`currentDirectoryPath`), storage source (`currentStorageSourceId`), selected main tab (`DjTab`), selected local library category (`LocalCategory`), and scroll anchors.
+  - Appearance & Mode Persistence: Active theme (`ThemeMode`), Pro dark variant (`ProDarkVariant`), library density (`ProLibraryDensity`), waveform style (`WaveformStyle`), track grid view toggle, and Car Mode state + settings (active, keep awake, night mode, display mode, smart driving shuffle).
+  - Scanner / Background Jobs Checkpoints: `ScanStateManager` and `TrackAnalysisManager` checkpoint processed count, total count, last track ID, and last file path. Recovers interrupted/crashed scans to `PAUSED` without restarting from zero or duplicating analysis.
+  - Resilient Fallback & Safety: `validateAndRepair` prunes missing/deleted tracks, promotes the next upcoming track if the current track was removed, falls back to root if the browsed folder is deleted, and gracefully recovers from corrupt session JSON via backup files without wiping the user's library or Room database.
+  - Lifecycle Integration: Immediate checkpoint flush on pause, track start, queue change, and app backgrounding/termination (`flushImmediate()` in `MainActivity.onPause`/`onStop` and `MainDjViewModel.onCleared`).
+- **Files Changed / Added**:
+  - `app/src/main/java/com/example/state/PersistentSessionModels.kt` (New)
+  - `app/src/main/java/com/example/state/PersistentSessionManager.kt` (New)
+  - `app/src/main/java/com/example/player/PersistentQueueManager.kt` (Upgraded to v3 JSON schema with shuffle order & index retention)
+  - `app/src/main/java/com/example/storage/ScanStateManager.kt` (Added checkpoint storage & recovery)
+  - `app/src/main/java/com/example/analysis/TrackAnalysisManager.kt` (Added analysis loop checkpoints)
+  - `app/src/main/java/com/example/MainActivity.kt` (Added lifecycle flush hooks)
+  - `app/src/main/java/com/example/ui/MainDjViewModel.kt` (Wired state restoration, 3s position loop, queue sync, and UI state triggers)
+  - `app/src/test/java/com/example/PersistentAppStateTest.kt` (New comprehensive test suite with 14 tests)
+- **Tests Performed**:
+  - `PersistentAppStateTest`:
+    1. Track paused halfway through (restores exact position, paused).
+    2. Active playback session (wasPlaying remembered, audio paused on relaunch).
+    3. Non-empty manual queue (exact items and order preserved).
+    4. Shuffle enabled halfway through generated order (sequence and index preserved, not re-shuffled).
+    5. Repeat ONE and repeat ALL modes.
+    6. Previous-track history (LIFO return in shuffle and normal).
+    7. Non-default sort (BPM_DESC, etc.).
+    8. Last browsed folder and storage source.
+    9. Non-default theme and library density.
+    10. Car Mode state and settings.
+    11. Scanner/analysis checkpoint halfway through (resumes remaining without duplicating).
+    12. One queued track deleted before relaunch (repaired gracefully without crash).
+    13. Completed track near end (within 2s) guard resets to 0L.
+    14. Corrupted session JSON fallback does not wipe database.
+    (ALL 14 PASSED)
+  - `CommandPaletteEngineTest`: ALL PASSED.
+  - `LocalFirstMetadataMergeTest`: ALL PASSED.
 
 ### Stage 28 — DJ Prep Environment
 - **Status**: PENDING
@@ -89,3 +127,6 @@
 ## Verification & Regressions
 - Baseline test run completed successfully.
 - Stage 25 compilation and unit tests passed without regressions.
+- Stage 26 compilation and unit tests passed without regressions.
+- Stage 27 compilation and unit tests passed without regressions.
+
