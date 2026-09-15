@@ -50,9 +50,7 @@ sealed interface MetadataWriteResult {
 
     val writeState: MetadataWriteState
         get() = when (this) {
-            is Written, is AlreadyInSync -> MetadataWriteState.FILE_WRITE_SUCCESS
-            is TextWritten -> MetadataWriteState.TEXT_METADATA_WRITTEN
-            is ArtworkEmbedded -> MetadataWriteState.ARTWORK_EMBEDDED
+            is Written, is AlreadyInSync, is TextWritten, is ArtworkEmbedded -> MetadataWriteState.FILE_WRITE_SUCCESS
             is ArtworkWriteFailed -> MetadataWriteState.ARTWORK_WRITE_FAILED
             is Partial -> MetadataWriteState.FILE_WRITE_PARTIAL
             is Skipped, is LibraryOnly -> MetadataWriteState.DATABASE_ONLY

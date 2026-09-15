@@ -150,7 +150,11 @@ enum class MetadataWriteState(
     PERMISSION_REQUIRED("Permission required", "⚠", "Permission required to write file"),
     PENDING_APPROVAL("Pending approval", "⏳", "Pending approval to embed into file"),
     WRITING_ARTWORK("Writing artwork...", "⏳", "Writing artwork into audio file"),
-    ARTWORK_SAVED("Artwork saved", "✓", "Artwork embedded in audio file")
+    ARTWORK_SAVED("Artwork saved", "✓", "Artwork embedded in audio file"),
+    TEXT_METADATA_WRITTEN("Text tags embedded", "✓", "Text metadata embedded in audio file"),
+    ARTWORK_EMBEDDED("Artwork embedded", "✓", "Artwork embedded in audio file"),
+    ARTWORK_WRITE_FAILED("Artwork write failed", "⚠", "Failed to embed artwork into audio file"),
+    ARTWORK_CACHED("Artwork cached", "ℹ", "Artwork cached locally, awaiting approval")
 }
 
 enum class AnalysisState {

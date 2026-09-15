@@ -166,7 +166,9 @@ fun MetadataFileWriteStateBadge(
     val state = track.writeState
     val (bgColor, borderColor, textColor, icon) = when (state) {
         com.example.model.MetadataWriteState.FILE_WRITE_SUCCESS,
-        com.example.model.MetadataWriteState.ARTWORK_SAVED -> {
+        com.example.model.MetadataWriteState.ARTWORK_SAVED,
+        com.example.model.MetadataWriteState.TEXT_METADATA_WRITTEN,
+        com.example.model.MetadataWriteState.ARTWORK_EMBEDDED -> {
             val c = NeonGreen
             Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.CheckCircle)
         }
@@ -175,7 +177,8 @@ fun MetadataFileWriteStateBadge(
             val c = DeckACyan
             Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.HourglassTop)
         }
-        com.example.model.MetadataWriteState.PENDING_APPROVAL -> {
+        com.example.model.MetadataWriteState.PENDING_APPROVAL,
+        com.example.model.MetadataWriteState.ARTWORK_CACHED -> {
             val c = NeonAmber
             Tuple4(c.copy(alpha = 0.18f), c.copy(alpha = 0.6f), c, Icons.Default.HourglassTop)
         }
@@ -183,7 +186,8 @@ fun MetadataFileWriteStateBadge(
             val c = NeonAmber
             Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.Warning)
         }
-        com.example.model.MetadataWriteState.FILE_WRITE_FAILED -> {
+        com.example.model.MetadataWriteState.FILE_WRITE_FAILED,
+        com.example.model.MetadataWriteState.ARTWORK_WRITE_FAILED -> {
             val c = DeckBPink
             Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.Error)
         }

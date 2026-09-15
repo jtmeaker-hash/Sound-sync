@@ -268,7 +268,7 @@ fun TrackInspectorScreen(
                             )
                         }
 
-                        val finalState = if ((result is MetadataWriteResult.Written || result is MetadataWriteResult.AlreadyInSync) && artworkBytes != null) {
+                        val finalState = if ((result is MetadataWriteResult.Written || result is MetadataWriteResult.AlreadyInSync || result is MetadataWriteResult.ArtworkEmbedded) && artworkBytes != null) {
                             com.example.model.MetadataWriteState.ARTWORK_SAVED
                         } else {
                             result.writeState
@@ -279,7 +279,7 @@ fun TrackInspectorScreen(
                             artworkSource = if (finalState == com.example.model.MetadataWriteState.ARTWORK_SAVED) "Embedded Tag" else currentTrack.artworkSource
                         )
 
-                        if (result is MetadataWriteResult.Written || result is MetadataWriteResult.AlreadyInSync) {
+                        if (result is MetadataWriteResult.Written || result is MetadataWriteResult.TextWritten || result is MetadataWriteResult.ArtworkEmbedded || result is MetadataWriteResult.AlreadyInSync) {
                             withContext(Dispatchers.IO) {
                                 database.metadataReviewInboxDao().getPendingItemForTrack(currentTrack.id)?.let { pending ->
                                     database.metadataReviewInboxDao().updateStatus(pending.id, "ACCEPTED")
@@ -289,6 +289,9 @@ fun TrackInspectorScreen(
 
                         val msg = when (result) {
                             is MetadataWriteResult.Written -> if (artworkBytes != null) "Successfully embedded artwork in audio file!" else "Successfully embedded metadata in audio file!"
+                            is MetadataWriteResult.TextWritten -> "Successfully embedded text metadata in audio file!"
+                            is MetadataWriteResult.ArtworkEmbedded -> "Successfully embedded artwork in audio file!"
+                            is MetadataWriteResult.ArtworkWriteFailed -> "Failed to embed artwork: ${result.reason}"
                             is MetadataWriteResult.AlreadyInSync -> "File metadata is already up to date!"
                             is MetadataWriteResult.Partial -> "Partially embedded metadata in audio file."
                             is MetadataWriteResult.Skipped -> "File tag embedding skipped: ${result.reason}"
