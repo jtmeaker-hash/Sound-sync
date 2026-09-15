@@ -76,8 +76,34 @@ object BitrateProbe {
                 }
             } else {
                 val file = File(filePathOrUri)
-                if (!file.exists() || !file.canRead()) return Result(0, null, "unopenable")
-                extractor.setDataSource(filePathOrUri)
+                if (file.exists() && file.canRead()) {
+                    extractor.setDataSource(filePathOrUri)
+                } else {
+                    val fallbackUri = try {
+                        com.example.storage.TrackSourceResolver.findMediaStoreUriForPath(context, filePathOrUri)?.let { Uri.parse(it) }
+                            ?: com.example.storage.SafStorageManager.findDocumentForPath(context, filePathOrUri)?.uri
+                    } catch (_: Throwable) { null }
+
+                    if (fallbackUri != null) {
+                        try {
+                            context.contentResolver.openFileDescriptor(fallbackUri, "r")?.use { pfd ->
+                                extractor.setDataSource(pfd.fileDescriptor)
+                            } ?: extractor.setDataSource(context, fallbackUri, null)
+                        } catch (_: Throwable) {
+                            val wav = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
+                            if (wav.isValid && wav.dataSize > 0) {
+                                return Result(wav.bitrateKbps, BitrateMode.CBR, "wav_container")
+                            }
+                            return Result(0, null, "unopenable")
+                        }
+                    } else {
+                        val wav = com.example.analysis.WavContainerParser.parse(context, filePathOrUri)
+                        if (wav.isValid && wav.dataSize > 0) {
+                            return Result(wav.bitrateKbps, BitrateMode.CBR, "wav_container")
+                        }
+                        return Result(0, null, "unopenable")
+                    }
+                }
             }
 
             var format: MediaFormat? = null

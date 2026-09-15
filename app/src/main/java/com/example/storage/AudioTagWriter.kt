@@ -266,8 +266,9 @@ object AudioTagWriter {
                 Log.w(TAG, "Direct file write not permitted for ${file.absolutePath}, checking MediaStore fallback...")
                 if (context != null) {
                     val mediaUri = getMediaStoreUriForPath(context, file.absolutePath)
+                        ?: SafStorageManager.findDocumentForPath(context, file.absolutePath)?.uri
                     if (mediaUri != null) {
-                        Log.i(TAG, "Using MediaStore URI fallback: $mediaUri for ${file.absolutePath}")
+                        Log.i(TAG, "Using MediaStore/SAF URI fallback: $mediaUri for ${file.absolutePath}")
                         return@withFileLock writeContentUriTagsWithResult(context, mediaUri.toString(), payload)
                     }
                 }
@@ -823,27 +824,51 @@ object AudioTagWriter {
      * Queries MediaStore for a content:// URI matching the file's absolute path.
      */
     fun getMediaStoreUriForPath(context: Context, path: String): Uri? {
-        return try {
-            val projection = arrayOf(MediaStore.Audio.Media._ID)
-            val selection = "${MediaStore.Audio.Media.DATA} = ?"
-            val selectionArgs = arrayOf(path)
-            context.contentResolver.query(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                selection,
-                selectionArgs,
-                null
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
-                    val id = cursor.getLong(idCol)
-                    ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
-                } else null
+        try {
+            val resolvedStr = TrackSourceResolver.findMediaStoreUriForPath(context, path)
+            if (resolvedStr != null) {
+                val uri = Uri.parse(resolvedStr)
+                if (StorageWritePermissionHelper.isMediaStoreUriValid(context, uri)) {
+                    return uri
+                }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not resolve MediaStore URI for path $path: ${e.message}")
-            null
+        } catch (_: Throwable) {}
+
+        val volumeUuid = TrackSourceResolver.extractVolumeUuid(path)
+        val collections = mutableListOf<Uri>()
+        if (volumeUuid != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                collections.add(MediaStore.Audio.Media.getContentUri(volumeUuid.lowercase(Locale.ROOT)))
+            } catch (_: Throwable) {}
         }
+        collections.add(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+
+        for (collectionUri in collections.distinct()) {
+            try {
+                val projection = arrayOf(MediaStore.Audio.Media._ID)
+                val selection = "${MediaStore.Audio.Media.DATA} = ?"
+                val selectionArgs = arrayOf(path)
+                context.contentResolver.query(
+                    collectionUri,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                        val id = cursor.getLong(idCol)
+                        val resUri = ContentUris.withAppendedId(collectionUri, id)
+                        if (StorageWritePermissionHelper.isMediaStoreUriValid(context, resUri)) {
+                            return resUri
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not resolve MediaStore URI for path $path on $collectionUri: ${e.message}")
+            }
+        }
+        return null
     }
 
     /**
@@ -1075,6 +1100,7 @@ object AudioTagWriter {
         if (ctx != null) {
             try {
                 val mediaUri = getMediaStoreUriForPath(ctx, originalPath)
+                    ?: SafStorageManager.findDocumentForPath(ctx, originalPath)?.uri
                 if (mediaUri != null) {
                     val pfd = try {
                         ctx.contentResolver.openFileDescriptor(mediaUri, "rwt")
@@ -1091,9 +1117,13 @@ object AudioTagWriter {
                                 }
                             }
                         }
-                        if (originalFile.exists() && originalFile.length() > 0L) {
+                        val writtenSize = try {
+                            ctx.contentResolver.openFileDescriptor(mediaUri, "r")?.use { it.statSize }
+                        } catch (_: Throwable) { null } ?: (if (originalFile.exists()) originalFile.length() else tempFile.length())
+
+                        if (writtenSize > 0L) {
                             FileDeletionGuard.deleteTempFile(tempFile, "AudioTagWriter:replaceOriginalFile:Tier7MediaStore")
-                            Log.i(TAG, "[AudioTagWriter] MediaStore stream replacement succeeded for '$originalPath'")
+                            Log.i(TAG, "[AudioTagWriter] MediaStore/SAF stream replacement succeeded for '$originalPath' (writtenSize=$writtenSize)")
                             return true
                         }
                     }
@@ -1111,31 +1141,31 @@ object AudioTagWriter {
         return when (ext) {
             "flac" -> writeFlacTagsWithResult(file, payload, context)
             "wav" -> {
-                val ok = writeWavTags(file, payload)
+                val ok = writeWavTags(file, payload, context)
                 if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .wav file")
             }
             "mp3" -> {
-                val ok = writeMp3Tags(file, payload)
+                val ok = writeMp3Tags(file, payload, context)
                 if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .mp3 file")
             }
             "m4a", "mp4" -> {
-                val ok = writeM4aTags(file, payload)
+                val ok = writeM4aTags(file, payload, context)
                 if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .$ext file")
             }
             "aac" -> {
-                val ok = if (writeM4aTags(file, payload)) true else writeMp3Tags(file, payload)
+                val ok = if (writeM4aTags(file, payload, context)) true else writeMp3Tags(file, payload, context)
                 if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .aac file")
             }
             "ogg" -> {
-                val ok = writeOggVorbisTags(file, payload)
+                val ok = writeOggVorbisTags(file, payload, context)
                 if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .ogg file")
             }
             "opus" -> {
-                val ok = writeOggOpusTags(file, payload)
+                val ok = writeOggOpusTags(file, payload, context)
                 if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .opus file")
             }
             "aif", "aiff" -> {
-                val ok = writeAiffTags(file, payload)
+                val ok = writeAiffTags(file, payload, context)
                 if (ok) TagWriteResult.Success else TagWriteResult.Failed("Tag writing engine failed for .$ext file")
             }
             else -> {
@@ -1155,7 +1185,7 @@ object AudioTagWriter {
     // Safely skips massive APIC artwork in WAV to prevent container corruption
     // =========================================================================
 
-    private fun writeWavTags(file: File, payload: CompleteTagPayload): Boolean {
+    private fun writeWavTags(file: File, payload: CompleteTagPayload, context: Context? = null): Boolean {
         var tempFile: File? = null
         try {
             val fileLength = file.length()
@@ -1410,24 +1440,12 @@ object AudioTagWriter {
             }
             val listChunkBytes = listChunkStream.toByteArray()
 
-            // 3. Build companion compact 'id3 ' chunk (BPM, Key, comments)
-            // Safe artwork rule for WAV: Never embed massive artwork (> 64KB) in WAV containers
-            // to avoid RIFF chunk overflow, corruption of legacy WAV players, and out-of-memory errors.
-            // Artwork is safely cached on disk and in the database.
-            // If artwork is small (e.g. <= 64KB), it can be embedded safely.
-            val safeArtworkBytes = if (payload.artworkBytes != null && payload.artworkBytes.size <= 64 * 1024) {
-                payload.artworkBytes
-            } else {
-                null
-            }
-            val id3Payload = payload.copy(artworkBytes = safeArtworkBytes, artworkMimeType = if (safeArtworkBytes != null) payload.artworkMimeType else "")
-            val wavId3Frames = if (safeArtworkBytes == null) {
-                existingId3Frames.filter { it.id != "APIC" && it.id != "PIC" }
-            } else {
-                existingId3Frames
-            }
-
-            val id3TagBytes = buildId3v2Tag(id3Payload, wavId3Frames)
+            // 3. Build companion 'id3 ' chunk (BPM, Key, comments, APIC artwork)
+            // Software like Kid3, foobar2000, and DJ applications read ID3v2 tags and embedded
+            // APIC artwork directly from the 'id3 ' chunk in WAV files.
+            // If new artwork is provided in payload, buildId3v2Tag writes it to APIC.
+            // If new artwork is not provided, existing APIC frames in existingId3Frames are preserved.
+            val id3TagBytes = buildId3v2Tag(payload, existingId3Frames)
             val id3ChunkStream = ByteArrayOutputStream()
             id3ChunkStream.write("id3 ".toByteArray(StandardCharsets.US_ASCII))
             writeLittleEndianInt(id3ChunkStream, id3TagBytes.size)
@@ -1495,7 +1513,7 @@ object AudioTagWriter {
             fos.close()
 
             if (tempFile.length() >= (dataChunkSize + 36L)) {
-                if (replaceOriginalFile(file, tempFile)) {
+                if (replaceOriginalFile(file, tempFile, context)) {
                     Log.d(TAG, "Successfully wrote RIFF INFO + ID3 tags to WAV ${file.name}")
                     return true
                 } else {
@@ -1516,7 +1534,7 @@ object AudioTagWriter {
     // AIFF (EA IFF 85) IMPLEMENTATION: Writes 'ID3 ' chunk with ID3v2.3 tags
     // =========================================================================
 
-    private fun writeAiffTags(file: File, payload: CompleteTagPayload): Boolean {
+    private fun writeAiffTags(file: File, payload: CompleteTagPayload, context: Context? = null): Boolean {
         var tempFile: File? = null
         try {
             val fileLength = file.length()
@@ -1718,7 +1736,7 @@ object AudioTagWriter {
             fos.close()
 
             if (tempFile.length() >= (fileLength / 2)) {
-                if (replaceOriginalFile(file, tempFile)) {
+                if (replaceOriginalFile(file, tempFile, context)) {
                     Log.d(TAG, "Successfully wrote ID3 chunk to AIFF ${file.name}")
                     return true
                 }
@@ -1735,7 +1753,7 @@ object AudioTagWriter {
     // MP3 (ID3v2.3) IMPLEMENTATION
     // =========================================================================
 
-    private fun writeMp3Tags(file: File, payload: CompleteTagPayload): Boolean {
+    private fun writeMp3Tags(file: File, payload: CompleteTagPayload, context: Context? = null): Boolean {
         var tempFile: File? = null
         try {
             val fileLength = file.length()
@@ -1799,7 +1817,7 @@ object AudioTagWriter {
             audioInputStream.close()
 
             if (tempFile.length() > (fileLength / 2)) {
-                if (replaceOriginalFile(file, tempFile)) {
+                if (replaceOriginalFile(file, tempFile, context)) {
                     Log.d(TAG, "Successfully wrote complete ID3v2 tags and artwork to ${file.name}")
                     return true
                 }
@@ -2124,7 +2142,7 @@ object AudioTagWriter {
     // M4A / AAC CONTAINER IMPLEMENTATION: moov -> udta -> meta -> ilst
     // =========================================================================
 
-    private fun writeM4aTags(file: File, payload: CompleteTagPayload): Boolean {
+    private fun writeM4aTags(file: File, payload: CompleteTagPayload, context: Context? = null): Boolean {
         var tempFile: File? = null
         try {
             val fileLength = file.length()
@@ -2201,7 +2219,7 @@ object AudioTagWriter {
             fos.close()
 
             if (tempFile.length() > (fileLength / 2)) {
-                if (replaceOriginalFile(file, tempFile)) {
+                if (replaceOriginalFile(file, tempFile, context)) {
                     Log.d(TAG, "Successfully wrote M4A tags and artwork to ${file.name}")
                     return true
                 }
@@ -2218,15 +2236,15 @@ object AudioTagWriter {
     // OGG VORBIS & OGG OPUS IMPLEMENTATIONS
     // =========================================================================
 
-    private fun writeOggVorbisTags(file: File, payload: CompleteTagPayload): Boolean {
-        return rewriteOggComments(file, isOpus = false, payload = payload)
+    private fun writeOggVorbisTags(file: File, payload: CompleteTagPayload, context: Context? = null): Boolean {
+        return rewriteOggComments(file, isOpus = false, payload = payload, context = context)
     }
 
-    private fun writeOggOpusTags(file: File, payload: CompleteTagPayload): Boolean {
-        return rewriteOggComments(file, isOpus = true, payload = payload)
+    private fun writeOggOpusTags(file: File, payload: CompleteTagPayload, context: Context? = null): Boolean {
+        return rewriteOggComments(file, isOpus = true, payload = payload, context = context)
     }
 
-    private fun rewriteOggComments(file: File, isOpus: Boolean, payload: CompleteTagPayload): Boolean {
+    private fun rewriteOggComments(file: File, isOpus: Boolean, payload: CompleteTagPayload, context: Context? = null): Boolean {
         var tempFile: File? = null
         try {
             val fileLength = file.length()
@@ -2380,9 +2398,19 @@ object AudioTagWriter {
                 val bStr = if (it == it.roundToInt().toDouble()) it.toInt().toString() else String.format(Locale.US, "%.1f", it)
                 commentsList.add("BPM=$bStr")
             }
-            payload.musicalKey?.takeIf { it.isNotBlank() && it != "—" }?.let {
-                commentsList.add("KEY=$it")
-                commentsList.add("INITIALKEY=$it")
+            payload.musicalKey?.takeIf { it.isNotBlank() && it != "—" && it != "-" }?.let { keyVal ->
+                val hasExistingKeyOnly = commentsList.any { c ->
+                    val k = c.substringBefore('=', "").trim().uppercase(Locale.ROOT)
+                    k == "KEY"
+                } && commentsList.none { c ->
+                    val k = c.substringBefore('=', "").trim().uppercase(Locale.ROOT)
+                    k == "INITIALKEY"
+                }
+                if (hasExistingKeyOnly) {
+                    commentsList.add("KEY=$keyVal")
+                } else {
+                    commentsList.add("INITIALKEY=$keyVal")
+                }
             }
 
             if (payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()) {
@@ -2441,7 +2469,7 @@ object AudioTagWriter {
             inputStream.close()
 
             if (tempFile.length() > (fileLength / 2)) {
-                if (replaceOriginalFile(file, tempFile)) {
+                if (replaceOriginalFile(file, tempFile, context)) {
                     Log.d(TAG, "Successfully wrote Ogg Vorbis/Opus comments and artwork to ${file.name}")
                     return true
                 }
@@ -2479,11 +2507,17 @@ object AudioTagWriter {
         val framesToWrite = mutableListOf<Id3Frame>()
         for (f in existingFrames) {
             if (!updatingFrameIds.contains(f.id)) {
-                if (f.id == "TXXX" && (!payload.musicalKey.isNullOrBlank() || (payload.bpm != null && payload.bpm > 0))) {
+                if (f.id == "TXXX") {
                     val text = String(f.data, StandardCharsets.ISO_8859_1).lowercase(Locale.ROOT)
-                    if (!text.contains("initialkey") && !text.contains("bpm")) {
-                        framesToWrite.add(f)
+                    val isBpm = text.contains("bpm") || text.contains("tempo")
+                    val isKey = text.contains("initialkey") || text.contains("musicalkey") || text.contains("key")
+                    if ((isBpm && payload.bpm != null && payload.bpm > 0) ||
+                        (isKey && !payload.musicalKey.isNullOrBlank() && payload.musicalKey != "—")
+                    ) {
+                        // Skip redundant TXXX frames in favor of standard TBPM / TKEY
+                        continue
                     }
+                    framesToWrite.add(f)
                 } else {
                     framesToWrite.add(f)
                 }
@@ -2542,12 +2576,10 @@ object AudioTagWriter {
                 String.format(Locale.US, "%.1f", payload.bpm)
             }
             framesToWrite.add(Id3Frame("TBPM", buildTextFrameData(bpmStr)))
-            framesToWrite.add(Id3Frame("TXXX", buildUserTextFrameData("BPM", bpmStr)))
         }
         if (!payload.musicalKey.isNullOrBlank() && payload.musicalKey != "—" && payload.musicalKey != "-") {
             val keyStr = payload.musicalKey.trim()
             framesToWrite.add(Id3Frame("TKEY", buildTextFrameData(keyStr)))
-            framesToWrite.add(Id3Frame("TXXX", buildUserTextFrameData("INITIALKEY", keyStr)))
         }
 
         if (payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()) {
@@ -2649,10 +2681,15 @@ object AudioTagWriter {
             updatingKeys.add("DATE")
             updatingKeys.add("YEAR")
         }
-        if (payload.bpm != null && payload.bpm in 30.0..300.0) updatingKeys.add("BPM")
+        if (payload.bpm != null && payload.bpm in 30.0..300.0) {
+            updatingKeys.add("BPM")
+            updatingKeys.add("TBPM")
+            updatingKeys.add("TEMPO")
+        }
         if (!payload.musicalKey.isNullOrBlank() && payload.musicalKey != "—") {
             updatingKeys.add("KEY")
             updatingKeys.add("INITIALKEY")
+            updatingKeys.add("MUSICALKEY")
         }
 
         val comments = mutableListOf<String>()
@@ -2697,9 +2734,19 @@ object AudioTagWriter {
             val bStr = if (it == it.roundToInt().toDouble()) it.toInt().toString() else String.format(Locale.US, "%.1f", it)
             comments.add("BPM=$bStr")
         }
-        payload.musicalKey?.takeIf { it.isNotBlank() && it != "—" }?.let {
-            comments.add("KEY=$it")
-            comments.add("INITIALKEY=$it")
+        payload.musicalKey?.takeIf { it.isNotBlank() && it != "—" && it != "-" }?.let { keyVal ->
+            val hasExistingKeyOnly = existingComments.any { c ->
+                val k = c.substringBefore('=', "").trim().uppercase(Locale.ROOT)
+                k == "KEY"
+            } && existingComments.none { c ->
+                val k = c.substringBefore('=', "").trim().uppercase(Locale.ROOT)
+                k == "INITIALKEY"
+            }
+            if (hasExistingKeyOnly) {
+                comments.add("KEY=$keyVal")
+            } else {
+                comments.add("INITIALKEY=$keyVal")
+            }
         }
 
         writeLittleEndianInt(commentStream, comments.size)

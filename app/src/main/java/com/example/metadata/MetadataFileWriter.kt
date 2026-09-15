@@ -29,6 +29,9 @@ import java.util.Locale
  */
 sealed interface MetadataWriteResult {
     data class Written(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
+    data class TextWritten(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
+    data class ArtworkEmbedded(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
+    data class ArtworkWriteFailed(val verifiedTags: EmbeddedAudioMetadata?, val reason: String) : MetadataWriteResult
     data class AlreadyInSync(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
     data class Partial(val verifiedTags: EmbeddedAudioMetadata, val unverifiedFields: List<String>) : MetadataWriteResult
     data class LibraryOnly(val reason: String) : MetadataWriteResult
@@ -48,6 +51,9 @@ sealed interface MetadataWriteResult {
     val writeState: MetadataWriteState
         get() = when (this) {
             is Written, is AlreadyInSync -> MetadataWriteState.FILE_WRITE_SUCCESS
+            is TextWritten -> MetadataWriteState.TEXT_METADATA_WRITTEN
+            is ArtworkEmbedded -> MetadataWriteState.ARTWORK_EMBEDDED
+            is ArtworkWriteFailed -> MetadataWriteState.ARTWORK_WRITE_FAILED
             is Partial -> MetadataWriteState.FILE_WRITE_PARTIAL
             is Skipped, is LibraryOnly -> MetadataWriteState.DATABASE_ONLY
             is Unsupported -> MetadataWriteState.FORMAT_WRITE_UNSUPPORTED
@@ -299,7 +305,7 @@ class MetadataFileWriter(
         val mergedComposer = track.composer.takeIf { it.isNotBlank() } ?: existing.recordLabel
         val mergedComment = track.notes.takeIf { it.isNotBlank() }
 
-        val activeArtworkBytes = artworkBytes?.takeIf { it.isNotEmpty() }
+        val rawArtworkBytes = artworkBytes?.takeIf { it.isNotEmpty() }
             ?: track.artworkCachePath?.let { cachePath ->
                 try {
                     val f = File(cachePath)
@@ -312,13 +318,28 @@ class MetadataFileWriter(
                 }
             } catch (_: Throwable) { null }
 
-        val activeArtworkMime = activeArtworkBytes?.let { bytes ->
+        val rawArtworkMime = rawArtworkBytes?.let { bytes ->
             if (bytes.size > 8 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte()) {
                 "image/png"
             } else {
                 "image/jpeg"
             }
         } ?: artworkMimeType
+
+        val validatedArtwork = rawArtworkBytes?.let { bytes ->
+            com.example.metadata.artwork.ArtworkEmbedValidator.validateAndPrepare(bytes, rawArtworkMime)
+        }
+        val activeArtworkBytes = validatedArtwork?.bytes
+        val activeArtworkMime = validatedArtwork?.mimeType ?: rawArtworkMime
+
+        val isTargetWritable = if (targetWritePath.startsWith("content://")) true else File(targetWritePath).canWrite()
+        Log.i(
+            TAG,
+            "Metadata write starting: path=$targetWritePath, container=$ext, " +
+            "isWritable=$isTargetWritable, artworkSource=${track.artworkSource ?: "CACHE/EXPLICIT"}, " +
+            "rawArtworkSize=${rawArtworkBytes?.size ?: 0}, validatedArtworkSize=${activeArtworkBytes?.size ?: 0}, " +
+            "artworkMime=$activeArtworkMime"
+        )
 
         val payload = CompleteTagPayload(
             title = mergedTitle,
@@ -537,29 +558,40 @@ class MetadataFileWriter(
             }
         }
 
-        // 7. Verify embedded artwork
-        if (activeArtworkBytes != null && activeArtworkBytes.isNotEmpty()) {
+        // 7. Verify embedded artwork physically on disk
+        var artworkVerified = false
+        val artworkAttempted = (activeArtworkBytes != null && activeArtworkBytes.isNotEmpty())
+        if (artworkAttempted) {
             if (!verified.hasEmbeddedArtwork || verified.embeddedArtworkSize <= 0) {
-                if (ext == "wav") {
-                    Log.i(TAG, "WAV artwork preserved in SoundSync database/cache rather than bloated into RIFF container")
-                    unverifiedFields.add("artwork (stored in library)")
-                } else {
-                    Log.w(TAG, "Write verification notice: embedded artwork not detected on disk after write")
-                    unverifiedFields.add("embeddedArtwork")
-                }
+                Log.w(TAG, "Write verification notice: embedded artwork NOT detected on disk after reopen for $targetWritePath")
+                unverifiedFields.add("embeddedArtwork")
             } else {
-                Log.d(TAG, "Embedded artwork verified: ${verified.embeddedArtworkSize} bytes on disk")
+                artworkVerified = true
+                Log.i(TAG, "Embedded artwork VERIFIED: ${verified.embeddedArtworkSize} bytes confirmed on disk for $targetWritePath")
             }
         }
 
-        val result = if (unverifiedFields.isEmpty()) {
-            Log.d(TAG, "Full file write and read-back verification PASSED for $targetWritePath")
-            MetadataWriteResult.Written(verified)
-        } else {
-            Log.w(TAG, "File write succeeded with unverified optional fields: $unverifiedFields")
-            MetadataWriteResult.Partial(verified, unverifiedFields)
+        val result: MetadataWriteResult = when {
+            artworkAttempted && !artworkVerified -> {
+                Log.w(TAG, "Artwork embed failure: text written but artwork could not be verified in physical file: $targetWritePath")
+                MetadataWriteResult.ArtworkWriteFailed(verified, "Embedded artwork verification failed: not found on disk after write")
+            }
+            unverifiedFields.isEmpty() -> {
+                if (artworkAttempted && artworkVerified) {
+                    Log.i(TAG, "Full file write and read-back verification PASSED (text + artwork) for $targetWritePath")
+                    MetadataWriteResult.Written(verified)
+                } else {
+                    Log.i(TAG, "Text metadata write and read-back verification PASSED for $targetWritePath")
+                    MetadataWriteResult.TextWritten(verified)
+                }
+            }
+            else -> {
+                Log.w(TAG, "File write succeeded with unverified optional fields: $unverifiedFields")
+                MetadataWriteResult.Partial(verified, unverifiedFields)
+            }
         }
 
+        Log.i(TAG, "Metadata write outcome: file=$targetWritePath, finalState=${result.writeState}, verifiedArt=${verified.hasEmbeddedArtwork} (${verified.embeddedArtworkSize} bytes)")
         updateDbState(track.id, result.writeState)
 
         // Post-write MediaStore URI reconciliation.
@@ -639,6 +671,18 @@ class MetadataFileWriter(
         try {
             com.example.audio.DjAudioEngine.getInstance(context).onTrackFileModified(track.id, track.filePath, finalTrackPath)
         } catch (_: Throwable) {}
+
+        // Notify MediaScanner of the updated file so Android system & other apps reflect new metadata
+        try {
+            val scanTarget = preCapturedPhysicalPath ?: if (!finalTrackPath.startsWith("content://")) finalTrackPath else null
+            if (scanTarget != null && File(scanTarget).exists()) {
+                android.media.MediaScannerConnection.scanFile(context, arrayOf(scanTarget), null) { p, u ->
+                    Log.i(TAG, "[PostWriteMediaScanner] Rescanned updated file: '$p' -> $u")
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "[PostWriteMediaScanner] Failed to trigger rescan: ${e.message}")
+        }
 
         val afterSizeBytes = if (preCapturedPhysicalPath != null && File(preCapturedPhysicalPath).exists()) {
             File(preCapturedPhysicalPath).length()

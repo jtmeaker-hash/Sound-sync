@@ -512,6 +512,19 @@ class MetadataResolver(
                     finalScanState = MetadataScanState.COMPLETE
                     if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] SUCCESS: RIFF INFO + ID3 tags written to ${track.filePath}")
                 }
+                is MetadataWriteResult.TextWritten -> {
+                    Log.d("MetadataWriter", "Physical text tag writing and readback verification PASSED for ${track.filePath}")
+                    finalScanState = MetadataScanState.COMPLETE
+                    if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] SUCCESS: text tags written to ${track.filePath}")
+                }
+                is MetadataWriteResult.ArtworkEmbedded -> {
+                    Log.d("MetadataWriter", "Physical artwork tag embedding and readback verification PASSED for ${track.filePath}")
+                    finalScanState = MetadataScanState.COMPLETE
+                }
+                is MetadataWriteResult.ArtworkWriteFailed -> {
+                    Log.w("MetadataWriter", "Physical tag writing could not verify embedded artwork on disk for ${track.filePath}: ${writeResult.reason}")
+                    finalScanState = MetadataScanState.PARTIAL
+                }
                 is MetadataWriteResult.AlreadyInSync -> {
                     Log.d("MetadataWriter", "Physical tags already in sync for ${track.filePath}")
                     finalScanState = MetadataScanState.COMPLETE
@@ -568,7 +581,7 @@ class MetadataResolver(
         } else {
             Log.d("MetadataWriter", "Physical file write safely DEFERRED until user approval for ${track.filePath}")
             finalScanState = if (matchState == MetadataScanState.VERIFIED) MetadataScanState.VERIFIED else MetadataScanState.REVIEW_REQUIRED
-            fileWriteState = com.example.model.MetadataWriteState.DATABASE_ONLY
+            fileWriteState = if (!artworkCachePath.isNullOrBlank()) com.example.model.MetadataWriteState.ARTWORK_CACHED else com.example.model.MetadataWriteState.DATABASE_ONLY
             if (isWav) Log.i("WavPipeline", "[Stage 4: Embedded WAV tag write] DEFERRED: awaiting user confirmation; preserved in database")
         }
 

@@ -13,6 +13,7 @@ import com.example.data.TrackDao
 import com.example.model.Track
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 
 /**
  * Storage and scoped-storage permission helper for physical audio tag embedding.
@@ -73,6 +74,17 @@ object StorageWritePermissionHelper {
             }
         }
 
+        // Comprehensive lookup across all mounted storage volumes & SAF trees
+        try {
+            val resolvedByResolver = TrackSourceResolver.findMediaStoreUriForTrack(context, track)
+            if (resolvedByResolver != null && isMediaStoreUriValid(context, resolvedByResolver)) {
+                return resolvedByResolver
+            }
+
+            val safUri = TrackSourceResolver.findSafDocumentUriForTrack(context, track)
+            if (safUri != null) return safUri
+        } catch (_: Throwable) {}
+
         return null
     }
 
@@ -127,11 +139,18 @@ object StorageWritePermissionHelper {
             }
         }
 
-        // Tier 3: MediaStore URI from track.id (media_12345)
+        // Tier 3: MediaStore URI from track.id (media_12345 or media_<volume>_<id>)
         if (track.id.startsWith("media_")) {
-            val mediaId = track.id.removePrefix("media_").toLongOrNull()
+            val remainder = track.id.removePrefix("media_")
+            val mediaId = remainder.substringAfterLast('_').toLongOrNull()
             if (mediaId != null && mediaId > 0L) {
-                val mediaUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, mediaId)
+                val volumeName = if (remainder.contains('_')) remainder.substringBeforeLast('_') else null
+                val collectionUri = if (volumeName != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try { MediaStore.Audio.Media.getContentUri(volumeName) } catch (_: Throwable) { MediaStore.Audio.Media.EXTERNAL_CONTENT_URI }
+                } else {
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                }
+                val mediaUri = ContentUris.withAppendedId(collectionUri, mediaId)
                 if (isMediaStoreUriValid(context, mediaUri)) {
                     val writable = hasUriWritePermission(context, mediaUri)
                     return CanonicalStorageInfo(uri = mediaUri, isDirectFile = false, isWritable = writable)
@@ -139,7 +158,7 @@ object StorageWritePermissionHelper {
             }
         }
 
-        // Tier 4: MediaStore query by _DATA
+        // Tier 4: MediaStore query by _DATA across collections
         if (path.isNotBlank()) {
             val mediaStoreUri = AudioTagWriter.getMediaStoreUriForPath(context, path)
             if (mediaStoreUri != null && isMediaStoreUriValid(context, mediaStoreUri)) {
@@ -151,12 +170,21 @@ object StorageWritePermissionHelper {
         // Tier 5: MediaStore query by DISPLAY_NAME
         val fileName = if (rawFile != null) rawFile.name else File(path).name
         if (fileName.isNotBlank()) {
-            val uriByName = queryMediaStoreByDisplayName(context, fileName, track.durationSeconds, rawFile?.parent)
+            val uriByName = queryMediaStoreByDisplayName(context, fileName, track.durationSeconds, rawFile?.parent ?: File(path).parent)
             if (uriByName != null && isMediaStoreUriValid(context, uriByName)) {
                 val writable = hasUriWritePermission(context, uriByName)
                 return CanonicalStorageInfo(uri = uriByName, isDirectFile = false, isWritable = writable)
             }
         }
+
+        // Tier 5b: Comprehensive TrackSourceResolver lookup
+        try {
+            val rUri = TrackSourceResolver.findMediaStoreUriForTrack(context, track)
+            if (rUri != null && isMediaStoreUriValid(context, rUri)) {
+                val writable = hasUriWritePermission(context, rUri)
+                return CanonicalStorageInfo(uri = rUri, isDirectFile = false, isWritable = writable)
+            }
+        } catch (_: Throwable) {}
 
         // Tier 6: Persisted SAF Directory Trees
         val safDoc = SafStorageManager.findDocumentForTrack(context, track)
@@ -206,51 +234,63 @@ object StorageWritePermissionHelper {
         )
         val selection = "${MediaStore.Audio.Media.DISPLAY_NAME} = ?"
         val selectionArgs = arrayOf(displayName)
-        return try {
-            context.contentResolver.query(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                selection,
-                selectionArgs,
-                null
-            )?.use { cursor ->
-                var bestUri: Uri? = null
-                var bestScore = -1
-                val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
-                val durCol = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
-                val pathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
-                } else {
-                    cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
-                }
 
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idCol)
-                    val candUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
-                    var score = 1
-                    if (durCol >= 0 && expectedDurationSec > 0) {
-                        val durMs = cursor.getLong(durCol)
-                        if (kotlin.math.abs((durMs / 1000) - expectedDurationSec) <= 3) {
-                            score += 5
-                        }
+        val collections = mutableListOf<Uri>()
+        val volumeUuid = parentPath?.let { TrackSourceResolver.extractVolumeUuid(it) }
+        if (volumeUuid != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                collections.add(MediaStore.Audio.Media.getContentUri(volumeUuid.lowercase(Locale.ROOT)))
+            } catch (_: Throwable) {}
+        }
+        collections.add(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+
+        var overallBestUri: Uri? = null
+        var overallBestScore = -1
+
+        for (collectionUri in collections.distinct()) {
+            try {
+                context.contentResolver.query(
+                    collectionUri,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    null
+                )?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                    val durCol = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
+                    val pathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+                    } else {
+                        cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
                     }
-                    if (pathCol >= 0 && parentPath != null) {
-                        val relOrData = cursor.getString(pathCol).orEmpty()
-                        if (relOrData.isNotBlank() && (parentPath.contains(relOrData) || relOrData.contains(parentPath))) {
-                            score += 3
+
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(idCol)
+                        val candUri = ContentUris.withAppendedId(collectionUri, id)
+                        var score = 1
+                        if (durCol >= 0 && expectedDurationSec > 0) {
+                            val durMs = cursor.getLong(durCol)
+                            if (kotlin.math.abs((durMs / 1000) - expectedDurationSec) <= 3) {
+                                score += 5
+                            }
                         }
-                    }
-                    if (score > bestScore) {
-                        bestScore = score
-                        bestUri = candUri
+                        if (pathCol >= 0 && parentPath != null) {
+                            val relOrData = cursor.getString(pathCol).orEmpty()
+                            if (relOrData.isNotBlank() && (parentPath.contains(relOrData) || relOrData.contains(parentPath))) {
+                                score += 3
+                            }
+                        }
+                        if (score > overallBestScore) {
+                            overallBestScore = score
+                            overallBestUri = candUri
+                        }
                     }
                 }
-                bestUri
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed querying collection $collectionUri by display name $displayName: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed querying MediaStore by display name $displayName: ${e.message}")
-            null
         }
+        return overallBestUri
     }
 
     /**

@@ -120,7 +120,61 @@ object AudioQualityInspector {
             File(track.filePath)
         } else null
 
-        val fileSizeBytes = file?.length() ?: 0L
+        var fileSizeBytes = file?.takeIf { it.exists() && it.canRead() }?.length() ?: 0L
+        if (fileSizeBytes <= 0L) {
+            val probeUri = if (track.filePath.startsWith("content://") || track.filePath.startsWith("file://")) {
+                try { Uri.parse(track.filePath) } catch (_: Throwable) { null }
+            } else {
+                try {
+                    com.example.storage.TrackSourceResolver.findMediaStoreUriForPath(context, track.filePath)?.let { Uri.parse(it) }
+                        ?: com.example.storage.TrackSourceResolver.findMediaStoreUriForTrack(context, track)
+                        ?: com.example.storage.SafStorageManager.findDocumentForPath(context, track.filePath)?.uri
+                } catch (_: Throwable) { null }
+            }
+
+            if (probeUri != null) {
+                try {
+                    context.contentResolver.openFileDescriptor(probeUri, "r")?.use { pfd ->
+                        if (pfd.statSize > 0L) {
+                            fileSizeBytes = pfd.statSize
+                        }
+                    }
+                } catch (_: Throwable) {}
+
+                if (fileSizeBytes <= 0L) {
+                    try {
+                        context.contentResolver.query(probeUri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                                if (sizeIndex != -1 && !cursor.isNull(sizeIndex)) {
+                                    fileSizeBytes = cursor.getLong(sizeIndex)
+                                }
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+
+                if (fileSizeBytes <= 0L) {
+                    try {
+                        context.contentResolver.openInputStream(probeUri)?.use { stream ->
+                            var count = 0L
+                            val buf = ByteArray(64 * 1024)
+                            while (true) {
+                                val r = stream.read(buf)
+                                if (r <= 0) break
+                                count += r
+                            }
+                            if (count > 0L) fileSizeBytes = count
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+
+            if (fileSizeBytes <= 0L && track.fileSizeMb > 0.0) {
+                fileSizeBytes = (track.fileSizeMb * 1024.0 * 1024.0).toLong()
+            }
+        }
+
         val ext = file?.extension?.uppercase() ?: track.format.uppercase()
 
         // 1. Bitstream Probing for accurate bit rate & CBR/VBR mode
@@ -141,7 +195,22 @@ object AudioQualityInspector {
                     extractor.setDataSource(pfd.fileDescriptor)
                 } ?: extractor.setDataSource(context, uri, null)
             } else {
-                extractor.setDataSource(track.filePath)
+                val f = File(track.filePath)
+                if (f.exists() && f.canRead()) {
+                    extractor.setDataSource(track.filePath)
+                } else {
+                    val fallbackUri = try {
+                        com.example.storage.TrackSourceResolver.findMediaStoreUriForPath(context, track.filePath)?.let { Uri.parse(it) }
+                            ?: com.example.storage.SafStorageManager.findDocumentForPath(context, track.filePath)?.uri
+                    } catch (_: Throwable) { null }
+                    if (fallbackUri != null) {
+                        context.contentResolver.openFileDescriptor(fallbackUri, "r")?.use { pfd ->
+                            extractor.setDataSource(pfd.fileDescriptor)
+                        } ?: extractor.setDataSource(context, fallbackUri, null)
+                    } else {
+                        extractor.setDataSource(track.filePath)
+                    }
+                }
             }
 
             for (i in 0 until extractor.trackCount) {

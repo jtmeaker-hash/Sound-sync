@@ -342,6 +342,13 @@ object SafStorageManager {
     }
 
     /**
+     * Finds a DocumentFile matching a filesystem path within any granted SAF directory tree.
+     */
+    fun findDocumentForPath(context: Context, fullPath: String): DocumentFile? {
+        return findDocumentForPathOrName(context, fullPath, "")
+    }
+
+    /**
      * Finds a DocumentFile matching a filesystem path, file name, or storage relative path
      * within any granted SAF directory tree.
      */

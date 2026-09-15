@@ -514,8 +514,11 @@ class MetadataFileWriteQueue private constructor(
                     fileWriter.writeAsync(track)
                 }
                 when (writeRes) {
-                    is MetadataWriteResult.Written -> writtenCount++
-                    is MetadataWriteResult.Partial -> writtenCount++
+                    is MetadataWriteResult.Written,
+                    is MetadataWriteResult.TextWritten,
+                    is MetadataWriteResult.ArtworkEmbedded -> writtenCount++
+                    is MetadataWriteResult.Partial,
+                    is MetadataWriteResult.ArtworkWriteFailed -> writtenCount++
                     is MetadataWriteResult.AlreadyInSync -> syncedCount++
                     is MetadataWriteResult.Skipped, is MetadataWriteResult.ReadOnlyFile,
                     is MetadataWriteResult.Unsupported, is MetadataWriteResult.PermissionRequired,
@@ -830,9 +833,16 @@ class MetadataFileWriteQueue private constructor(
 
                     // Step 11: Update track status
                     when (writeResult) {
-                        is MetadataWriteResult.Written -> {
+                        is MetadataWriteResult.Written,
+                        is MetadataWriteResult.TextWritten,
+                        is MetadataWriteResult.ArtworkEmbedded -> {
                             writtenCount++
                             updateProgress(PushMetadataPhase.DONE_WRITTEN)
+                        }
+                        is MetadataWriteResult.ArtworkWriteFailed -> {
+                            partialCount++
+                            failures.add(PushMetadataFailure(currentTrack.id, currentTrack.title, currentTrack.artist, path, writeResult.reason, category = "Artwork Embedding"))
+                            updateProgress(PushMetadataPhase.DONE_PARTIAL)
                         }
                         is MetadataWriteResult.AlreadyInSync -> {
                             syncedCount++
@@ -977,7 +987,13 @@ class MetadataFileWriteQueue private constructor(
             }
 
             when (writeResult) {
-                is MetadataWriteResult.Written -> writtenCount++
+                is MetadataWriteResult.Written,
+                is MetadataWriteResult.TextWritten,
+                is MetadataWriteResult.ArtworkEmbedded -> writtenCount++
+                is MetadataWriteResult.ArtworkWriteFailed -> {
+                    partialCount++
+                    failures.add(PushMetadataFailure(track.id, track.title, track.artist, track.filePath, writeResult.reason, category = "Artwork Embedding"))
+                }
                 is MetadataWriteResult.AlreadyInSync -> syncedCount++
                 is MetadataWriteResult.Partial -> {
                     partialCount++

@@ -67,6 +67,19 @@ object WavContainerParser {
                     FileInputStream(file).use { stream ->
                         parseStream(stream)
                     }
+                } else if (context != null) {
+                    val fallbackUri = try {
+                        com.example.storage.TrackSourceResolver.findMediaStoreUriForPath(context, clean)?.let { Uri.parse(it) }
+                            ?: com.example.storage.SafStorageManager.findDocumentForPath(context, clean)?.uri
+                    } catch (_: Throwable) { null }
+
+                    if (fallbackUri != null) {
+                        context.contentResolver.openInputStream(fallbackUri)?.use { stream ->
+                            parseStream(stream)
+                        } ?: WavContainerInfo(false, errorMessage = "Cannot open fallback content stream: $fallbackUri")
+                    } else {
+                        WavContainerInfo(false, errorMessage = "File not readable: $clean")
+                    }
                 } else {
                     WavContainerInfo(false, errorMessage = "File not readable: $clean")
                 }

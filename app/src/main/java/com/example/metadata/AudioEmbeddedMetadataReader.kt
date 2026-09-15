@@ -60,7 +60,7 @@ data class EmbeddedAudioMetadata(
 
 object AudioEmbeddedMetadataReader {
     private const val TAG = "AudioEmbeddedMetadata"
-    private const val MAX_TAG_HEADER_READ = 1024 * 1024 // Read up to 1MB for embedded tags
+    private const val MAX_TAG_HEADER_READ = 16 * 1024 * 1024 // Read up to 16MB for embedded tags and artwork
 
     fun read(
         context: Context? = null,
@@ -109,6 +109,19 @@ object AudioEmbeddedMetadataReader {
                 val f = File(filePathOrUri)
                 if (f.exists() && f.canRead()) {
                     retriever.setDataSource(f.absolutePath)
+                } else if (context != null) {
+                    val fallbackUri = try {
+                        com.example.storage.TrackSourceResolver.findMediaStoreUriForPath(context, filePathOrUri)?.let { Uri.parse(it) }
+                            ?: com.example.storage.SafStorageManager.findDocumentForPath(context, filePathOrUri)?.uri
+                    } catch (_: Throwable) { null }
+
+                    if (fallbackUri != null) {
+                        context.contentResolver.openFileDescriptor(fallbackUri, "r")?.use { pfd ->
+                            retriever.setDataSource(pfd.fileDescriptor)
+                        } ?: return EmbeddedAudioMetadata()
+                    } else {
+                        return EmbeddedAudioMetadata()
+                    }
                 } else {
                     return EmbeddedAudioMetadata()
                 }
@@ -177,7 +190,15 @@ object AudioEmbeddedMetadataReader {
                 context?.contentResolver?.openInputStream(Uri.parse(filePathOrUri))
             } else {
                 val f = File(filePathOrUri)
-                if (f.exists() && f.canRead()) f.inputStream() else null
+                if (f.exists() && f.canRead()) {
+                    f.inputStream()
+                } else if (context != null) {
+                    val fallbackUri = try {
+                        com.example.storage.TrackSourceResolver.findMediaStoreUriForPath(context, filePathOrUri)?.let { Uri.parse(it) }
+                            ?: com.example.storage.SafStorageManager.findDocumentForPath(context, filePathOrUri)?.uri
+                    } catch (_: Throwable) { null }
+                    if (fallbackUri != null) context.contentResolver.openInputStream(fallbackUri) else null
+                } else null
             }
 
             stream?.use { input ->
@@ -1152,7 +1173,7 @@ object AudioEmbeddedMetadataReader {
             } else if (blockType == 6) { // PICTURE
                 hasFlacPicture = true
                 flacPictureSize = blockLength
-                if (blockLength in 1..1048576) {
+                if (blockLength in 1..16 * 1024 * 1024) {
                     val picBuf = ByteArray(blockLength)
                     var readP = 0
                     while (readP < blockLength) {

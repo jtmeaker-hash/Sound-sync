@@ -33,9 +33,13 @@ object ArtworkEmbeddingHelper {
             Log.w(TAG, "Cannot write artwork: file is inaccessible or read-only: ${audioFile.absolutePath}")
             return@withContext false
         }
-        if (artworkBytes.isEmpty()) return@withContext false
+        val validated = com.example.metadata.artwork.ArtworkEmbedValidator.validateAndPrepare(artworkBytes, mimeType)
+        if (validated == null) {
+            Log.w(TAG, "Artwork rejected: validation failed for ${audioFile.name}")
+            return@withContext false
+        }
 
-        com.example.storage.FileLockManager.withFileLock(audioFile.absolutePath) {
+        val writeOk = com.example.storage.FileLockManager.withFileLock(audioFile.absolutePath) {
             val existing = AudioEmbeddedMetadataReader.read(null, audioFile.absolutePath)
             val payload = com.example.storage.CompleteTagPayload(
                 title = existing.title,
@@ -47,11 +51,25 @@ object ArtworkEmbeddingHelper {
                 discNumber = existing.discNumber,
                 bpm = existing.bpm,
                 musicalKey = existing.musicalKey,
-                artworkBytes = artworkBytes,
-                artworkMimeType = mimeType
+                artworkBytes = validated.bytes,
+                artworkMimeType = validated.mimeType
             )
             com.example.storage.AudioTagWriter.writeCompleteTags(null, audioFile.absolutePath, payload)
         }
+        if (!writeOk) {
+            Log.w(TAG, "Failed writing tags with artwork to ${audioFile.name}")
+            return@withContext false
+        }
+
+        // Post-write verification: reopen file and confirm embedded artwork is physically present
+        val verified = AudioEmbeddedMetadataReader.read(null, audioFile.absolutePath)
+        val isVerified = verified.hasEmbeddedArtwork && verified.embeddedArtworkSize > 0
+        if (isVerified) {
+            Log.d(TAG, "Verified embedded artwork on disk for ${audioFile.name}: ${verified.embeddedArtworkSize} bytes")
+        } else {
+            Log.w(TAG, "Artwork verification failed: not found on disk after write to ${audioFile.name}")
+        }
+        isVerified
     }
 
     private fun embedApicIntoMp3(file: File, artworkBytes: ByteArray, mimeType: String): Boolean {
