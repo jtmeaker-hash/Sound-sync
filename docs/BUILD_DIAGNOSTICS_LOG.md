@@ -1070,3 +1070,61 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 34934275596 — FAIL
+
+- **Date:** 2026-09-15T05:54:35.769162+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`4f4f94d8ee`](https://github.com/jtmeaker-hash/Sound-sync/commit/4f4f94d8eeb49ed0641310a3d9f41586a57a8265)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/34934275596)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `AudioMetadataWriteIntegrationTest > mp3 file metadata writing embeds ID3v23 tags and artwork with audio frames preserved FAILED`
+- `java.lang.RuntimeException at ImageUtil.java:131`
+- `Caused by: java.lang.RuntimeException at ImageUtil.java:131`
+- `Caused by: javax.imageio.IIOException at JPEGImageReader.java:-2`
+- `AudioMetadataWriteIntegrationTest > sensible merge preserves existing embedded tags when new track payload contains blanks FAILED`
+- `java.lang.AssertionError at AudioMetadataWriteIntegrationTest.kt:711`
+- `AudioMetadataWriteIntegrationTest > aiff file metadata writing embeds ID3 chunk with verbatim PCM audio preservation FAILED`
+- `AudioMetadataWriteIntegrationTest > wav file metadata writing preserves audio frames and passes pre-commit audio validation FAILED`
+- `AudioMetadataWriteIntegrationTest > 24-bit 96kHz High-Res PCM WAV metadata writing preserves audio verbatim FAILED`
+- `AudioMetadataWriteIntegrationTest > m4a file metadata writing adjusts nested stco chunk offsets and passes pre-commit audio validation FAILED`
+
+### Summary of changes
+
+refactor: unify metadata write success states
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+4f4f94d refactor: unify metadata write success states
+ app/src/main/java/com/example/metadata/MetadataFileWriter.kt   |  4 +---
+ app/src/main/java/com/example/model/Models.kt                  |  6 +++++-
+ .../java/com/example/ui/components/MetadataProvenanceBadge.kt  | 10 +++++++---
+ .../main/java/com/example/ui/inspector/TrackInspectorScreen.kt |  7 +++++--
+ 4 files changed, 18 insertions(+), 9 deletions(-)
+```
+
+---
