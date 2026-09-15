@@ -992,3 +992,81 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 34930333112 — FAIL
+
+- **Date:** 2026-09-15T04:52:30.581243+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`8350b13774`](https://github.com/jtmeaker-hash/Sound-sync/commit/8350b1377442aab2fb3c7ac2f56cfe7ea96d11ef)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/34930333112)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ❌ FAIL |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `e: file:///home/runner/work/Sound-sync/Sound-sync/app/src/main/java/com/example/metadata/MetadataFileWriter.kt:56:57 Unresolved reference 'ARTWORK_WRITE_FAILED'.`
+- `e: file:///home/runner/work/Sound-sync/Sound-sync/app/src/main/java/com/example/ui/inspector/TrackInspectorScreen.kt:290:35 'when' expression must be exhaustive. Add the 'is ArtworkEmbedded', 'is ArtworkWriteFailed', 'is TextWritten' branches or an 'else' branch.`
+- `> Task :app:compileDebugKotlin FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+- `Execution failed for task ':app:compileDebugKotlin'.`
+- `> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction`
+- `BUILD FAILED in 1m 21s`
+
+**Debug APK failed (exit 1)**
+- `e: file:///home/runner/work/Sound-sync/Sound-sync/app/src/main/java/com/example/metadata/MetadataFileWriter.kt:56:57 Unresolved reference 'ARTWORK_WRITE_FAILED'.`
+- `e: file:///home/runner/work/Sound-sync/Sound-sync/app/src/main/java/com/example/ui/inspector/TrackInspectorScreen.kt:290:35 'when' expression must be exhaustive. Add the 'is ArtworkEmbedded', 'is ArtworkWriteFailed', 'is TextWritten' branches or an 'else' branch.`
+- `> Task :app:compileDebugKotlin FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+- `Execution failed for task ':app:compileDebugKotlin'.`
+- `> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction`
+- `BUILD FAILED in 58s`
+
+### Summary of changes
+
+feat: improve file access and metadata processing
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+8350b13 feat: improve file access and metadata processing
+ .../com/example/analysis/AudioQualityInspector.kt  |  73 ++++++-
+ .../com/example/analysis/WavContainerParser.kt     |  13 ++
+ .../main/java/com/example/audio/BitrateProbe.kt    |  30 ++-
+ .../com/example/metadata/ArtworkEmbeddingHelper.kt |  26 ++-
+ .../metadata/AudioEmbeddedMetadataReader.kt        |  27 ++-
+ .../com/example/metadata/MetadataFileWriteQueue.kt |  24 ++-
+ .../com/example/metadata/MetadataFileWriter.kt     |  80 ++++++--
+ .../java/com/example/metadata/MetadataResolver.kt  |  15 +-
+ .../metadata/artwork/ArtworkEmbedValidator.kt      | 161 ++++++++++++++++
+ .../java/com/example/storage/AudioTagWriter.kt     | 193 ++++++++++++-------
+ .../java/com/example/storage/SafStorageManager.kt  |   7 +
+ .../storage/StorageWritePermissionHelper.kt        | 126 +++++++-----
+ .../example/AudioArtworkAndFieldsIntegrityTest.kt  | 211 +++++++++++++++++++++
+ gradlew                                            |   0
+ scripts/ci/append_ci_report.py                     |   0
+ scripts/ci/backfill_history.py                     |   0
+ 16 files changed, 836 insertions(+), 150 deletions(-)
+```
+
+---
