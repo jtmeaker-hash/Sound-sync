@@ -859,3 +859,136 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 34928170299 — FAIL
+
+- **Date:** 2026-09-15T04:23:39.676806+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`5045d5d7b8`](https://github.com/jtmeaker-hash/Sound-sync/commit/5045d5d7b89ed9d3e052e951733bb16317c0e783)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/34928170299)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `ExampleRobolectricTest > ScanStateManager correctly recovers from interrupted scan FAILED`
+- `java.lang.AssertionError at ExampleRobolectricTest.kt:215`
+- `Stage3DjPrepTest > testMemoryCueCrudAndNavigation FAILED`
+- `java.lang.AssertionError at Stage3DjPrepTest.kt:185`
+- `StorageDiagnosticsAndScanLifecycleTest > testAppKilledReopenedDuringScan FAILED`
+- `java.lang.AssertionError at StorageDiagnosticsAndScanLifecycleTest.kt:266`
+- `495 tests completed, 3 failed, 2 skipped`
+- `> Task :app:testDebugUnitTest FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+
+### Summary of changes
+
+Merge pull request #8 from jtmeaker-hash/Debug
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+5045d5d Merge pull request #8 from jtmeaker-hash/Debug
+
+ .github/workflows/soundsync-ci-diagnostics.yml     |  179 ++
+ SOUNDSYNC_UPDATE_PACK_STATUS.md                    |  120 ++
+ SOUNDSYNC_UPGRADE_25_29_PROGRESS.md                |  225 ++
+ app/src/main/AndroidManifest.xml                   |    1 -
+ app/src/main/java/com/example/MainActivity.kt      |    6 +
+ .../com/example/analysis/TrackAnalysisManager.kt   |   68 +-
+ .../main/java/com/example/audio/DjAudioEngine.kt   |  179 +-
+ .../java/com/example/audio/HaasSurroundEffect.kt   |   64 +-
+ .../main/java/com/example/audio/ParametricEq.kt    |  102 +-
+ .../java/com/example/audio/ParametricEqManager.kt  |  438 +++-
+ .../com/example/backup/SoundSyncBackupManager.kt   |  137 +-
+ .../com/example/backup/SoundSyncBackupModels.kt    |  109 +-
+ app/src/main/java/com/example/brain/BrainModels.kt |   73 +
+ .../main/java/com/example/brain/LibraryBrain.kt    |  890 ++++++++
+ .../com/example/carmode/BluetoothCarReceiver.kt    |   10 +
+ .../com/example/command/CommandPaletteEngine.kt    |  431 ++++
+ .../com/example/command/CommandPaletteModels.kt    |  112 +
+ .../com/example/command/CommandPaletteParser.kt    |  192 ++
+ app/src/main/java/com/example/data/AppDatabase.kt  |  242 ++-
+ app/src/main/java/com/example/data/ArtistDao.kt    |   59 +
+ app/src/main/java/com/example/data/ArtistEntity.kt |   45 +
+ .../java/com/example/data/MetadataBackupEntity.kt  |    3 +-
+ .../main/java/com/example/data/TrackBrainDao.kt    |   87 +
+ .../com/example/data/TrackBrainStatusEntity.kt     |   62 +
+ app/src/main/java/com/example/data/TrackDao.kt     |   20 +-
+ app/src/main/java/com/example/data/TrackEntity.kt  |   17 +-
+ .../com/example/diagnostics/AudioOutputTracker.kt  |  253 +++
+ .../example/diagnostics/DeveloperModeManager.kt    |  103 +
+ .../com/example/diagnostics/DiagnosticLogger.kt    |  191 ++
+ .../com/example/diagnostics/DiagnosticModels.kt    |  204 ++
+ .../diagnostics/DiagnosticReportExporter.kt        |  527 +++++
+ .../java/com/example/diagnostics/SelfTestRunner.kt |  745 +++++++
+ app/src/main/java/com/example/djprep/DjPrepDao.kt  |   42 +
+ .../main/java/com/example/djprep/DjPrepEntity.kt   |  171 ++
+ .../main/java/com/example/djprep/DjPrepManager.kt  |  745 +++++++
+ .../main/java/com/example/djprep/DjPrepModels.kt   |  125 ++
+ .../com/example/doctor/LibraryDoctorAuditor.kt     |  593 ++++++
+ .../java/com/example/doctor/LibraryDoctorModels.kt |   84 +
+ .../com/example/doctor/LibraryDoctorPreferences.kt |  153 ++
+ .../example/doctor/LibraryDoctorRepairManager.kt   |  280 +++
+ .../metadata/AudioEmbeddedMetadataReader.kt        |   19 +-
+ .../com/example/metadata/MetadataFileWriteQueue.kt |   72 +-
+ .../java/com/example/metadata/MetadataResolver.kt  |  122 +-
+ .../metadata/artist/ArtistCollaborationParser.kt   |  150 ++
+ .../example/metadata/artist/ArtistIndexManager.kt  |  202 ++
+ .../metadata/backup/MetadataBackupManager.kt       |    6 +-
+ .../metadata/merge/LocalFirstMetadataMerger.kt     |  439 ++++
+ .../metadata/merge/LocalFirstMetadataModels.kt     |  109 +
+ .../metadata/review/MetadataReviewManager.kt       |  249 ++-
+ app/src/main/java/com/example/model/Models.kt      |   34 +-
+ .../com/example/player/PersistentQueueManager.kt   |  363 +++-
+ .../com/example/state/PersistentSessionManager.kt  |  801 +++++++
+ .../com/example/state/PersistentSessionModels.kt   |  105 +
+ .../java/com/example/storage/ScanStateManager.kt   |   54 +-
+ app/src/main/java/com/example/ui/MainDjScreen.kt   |  152 +-
+ .../main/java/com/example/ui/MainDjViewModel.kt    |  643 ++++--
+ .../com/example/ui/command/CommandPaletteDialog.kt |  975 +++++++++
+ .../com/example/ui/components/LibraryBrainCard.kt  |  409 ++++
+ .../ui/components/MetadataProvenanceBadge.kt       |   10 +-
+ .../example/ui/components/ParametricEqDialog.kt    | 1050 ++++++---
+ .../ui/diagnostics/DeveloperDiagnosticsScreen.kt   |  816 +++++++
+ .../com/example/ui/diagnostics/SelfTestScreen.kt   |  475 +++++
+ .../java/com/example/ui/djprep/DjPrepScreen.kt     | 2230 ++++++++++++++++++++
+ .../com/example/ui/doctor/LibraryDoctorScreen.kt   |  683 ++++++
+ .../example/ui/inspector/TrackInspectorScreen.kt   |  133 +-
+ .../com/example/ui/library/LibraryHealthScreen.kt  |   28 +-
+ .../ui/library/MetadataReviewInboxScreen.kt        |  284 ++-
+ .../com/example/ui/settings/AboutSettingsScreen.kt |  413 ++++
+ .../example/ui/settings/GitHubSettingsScreen.kt    |   13 +-
+ .../example/ui/settings/LibrarySettingsScreen.kt   |   55 +-
+ .../example/ui/settings/MetadataSettingsScreen.kt  |  126 ++
+ .../com/example/ui/sidemenu/SideMenuDestination.kt |    5 +
+ .../example/ui/sidemenu/SideNavigationDrawer.kt    |   91 +-
+ app/src/main/java/com/example/ui/theme/Color.kt    |    1 +
+ .../main/java/com/example/util/AlbumArtHelper.kt   |    2 +-
+ .../java/com/example/CommandPaletteEngineTest.kt   |  170 ++
+ .../test/java/com/example/DjPrepEnvironmentTest.kt |  644 ++++++
+ .../com/example/LocalFirstMetadataMergeTest.kt     |  549 +++++
+ .../ManualCoverArtMdApp
+```
+
+---
