@@ -28,9 +28,17 @@ import java.util.Locale
  * Persists track write status to Room database.
  */
 sealed interface MetadataWriteResult {
-    data class Written(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
-    data class TextWritten(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
-    data class ArtworkEmbedded(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
+    open class Written(open val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult {
+        override fun equals(other: Any?): Boolean = other is Written && verifiedTags == other.verifiedTags
+        override fun hashCode(): Int = verifiedTags.hashCode()
+        override fun toString(): String = "Written(verifiedTags=$verifiedTags)"
+    }
+    class TextWritten(verifiedTags: EmbeddedAudioMetadata) : Written(verifiedTags) {
+        override fun toString(): String = "TextWritten(verifiedTags=$verifiedTags)"
+    }
+    class ArtworkEmbedded(verifiedTags: EmbeddedAudioMetadata) : Written(verifiedTags) {
+        override fun toString(): String = "ArtworkEmbedded(verifiedTags=$verifiedTags)"
+    }
     data class ArtworkWriteFailed(val verifiedTags: EmbeddedAudioMetadata?, val reason: String) : MetadataWriteResult
     data class AlreadyInSync(val verifiedTags: EmbeddedAudioMetadata) : MetadataWriteResult
     data class Partial(val verifiedTags: EmbeddedAudioMetadata, val unverifiedFields: List<String>) : MetadataWriteResult
@@ -50,7 +58,7 @@ sealed interface MetadataWriteResult {
 
     val writeState: MetadataWriteState
         get() = when (this) {
-            is Written, is AlreadyInSync, is TextWritten, is ArtworkEmbedded -> MetadataWriteState.FILE_WRITE_SUCCESS
+            is Written, is AlreadyInSync -> MetadataWriteState.FILE_WRITE_SUCCESS
             is ArtworkWriteFailed -> MetadataWriteState.ARTWORK_WRITE_FAILED
             is Partial -> MetadataWriteState.FILE_WRITE_PARTIAL
             is Skipped, is LibraryOnly -> MetadataWriteState.DATABASE_ONLY
@@ -324,7 +332,9 @@ class MetadataFileWriter(
             }
         } ?: artworkMimeType
 
-        val validatedArtwork = rawArtworkBytes?.let { bytes ->
+        val isWavLargeArtwork = (ext == "wav" && (rawArtworkBytes?.size ?: 0) > 64 * 1024)
+
+        val validatedArtwork = if (isWavLargeArtwork) null else rawArtworkBytes?.let { bytes ->
             com.example.metadata.artwork.ArtworkEmbedValidator.validateAndPrepare(bytes, rawArtworkMime)
         }
         val activeArtworkBytes = validatedArtwork?.bytes
@@ -557,6 +567,10 @@ class MetadataFileWriter(
         }
 
         // 7. Verify embedded artwork physically on disk
+        if (isWavLargeArtwork) {
+            unverifiedFields.add("artwork (stored in library/cache; skipped in WAV to preserve container compatibility)")
+        }
+
         var artworkVerified = false
         val artworkAttempted = (activeArtworkBytes != null && activeArtworkBytes.isNotEmpty())
         if (artworkAttempted) {

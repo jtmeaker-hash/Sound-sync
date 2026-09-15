@@ -43,14 +43,50 @@ object ArtworkEmbedValidator {
         val isPng = isPngSignature(rawBytes)
         val isJpeg = isJpegSignature(rawBytes)
 
-        // Read dimensions without full allocation
-        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, boundsOpts)
+        // Try extracting dimensions directly from binary header without allocating or decoding
+        val headerDims = when {
+            isJpeg -> extractJpegDimensions(rawBytes)
+            isPng -> extractPngDimensions(rawBytes)
+            else -> null
+        }
 
-        val origWidth = boundsOpts.outWidth
-        val origHeight = boundsOpts.outHeight
+        if (headerDims != null && headerDims.first <= maxDimension && headerDims.second <= maxDimension) {
+            val finalMime = if (isPng) "image/png" else "image/jpeg"
+            return ValidatedArtwork(
+                bytes = rawBytes,
+                mimeType = finalMime,
+                width = headerDims.first,
+                height = headerDims.second
+            )
+        }
+
+        // Read dimensions via BitmapFactory if header extraction didn't yield dimensions
+        var origWidth = headerDims?.first ?: 0
+        var origHeight = headerDims?.second ?: 0
+        var outMimeType: String? = null
 
         if (origWidth <= 0 || origHeight <= 0) {
+            try {
+                val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, boundsOpts)
+                origWidth = boundsOpts.outWidth
+                origHeight = boundsOpts.outHeight
+                outMimeType = boundsOpts.outMimeType
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed decoding image bounds: ${t.message}")
+            }
+        }
+
+        if (origWidth <= 0 || origHeight <= 0) {
+            if (isJpeg || isPng) {
+                val finalMime = if (isPng) "image/png" else "image/jpeg"
+                return ValidatedArtwork(
+                    bytes = rawBytes,
+                    mimeType = finalMime,
+                    width = 1,
+                    height = 1
+                )
+            }
             Log.w(TAG, "Artwork rejected: invalid or corrupt image payload (bounds: ${origWidth}x${origHeight})")
             return null
         }
@@ -58,7 +94,7 @@ object ArtworkEmbedValidator {
         val detectedMime = when {
             isPng -> "image/png"
             isJpeg -> "image/jpeg"
-            !boundsOpts.outMimeType.isNullOrBlank() -> boundsOpts.outMimeType
+            !outMimeType.isNullOrBlank() -> outMimeType
             else -> fallbackMime.ifBlank { "image/jpeg" }
         }
 
@@ -126,6 +162,46 @@ object ArtworkEmbedValidator {
             Log.e(TAG, "Failed standardizing artwork for embedding: ${e.message}", e)
             null
         }
+    }
+
+    private fun extractJpegDimensions(bytes: ByteArray): Pair<Int, Int>? {
+        try {
+            var i = 2
+            while (i < bytes.size - 8) {
+                if (bytes[i] == 0xFF.toByte()) {
+                    val marker = bytes[i + 1].toInt() and 0xFF
+                    // SOF markers: C0..C3, C5..C7, C9..CB, CD..CF
+                    if ((marker in 0xC0..0xC3) || (marker in 0xC5..0xC7) || (marker in 0xC9..0xCB) || (marker in 0xCD..0xCF)) {
+                        val h = ((bytes[i + 5].toInt() and 0xFF) shl 8) or (bytes[i + 6].toInt() and 0xFF)
+                        val w = ((bytes[i + 7].toInt() and 0xFF) shl 8) or (bytes[i + 8].toInt() and 0xFF)
+                        if (w > 0 && h > 0) return Pair(w, h)
+                    }
+                    val len = ((bytes[i + 2].toInt() and 0xFF) shl 8) or (bytes[i + 3].toInt() and 0xFF)
+                    if (len <= 2) break
+                    i += 2 + len
+                } else {
+                    i++
+                }
+            }
+        } catch (_: Throwable) {}
+        return null
+    }
+
+    private fun extractPngDimensions(bytes: ByteArray): Pair<Int, Int>? {
+        try {
+            if (bytes.size >= 24 && isPngSignature(bytes)) {
+                val w = ((bytes[16].toInt() and 0xFF) shl 24) or
+                        ((bytes[17].toInt() and 0xFF) shl 16) or
+                        ((bytes[18].toInt() and 0xFF) shl 8) or
+                        (bytes[19].toInt() and 0xFF)
+                val h = ((bytes[20].toInt() and 0xFF) shl 24) or
+                        ((bytes[21].toInt() and 0xFF) shl 16) or
+                        ((bytes[22].toInt() and 0xFF) shl 8) or
+                        (bytes[23].toInt() and 0xFF)
+                if (w > 0 && h > 0) return Pair(w, h)
+            }
+        } catch (_: Throwable) {}
+        return null
     }
 
     private fun isPngSignature(bytes: ByteArray): Boolean {
