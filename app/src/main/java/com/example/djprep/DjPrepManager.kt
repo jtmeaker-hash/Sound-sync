@@ -250,7 +250,7 @@ class DjPrepManager private constructor(
     ): DjPrepTrackData = withContext(Dispatchers.IO) {
         val current = getOrInitPrepData(track, customDao)
         pushUndo(current)
-        val newId = "mem_${System.currentTimeMillis()}"
+        val newId = "mem_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}"
         val newCue = CuePoint(
             id = newId,
             label = label?.ifBlank { null } ?: "Memory Cue ${current.memoryCues.size + 1}",

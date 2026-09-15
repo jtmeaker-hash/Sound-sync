@@ -103,9 +103,10 @@ class ScanStateManager(context: Context) {
         if (status == ScanStatus.SCANNING || status == ScanStatus.RUNNING || status == ScanStatus.QUEUED) {
             val processed = checkpointProcessedCount
             val total = checkpointTotalCount
+            val hasCheckpoint = total > 0 || processed > 0
             Log.w(TAG, "Detected interrupted scan from previous app session ($processed / $total completed). Safely recovering checkpoint.")
-            status = ScanStatus.PAUSED
-            lastErrorMessage = if (total > 0) {
+            status = if (hasCheckpoint) ScanStatus.PAUSED else ScanStatus.FAILED
+            lastErrorMessage = if (hasCheckpoint) {
                 "Previous scan was paused at $processed/$total items. Resuming remaining work."
             } else {
                 "Previous scan was interrupted. Ready to continue."
