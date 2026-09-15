@@ -1,0 +1,179 @@
+name: SoundSync CI + Diagnostics Log
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: soundsync-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-build-report:
+    # Prevent the log-writing commit from recursively running the full pipeline.
+    if: github.actor != 'github-actions[bot]' && !contains(github.event.head_commit.message || '', '[skip ci]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        shell: bash
+        run: chmod +x ./gradlew
+
+      - name: Prepare build environment
+        shell: bash
+        run: |
+          if [ -f "debug.keystore.base64" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+          if [ ! -f ".env" ]; then
+            if [ -f ".env.example" ]; then
+              cp .env.example .env
+            else
+              touch .env
+            fi
+          fi
+
+      - name: Prepare CI logs
+        shell: bash
+        run: mkdir -p ci-output
+
+      # SoundSync Gradle tasks inspection: testDebugUnitTest and assembleDebug
+      - name: Run unit tests
+        id: unit
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          ./gradlew --no-daemon testDebugUnitTest 2>&1 | tee ci-output/unit-tests.log
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Build Debug APK
+        id: debug
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          ./gradlew --no-daemon assembleDebug 2>&1 | tee ci-output/debug-build.log
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Build Release APK
+        id: release
+        shell: bash
+        run: |
+          # Per project contract: do not build Release APK for Debug or non-release development pushes.
+          # Release APK builds and publishing are reserved for release workflows or release-triggered context.
+          if [[ "${{ github.ref_name }}" == "Debug" || "${{ github.ref_type }}" != "tag" ]]; then
+            echo "Skipping Release APK build for non-release context (${{ github.ref_name }})."
+            echo "code=SKIPPED" >> "$GITHUB_OUTPUT"
+            echo "Release APK build skipped for non-release push (${{ github.ref_name }})." > ci-output/release-build.log
+            exit 0
+          fi
+          set +e
+          set -o pipefail
+          ./gradlew --no-daemon assembleRelease 2>&1 | tee ci-output/release-build.log
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Generate readable diagnostic report
+        if: always()
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/ci/append_ci_report.py \
+            --history docs/BUILD_DIAGNOSTICS_LOG.md \
+            --report ci-output/REPORT.md \
+            --run-url "$RUN_URL" \
+            --run-id "${{ github.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --sha "${{ github.sha }}" \
+            --ref "${{ github.ref_name }}" \
+            --actor "${{ github.actor }}" \
+            --event "${{ github.event_name }}" \
+            --unit-status "${{ steps.unit.outputs.code || '999' }}" \
+            --debug-status "${{ steps.debug.outputs.code || '999' }}" \
+            --release-status "${{ steps.release.outputs.code || '999' }}" \
+            --unit-log ci-output/unit-tests.log \
+            --debug-log ci-output/debug-build.log \
+            --release-log ci-output/release-build.log
+
+      - name: Upload diagnostic report and raw logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soundsync-ci-report-${{ github.run_id }}
+          path: ci-output/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload Debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soundsync-debug-apk-${{ github.run_id }}
+          path: |
+            **/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Release APK
+        if: always() && steps.release.outputs.code == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: soundsync-release-apk-${{ github.run_id }}
+          path: |
+            **/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Commit diagnostics history
+        if: always() && github.event_name == 'push'
+        shell: bash
+        run: |
+          if git diff --quiet -- docs/BUILD_DIAGNOSTICS_LOG.md; then
+            echo "No history change to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/BUILD_DIAGNOSTICS_LOG.md
+          git commit -m "ci(log): record run ${{ github.run_id }} [skip ci]"
+          git push origin "HEAD:${{ github.ref_name }}"
+
+      - name: Fail workflow if any required check failed
+        if: always()
+        shell: bash
+        run: |
+          unit="${{ steps.unit.outputs.code || '999' }}"
+          debug="${{ steps.debug.outputs.code || '999' }}"
+          release="${{ steps.release.outputs.code || '999' }}"
+          if [ "$unit" != "0" ] || [ "$debug" != "0" ] || { [ "$release" != "0" ] && [ "$release" != "SKIPPED" ]; }; then
+            echo "One or more required SoundSync checks failed."
+            echo "Open: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            exit 1
+          fi

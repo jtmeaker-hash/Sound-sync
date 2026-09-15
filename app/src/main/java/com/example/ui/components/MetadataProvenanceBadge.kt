@@ -165,13 +165,19 @@ fun MetadataFileWriteStateBadge(
 ) {
     val state = track.writeState
     val (bgColor, borderColor, textColor, icon) = when (state) {
-        com.example.model.MetadataWriteState.FILE_WRITE_SUCCESS -> {
+        com.example.model.MetadataWriteState.FILE_WRITE_SUCCESS,
+        com.example.model.MetadataWriteState.ARTWORK_SAVED -> {
             val c = NeonGreen
             Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.CheckCircle)
         }
-        com.example.model.MetadataWriteState.WRITING_TO_FILE -> {
+        com.example.model.MetadataWriteState.WRITING_TO_FILE,
+        com.example.model.MetadataWriteState.WRITING_ARTWORK -> {
             val c = DeckACyan
             Tuple4(c.copy(alpha = 0.15f), c.copy(alpha = 0.5f), c, Icons.Default.HourglassTop)
+        }
+        com.example.model.MetadataWriteState.PENDING_APPROVAL -> {
+            val c = NeonAmber
+            Tuple4(c.copy(alpha = 0.18f), c.copy(alpha = 0.6f), c, Icons.Default.HourglassTop)
         }
         com.example.model.MetadataWriteState.FILE_WRITE_PARTIAL -> {
             val c = NeonAmber

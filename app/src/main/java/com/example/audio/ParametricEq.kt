@@ -16,6 +16,7 @@ enum class EqFilterType(val displayName: String, val shortCode: String) {
     HIGH_SHELF("High Shelf", "HS"),
     HIGH_PASS("High Pass", "HP"),
     LOW_PASS("Low Pass", "LP"),
+    BAND_PASS("Band Pass", "BP"),
     NOTCH("Notch / Cut", "NT")
 }
 
@@ -51,6 +52,23 @@ class ParametricEq(val sampleRate: Int) {
         const val MAX_GAIN_DB = 24.0
         const val MIN_Q = 0.1
         const val MAX_Q = 20.0
+
+        /**
+         * Professional 10-band parametric layout covering the full audible spectrum.
+         */
+        val DEFAULT_10_BANDS: List<EqBand>
+            get() = listOf(
+                EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 32.0, 0.0, 0.71, true),
+                EqBand(1, "Low Bass", EqFilterType.PEAKING, 64.0, 0.0, 1.0, true),
+                EqBand(2, "Upper Bass", EqFilterType.PEAKING, 125.0, 0.0, 1.2, true),
+                EqBand(3, "Low-Mid", EqFilterType.PEAKING, 250.0, 0.0, 1.4, true),
+                EqBand(4, "Mid", EqFilterType.PEAKING, 500.0, 0.0, 1.4, true),
+                EqBand(5, "High-Mid", EqFilterType.PEAKING, 1000.0, 0.0, 1.4, true),
+                EqBand(6, "Presence", EqFilterType.PEAKING, 2000.0, 0.0, 1.4, true),
+                EqBand(7, "High Presence", EqFilterType.PEAKING, 4000.0, 0.0, 1.2, true),
+                EqBand(8, "Brilliance", EqFilterType.PEAKING, 8000.0, 0.0, 1.0, true),
+                EqBand(9, "Air", EqFilterType.HIGH_SHELF, 16000.0, 0.0, 0.71, true)
+            )
 
         /**
          * Professional 8-band parametric layout covering the entire audible spectrum.
@@ -91,18 +109,22 @@ class ParametricEq(val sampleRate: Int) {
             preampDb: Double,
             autoHeadroom: Boolean,
             frequencies: FloatArray,
-            outDb: FloatArray
+            outDb: FloatArray,
+            soloBandIndex: Int? = null
         ) {
             val maxBoost = if (autoHeadroom) {
-                bands.filter { it.isEnabled && (it.type == EqFilterType.PEAKING || it.type == EqFilterType.LOW_SHELF || it.type == EqFilterType.HIGH_SHELF) }
-                    .maxOfOrNull { it.gainDb }?.coerceAtLeast(0.0) ?: 0.0
+                bands.filterIndexed { idx, it ->
+                    it.isEnabled && (soloBandIndex == null || soloBandIndex == idx) &&
+                        (it.type == EqFilterType.PEAKING || it.type == EqFilterType.LOW_SHELF || it.type == EqFilterType.HIGH_SHELF)
+                }.maxOfOrNull { it.gainDb }?.coerceAtLeast(0.0) ?: 0.0
             } else 0.0
 
             val baseDb = preampDb - maxBoost
 
             val coefsList = ArrayList<DoubleArray>(bands.size)
-            for (band in bands) {
-                if (!band.isEnabled) continue
+            for (idx in bands.indices) {
+                val band = bands[idx]
+                if (!band.isEnabled || (soloBandIndex != null && soloBandIndex != idx)) continue
                 val coefs = DoubleArray(5)
                 calculateBiquadCoefficients(sampleRate, band.type, band.frequencyHz, band.gainDb, band.q, coefs)
                 coefsList.add(coefs)
@@ -221,6 +243,15 @@ class ParametricEq(val sampleRate: Int) {
                     a1 = -2.0 * cosW
                     a2 = 1.0 - alpha
                 }
+                EqFilterType.BAND_PASS -> {
+                    val alpha = sinW / (2.0 * qVal)
+                    b0 = alpha
+                    b1 = 0.0
+                    b2 = -alpha
+                    a0 = 1.0 + alpha
+                    a1 = -2.0 * cosW
+                    a2 = 1.0 - alpha
+                }
                 EqFilterType.NOTCH -> {
                     val alpha = sinW / (2.0 * qVal)
                     b0 = 1.0
@@ -258,12 +289,16 @@ class ParametricEq(val sampleRate: Int) {
         }
     }
 
-    // Active parametric bands
-    private val bands: MutableList<EqBand> = DEFAULT_8_BANDS.map { it.copy() }.toMutableList()
+    // Active parametric bands (default: 10 professional bands)
+    private val bands: MutableList<EqBand> = DEFAULT_10_BANDS.map { it.copy() }.toMutableList()
 
     // Biquad filter pairs per band (Left and Right stereo channels)
     private val biquadsL = mutableListOf<Biquad>()
     private val biquadsR = mutableListOf<Biquad>()
+
+    // Optional solo band index: when non-null, only this band affects audio
+    @Volatile
+    var soloBandIndex: Int? = null
 
     // Master preamp in dB (-24 dB to +24 dB)
     @Volatile
@@ -296,6 +331,7 @@ class ParametricEq(val sampleRate: Int) {
     private var appliedLow = Float.NaN
     private var appliedMid = Float.NaN
     private var appliedHigh = Float.NaN
+    private var appliedSolo: Int? = null
     private val appliedBands = mutableListOf<EqBand>()
 
     private var outputGain = 1.0f
@@ -335,6 +371,30 @@ class ParametricEq(val sampleRate: Int) {
         }
     }
 
+    fun addBand(band: EqBand) {
+        synchronized(bands) {
+            bands.add(band.copy(id = bands.size))
+            rebuildBiquads(immediate = false)
+        }
+    }
+
+    fun removeBand(index: Int): Boolean {
+        synchronized(bands) {
+            if (bands.size <= 1 || index !in bands.indices) return false
+            bands.removeAt(index)
+            for (i in bands.indices) {
+                bands[i] = bands[i].copy(id = i)
+            }
+            if (soloBandIndex == index) {
+                soloBandIndex = null
+            } else if (soloBandIndex != null && soloBandIndex!! > index) {
+                soloBandIndex = soloBandIndex!! - 1
+            }
+            rebuildBiquads(immediate = false)
+            return true
+        }
+    }
+
     fun updateBand(index: Int, freqHz: Double, gainDb: Double, q: Double, isEnabled: Boolean, immediate: Boolean = false) {
         synchronized(bands) {
             if (index in bands.indices) {
@@ -361,6 +421,7 @@ class ParametricEq(val sampleRate: Int) {
         synchronized(bands) {
             preampDb = 0.0
             autoHeadroomEnabled = false
+            soloBandIndex = null
             lowGain = 1f
             midGain = 1f
             highGain = 1f
@@ -379,6 +440,17 @@ class ParametricEq(val sampleRate: Int) {
                 bands[index].isEnabled = true
                 updateCoefficients(immediate = false)
             }
+        }
+    }
+
+    /**
+     * Resets the internal delay states of all active biquad filters to zero.
+     * Prevents filter ringing, pops, or transient artifacts on seeks/switches.
+     */
+    fun resetFilters() {
+        synchronized(bands) {
+            for (bq in biquadsL) bq.reset()
+            for (bq in biquadsR) bq.reset()
         }
     }
 
@@ -405,7 +477,7 @@ class ParametricEq(val sampleRate: Int) {
 
         val isUnityQuick = (lowGain == 1f && midGain == 1f && highGain == 1f)
         val isUnityParametric = (preampDb == 0.0) && !autoHeadroomEnabled && bands.all {
-            !it.isEnabled || (it.gainDb == 0.0 && it.type != EqFilterType.HIGH_PASS && it.type != EqFilterType.LOW_PASS && it.type != EqFilterType.NOTCH)
+            !it.isEnabled || (it.gainDb == 0.0 && it.type != EqFilterType.HIGH_PASS && it.type != EqFilterType.LOW_PASS && it.type != EqFilterType.NOTCH && it.type != EqFilterType.BAND_PASS)
         }
 
         // Bit-exact unity fast path
@@ -471,8 +543,14 @@ class ParametricEq(val sampleRate: Int) {
             var right = buffer[idx + 1].toDouble()
 
             // Transposed Direct Form II filter series cascade
+            val currentSolo = soloBandIndex
             for (b in 0 until activeBandCount) {
-                if (bands[b].isEnabled) {
+                if (currentSolo != null) {
+                    if (b == currentSolo && bands[b].isEnabled) {
+                        left = biquadsL[b].process(left)
+                        right = biquadsR[b].process(right)
+                    }
+                } else if (bands[b].isEnabled) {
                     left = biquadsL[b].process(left)
                     right = biquadsR[b].process(right)
                 }
@@ -509,11 +587,12 @@ class ParametricEq(val sampleRate: Int) {
     private fun ensureCoefficients() {
         var needsUpdate = false
 
-        if (lowGain != appliedLow || midGain != appliedMid || highGain != appliedHigh || preampDb != appliedPreamp) {
+        if (lowGain != appliedLow || midGain != appliedMid || highGain != appliedHigh || preampDb != appliedPreamp || soloBandIndex != appliedSolo) {
             appliedLow = lowGain
             appliedMid = midGain
             appliedHigh = highGain
             appliedPreamp = preampDb
+            appliedSolo = soloBandIndex
             needsUpdate = true
         }
 
@@ -539,10 +618,11 @@ class ParametricEq(val sampleRate: Int) {
 
     private fun updateCoefficients(immediate: Boolean) {
         synchronized(bands) {
+            val currentSolo = soloBandIndex
             for (i in bands.indices) {
                 if (i >= biquadsL.size) break
                 val band = bands[i]
-                if (!band.isEnabled) {
+                if (!band.isEnabled || (currentSolo != null && currentSolo != i)) {
                     if (immediate) {
                         biquadsL[i].setImmediate(1.0, 0.0, 0.0, 0.0, 0.0)
                         biquadsR[i].setImmediate(1.0, 0.0, 0.0, 0.0, 0.0)

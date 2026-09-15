@@ -164,6 +164,11 @@ class MetadataFileWriteQueue private constructor(
         ): MetadataFileWriteQueue {
             return MetadataFileWriteQueue(context, trackDao, fileWriter)
         }
+
+        @androidx.annotation.VisibleForTesting
+        fun setInstanceForTesting(queue: MetadataFileWriteQueue?) {
+            INSTANCE = queue
+        }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -262,7 +267,7 @@ class MetadataFileWriteQueue private constructor(
     /**
      * Pauses the queue worker until the user grants or denies write access via system dialogue.
      */
-    private suspend fun requestWritePermission(intentSender: IntentSender, uris: List<Uri>): Boolean {
+    suspend fun requestWritePermission(intentSender: IntentSender, uris: List<Uri>): Boolean {
         val deferred = CompletableDeferred<Boolean>()
         _pendingPermissionRequest.value = PendingWritePermissionRequest(
             intentSender = intentSender,
@@ -349,6 +354,7 @@ class MetadataFileWriteQueue private constructor(
 
     /**
      * Synchronous / suspend write for situations requiring immediate completion.
+     * Interactively requests Scoped Storage MediaStore write permission if required.
      */
     suspend fun writeDirect(
         track: Track,
@@ -362,9 +368,71 @@ class MetadataFileWriteQueue private constructor(
                 delay(50)
             }
             lockAcquired = true
-            semaphore.withPermit {
+
+            if (artworkBytes != null && artworkBytes.isNotEmpty()) {
+                Log.i(TAG, "ARTWORK_WRITE_STARTED: Writing embedded artwork (${artworkBytes.size} bytes) to ${track.filePath} for track ${track.id}")
+            }
+
+            var result = semaphore.withPermit {
                 fileWriter.writeAsync(track, artworkBytes, artworkMimeType)
             }
+
+            // If permission required and IntentSender provided, prompt user and retry once
+            if (result is MetadataWriteResult.PermissionRequired && result.intentSender != null) {
+                val targetUri = result.uri ?: StorageWritePermissionHelper.resolveTargetUri(context, track)
+                if (targetUri != null) {
+                    Log.i(TAG, "MEDIASTORE_WRITE_PERMISSION_REQUESTED: Requesting write permission for $targetUri (track ${track.id})")
+                    val granted = requestWritePermission(result.intentSender, listOf(targetUri))
+                    if (granted) {
+                        Log.i(TAG, "MEDIASTORE_WRITE_PERMISSION_GRANTED: Permission granted for $targetUri (track ${track.id})")
+                        result = semaphore.withPermit {
+                            fileWriter.writeAsync(track, artworkBytes, artworkMimeType)
+                        }
+                    } else {
+                        Log.w(TAG, "MediaStore write permission denied for $targetUri")
+                        Log.e(TAG, "ARTWORK_WRITE_FAILED: MediaStore permission denied for track ${track.id}")
+                    }
+                }
+            }
+
+            when (result) {
+                is MetadataWriteResult.Written,
+                is MetadataWriteResult.AlreadyInSync,
+                is MetadataWriteResult.Partial -> {
+                    if (artworkBytes != null && artworkBytes.isNotEmpty()) {
+                        Log.i(TAG, "ARTWORK_WRITE_SUCCESS: Successfully wrote and verified embedded artwork for track ${track.id}")
+                        com.example.util.AlbumArtHelper.invalidateTrack(track.id, track.artist, track.album)
+                        com.example.metadata.ArtworkCache(context).evictArtworkForTrack(track.id)
+                        Log.i(TAG, "ARTWORK_CACHE_INVALIDATED: Evicted cache for track ${track.id}")
+                        trackDao?.updateMetadataWriteState(track.id, com.example.model.MetadataWriteState.ARTWORK_SAVED.name)
+                        Log.i(TAG, "TRACK_METADATA_REFRESHED: Updated database state to ARTWORK_SAVED for track ${track.id}")
+                    }
+                    if (track.filePath.isNotBlank() && !track.filePath.startsWith("content://")) {
+                        try {
+                            android.media.MediaScannerConnection.scanFile(context, arrayOf(track.filePath), null, null)
+                        } catch (_: Throwable) {}
+                    }
+                }
+                is MetadataWriteResult.PermissionRequired -> {
+                    Log.w(TAG, "ARTWORK_WRITE_FAILED: Storage write permission required for track ${track.id}")
+                    trackDao?.updateMetadataWriteState(track.id, com.example.model.MetadataWriteState.PERMISSION_REQUIRED.name)
+                }
+                is MetadataWriteResult.Unsupported -> {
+                    Log.w(TAG, "ARTWORK_WRITE_FAILED: Format unsupported for track ${track.id}: ${result.reason}")
+                    trackDao?.updateMetadataWriteState(track.id, com.example.model.MetadataWriteState.FORMAT_WRITE_UNSUPPORTED.name)
+                }
+                is MetadataWriteResult.Failed -> {
+                    Log.e(TAG, "ARTWORK_WRITE_FAILED: Tag write failed for track ${track.id}: ${result.reason}")
+                    trackDao?.updateMetadataWriteState(track.id, com.example.model.MetadataWriteState.FILE_WRITE_FAILED.name)
+                }
+                else -> {
+                    if (artworkBytes != null && artworkBytes.isNotEmpty()) {
+                        Log.w(TAG, "ARTWORK_WRITE_FAILED: Unexpected result $result for track ${track.id}")
+                    }
+                }
+            }
+
+            result
         } finally {
             if (lockAcquired) {
                 activeWritingFiles.remove(pathKey)

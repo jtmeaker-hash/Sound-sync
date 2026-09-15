@@ -437,8 +437,29 @@ class TrackAnalysisManager private constructor(
                     failedCount = failedTerminal
                 )
 
+                scanStateManager.saveCheckpoint(newProcessed, totalEligible, track.id, track.filePath)
+                try {
+                    com.example.state.PersistentSessionManager.getInstance(context).saveScannerCheckpoint(
+                        com.example.state.PersistentScannerCheckpoint(
+                            scanType = "METADATA_ANALYSIS",
+                            status = com.example.storage.ScanStatus.RUNNING,
+                            isRunning = true,
+                            isPaused = false,
+                            lastProcessedTrackId = track.id,
+                            lastProcessedFilePath = track.filePath,
+                            processedCount = newProcessed,
+                            totalDiscoveredCount = totalEligible,
+                            completedSuccess = completedSuccess,
+                            completedSkipped = completedSkipped,
+                            failedCount = failedTerminal,
+                            timestamp = System.currentTimeMillis()
+                        ),
+                        immediate = false
+                    )
+                } catch (_: Exception) {}
+
                 onProgressUpdate?.invoke(newProcessed, totalEligible, track.title)
-                delay(if (isPlaying) 150 else 30)
+                delay(if (isPlaying) 200 else 60)
             }
 
             terminalState = if (failedTerminal > 0) ScanLifecycleState.COMPLETE_WITH_ERRORS else ScanLifecycleState.COMPLETE
@@ -457,6 +478,31 @@ class TrackAnalysisManager private constructor(
                 ScanLifecycleState.FAILED -> "Metadata scan failed"
                 ScanLifecycleState.PAUSED -> "Metadata scan paused"
                 else -> "Metadata scan complete"
+            }
+
+            if (terminalState == ScanLifecycleState.COMPLETE || terminalState == ScanLifecycleState.COMPLETE_WITH_ERRORS) {
+                scanStateManager.clearCheckpoint()
+                try {
+                    com.example.state.PersistentSessionManager.getInstance(context).clearScannerCheckpoint(immediate = true)
+                } catch (_: Exception) {}
+            } else if (terminalState == ScanLifecycleState.PAUSED) {
+                try {
+                    com.example.state.PersistentSessionManager.getInstance(context).saveScannerCheckpoint(
+                        com.example.state.PersistentScannerCheckpoint(
+                            scanType = "METADATA_ANALYSIS",
+                            status = com.example.storage.ScanStatus.PAUSED,
+                            isRunning = false,
+                            isPaused = true,
+                            processedCount = totalFinal,
+                            totalDiscoveredCount = totalEligible,
+                            completedSuccess = completedSuccess,
+                            completedSkipped = completedSkipped,
+                            failedCount = failedTerminal,
+                            timestamp = System.currentTimeMillis()
+                        ),
+                        immediate = true
+                    )
+                } catch (_: Exception) {}
             }
 
             scanStateManager.status = when (terminalState) {
@@ -562,26 +608,18 @@ class TrackAnalysisManager private constructor(
             }
         }
 
-        trackDao.updateTrackAnalysisStatus(
-            id = track.id,
-            state = AnalysisState.ANALYSING.name,
-            lastAnalysedAt = System.currentTimeMillis(),
-            reason = null,
-            retryCount = track.analysisRetryCount
-        )
-
         try {
             // 1. Read embedded tags for accurate local metadata if missing
             try {
-                val embedded = AudioEmbeddedMetadataReader.read(context, updatedTrack.filePath)
+                val embedded = AudioEmbeddedMetadataReader.read(context, updatedTrack.filePath, includeArtworkBytes = false)
                 if (embedded != null) {
                     var modified = false
                     var t = updatedTrack
-                    if (t.bpm <= 0.0 && embedded.hasBpm) {
+                    if (!t.isManualBpm && t.bpm <= 0.0 && embedded.hasBpm) {
                         t = t.copy(bpm = embedded.bpm ?: 0.0, isManualBpm = false)
                         modified = true
                     }
-                    if (t.musicalKey.isBlank() && embedded.hasKey) {
+                    if (!t.isManualKey && t.musicalKey.isBlank() && embedded.hasKey) {
                         t = t.copy(
                             musicalKey = embedded.musicalKey.orEmpty(),
                             camelotKey = embedded.camelotKey.orEmpty(),
@@ -614,12 +652,12 @@ class TrackAnalysisManager private constructor(
             }
 
             // 2. Perform DSP detection for BPM and Key if still missing
-            if (!updatedTrack.hasValidBpm || !updatedTrack.hasValidKey) {
+            if ((!updatedTrack.isManualBpm && !updatedTrack.hasValidBpm) || (!updatedTrack.isManualKey && !updatedTrack.hasValidKey)) {
                 dspSemaphore.withPermit {
                     try {
                         val dspResult = pcmAnalyzer.analyze(updatedTrack)
                         var t = updatedTrack
-                        if (t.bpm <= 0.0 && (dspResult.bpm ?: 0.0) > 0.0) {
+                        if (!t.isManualBpm && t.bpm <= 0.0 && (dspResult.bpm ?: 0.0) > 0.0) {
                             t = t.copy(
                                 bpm = dspResult.bpm ?: 0.0,
                                 bpmConfidence = dspResult.bpmConfidence,
@@ -627,7 +665,7 @@ class TrackAnalysisManager private constructor(
                                 bpmLastAnalyzed = System.currentTimeMillis()
                             )
                         }
-                        if (t.musicalKey.isBlank() && !dspResult.musicalKey.isNullOrBlank()) {
+                        if (!t.isManualKey && t.musicalKey.isBlank() && !dspResult.musicalKey.isNullOrBlank()) {
                             t = t.copy(
                                 musicalKey = dspResult.musicalKey.orEmpty(),
                                 camelotKey = dspResult.camelotKey.orEmpty(),

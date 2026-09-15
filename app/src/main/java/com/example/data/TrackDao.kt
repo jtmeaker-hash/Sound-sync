@@ -201,15 +201,16 @@ interface TrackDao {
                 storageRelativePath = if (track.storageRelativePath.isNotBlank()) track.storageRelativePath else existing.storageRelativePath,
                 title = if (existing.userConfirmedMetadata || (existing.title.isNotBlank() && existing.title != "<unknown>" && !existing.title.startsWith("Track "))) existing.title else track.title,
                 artist = if (existing.userConfirmedMetadata || (existing.artist.isNotBlank() && existing.artist != "<unknown>" && existing.artist != "Unknown Artist")) existing.artist else track.artist,
-                album = if (existing.userConfirmedMetadata || (existing.album.isNotBlank() && existing.album != "<unknown>" && existing.album != "Single")) existing.album else track.album,
-                bpm = if (existing.bpm > 0.0) existing.bpm else track.bpm,
-                bpmConfidence = if (existing.bpm > 0.0) existing.bpmConfidence else track.bpmConfidence,
-                bpmAnalysisVersion = existing.bpmAnalysisVersion ?: track.bpmAnalysisVersion,
+                isManualBpm = existing.isManualBpm || track.isManualBpm,
+                bpm = if (existing.isManualBpm || existing.bpm > 0.0) existing.bpm else track.bpm,
+                bpmConfidence = if (existing.isManualBpm) 100.0 else (if (existing.bpm > 0.0) existing.bpmConfidence else track.bpmConfidence),
+                bpmAnalysisVersion = if (existing.isManualBpm) "manual" else (existing.bpmAnalysisVersion ?: track.bpmAnalysisVersion),
                 bpmLastAnalyzed = existing.bpmLastAnalyzed ?: track.bpmLastAnalyzed,
-                musicalKey = if (existing.musicalKey.isNotBlank()) existing.musicalKey else track.musicalKey,
-                camelotKey = if (existing.camelotKey.isNotBlank()) existing.camelotKey else track.camelotKey,
-                keyConfidence = if (existing.keyConfidence > 0.0) existing.keyConfidence else track.keyConfidence,
-                keyAnalysisVersion = existing.keyAnalysisVersion ?: track.keyAnalysisVersion,
+                isManualKey = existing.isManualKey || track.isManualKey,
+                musicalKey = if (existing.isManualKey || existing.musicalKey.isNotBlank()) existing.musicalKey else track.musicalKey,
+                camelotKey = if (existing.isManualKey || existing.camelotKey.isNotBlank()) existing.camelotKey else track.camelotKey,
+                keyConfidence = if (existing.isManualKey) 100.0 else (if (existing.keyConfidence > 0.0) existing.keyConfidence else track.keyConfidence),
+                keyAnalysisVersion = if (existing.isManualKey) "manual" else (existing.keyAnalysisVersion ?: track.keyAnalysisVersion),
                 keyLastAnalyzed = existing.keyLastAnalyzed ?: track.keyLastAnalyzed,
                 analysisState = if (existing.analysisState == "COMPLETE") existing.analysisState else track.analysisState,
                 lastAnalysedAt = existing.lastAnalysedAt ?: track.lastAnalysedAt,
@@ -220,7 +221,8 @@ interface TrackDao {
                 userConfirmedMetadata = existing.userConfirmedMetadata || track.userConfirmedMetadata,
                 contentFingerprint = if (existing.contentFingerprint.isNotBlank()) existing.contentFingerprint else track.contentFingerprint,
                 playabilityStatus = if (existing.playabilityStatus == "PLAYABLE") existing.playabilityStatus else track.playabilityStatus,
-                resolvedUri = track.resolvedUri ?: existing.resolvedUri
+                resolvedUri = track.resolvedUri ?: existing.resolvedUri,
+                fieldProvenanceJson = if (existing.fieldProvenanceJson.isNotBlank() && existing.fieldProvenanceJson != "{}") existing.fieldProvenanceJson else track.fieldProvenanceJson
             )
             updateTrack(merged)
             return 0L

@@ -287,4 +287,51 @@ class SoundSyncBackupAndRestoreTest {
         assertTrue(res4 is ValidationResult.Invalid)
         assertTrue((res4 as ValidationResult.Invalid).reason.contains("newer version"))
     }
+
+    @Test
+    fun `SoundSyncBackup preserves Library Doctor ignore and review states with backward compatibility`() {
+        val mockContext = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val backupManager = SoundSyncBackupManager(mockContext)
+
+        // Test V1 backup parsing (backward compatibility): should default to empty lists
+        val v1Json = """
+            {
+                "backupVersion": 1,
+                "appVersion": "1.0.0",
+                "createdAt": 1700000000,
+                "updatedAt": 1700000000,
+                "songFinds": [],
+                "tracks": []
+            }
+        """.trimIndent()
+        val v1Result = backupManager.validateBackup(v1Json)
+        assertTrue(v1Result is ValidationResult.Valid)
+        val v1Backup = (v1Result as ValidationResult.Valid).backup
+        assertEquals(1, v1Backup.backupVersion)
+        assertTrue(v1Backup.doctorIgnoredIssues.isEmpty())
+        assertTrue(v1Backup.doctorReviewedIssues.isEmpty())
+
+        // Test V2 backup parsing with doctor ignored and reviewed lists
+        val v2Json = """
+            {
+                "backupVersion": 2,
+                "appVersion": "1.0.0",
+                "createdAt": 1700000000,
+                "updatedAt": 1700000000,
+                "songFinds": [],
+                "tracks": [],
+                "doctorIgnoredIssues": ["issue_art_123", "issue_bpm_456"],
+                "doctorReviewedIssues": ["issue_dup_789"]
+            }
+        """.trimIndent()
+        val v2Result = backupManager.validateBackup(v2Json)
+        assertTrue(v2Result is ValidationResult.Valid)
+        val v2Backup = (v2Result as ValidationResult.Valid).backup
+        assertEquals(2, v2Backup.backupVersion)
+        assertEquals(2, v2Backup.doctorIgnoredIssues.size)
+        assertTrue(v2Backup.doctorIgnoredIssues.contains("issue_art_123"))
+        assertTrue(v2Backup.doctorIgnoredIssues.contains("issue_bpm_456"))
+        assertEquals(1, v2Backup.doctorReviewedIssues.size)
+        assertTrue(v2Backup.doctorReviewedIssues.contains("issue_dup_789"))
+    }
 }

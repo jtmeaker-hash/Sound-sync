@@ -74,6 +74,9 @@ import com.example.model.StorageSource
 import com.example.model.StorageSourceType
 import com.example.service.AudioScanState
 import com.example.sync.CloudSyncManager
+import com.example.brain.BrainCategory
+import com.example.brain.BrainSummary
+import com.example.ui.components.LibraryBrainCard
 import com.example.ui.components.MetadataEnrichmentSettingsCard
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DjObsidian
@@ -98,7 +101,13 @@ fun LibrarySettingsScreen(
     operationJournal: List<OperationJournalItem>,
     scanServiceState: AudioScanState = AudioScanState(),
     metadataSettings: MetadataSettings = MetadataSettings(),
-    focusMetadataOnly: Boolean = false,
+    brainSummary: BrainSummary = BrainSummary(),
+    onPauseBrain: () -> Unit = {},
+    onResumeBrain: () -> Unit = {},
+    onRetryBrainFailed: () -> Unit = {},
+    onAnalyseIncompleteBrain: () -> Unit = {},
+    onReanalyseBrainCategory: (BrainCategory) -> Unit = {},
+    onCancelBrainWork: () -> Unit = {},
     onSetEnrichmentEnabled: (Boolean) -> Unit = {},
     onSetAppleSearchEnabled: (Boolean) -> Unit = {},
     onSetTheAudioDbEnabled: (Boolean) -> Unit = {},
@@ -145,45 +154,16 @@ fun LibrarySettingsScreen(
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Metadata & Artwork Settings Card
+        // Background DocumentFile Scanner Live Card
         item {
-            MetadataEnrichmentSettingsCard(
-                settings = metadataSettings,
-                onSetEnrichmentEnabled = onSetEnrichmentEnabled,
-                onSetAppleSearchEnabled = onSetAppleSearchEnabled,
-                onSetTheAudioDbEnabled = onSetTheAudioDbEnabled,
-                onSetBpmAnalysisEnabled = onSetBpmAnalysisEnabled,
-                onSetKeyAnalysisEnabled = onSetKeyAnalysisEnabled,
-                onSetWriteToFileEnabled = onSetWriteToFileEnabled,
-                onSetShowProvenanceBadges = onSetShowProvenanceBadges,
-                onSetConcurrency = onSetConcurrency,
-                onSetBpmRange = onSetBpmRange,
-                isPushingMetadata = isPushingMetadata,
-                pushProgress = pushProgress,
-                pushReport = pushReport,
-                onPushMetadataToFiles = onPushMetadataToFiles,
-                onCancelPushMetadata = onCancelPushMetadata,
-                onRetryFailedWrites = onRetryFailedWrites,
-                isMdScanning = isMdScanning,
-                mdScanProgress = mdScanProgress,
-                pendingReviewCount = pendingReviewCount,
-                onStartMdScan = onStartMdScan,
-                onCancelMdScan = onCancelMdScan,
-                onNavigateToReviewInbox = onNavigateToReviewInbox
+            BackgroundScannerStatusCard(
+                scanState = scanServiceState,
+                onPauseScan = onPauseScan,
+                onResumeScan = onResumeScan,
+                onCancelScan = onCancelScan,
+                onMountFolder = onMountSaf
             )
         }
-
-        if (!focusMetadataOnly) {
-            // Background DocumentFile Scanner Live Card
-            item {
-                BackgroundScannerStatusCard(
-                    scanState = scanServiceState,
-                    onPauseScan = onPauseScan,
-                    onResumeScan = onResumeScan,
-                    onCancelScan = onCancelScan,
-                    onMountFolder = onMountSaf
-                )
-            }
 
             // Storage Sources Header & Actions
             item {
@@ -394,7 +374,6 @@ fun LibrarySettingsScreen(
             }
         }
     }
-}
 
 @Composable
 private fun StorageSourceCard(source: StorageSource) {

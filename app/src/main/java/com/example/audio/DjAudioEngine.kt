@@ -34,6 +34,26 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
+ * Technical diagnostic snapshot of live DjAudioEngine playback metrics.
+ */
+data class AudioEngineDiagnosticsSnapshot(
+    val isPlaying: Boolean,
+    val currentTrack: Track?,
+    val positionMs: Long,
+    val playbackProgress: Float,
+    val decoderName: String,
+    val containerFormat: String,
+    val mimeType: String,
+    val sampleRate: Int,
+    val bitDepth: Int,
+    val channelCount: Int,
+    val bitrateKbps: Int,
+    val audioSessionId: Int,
+    val hasAudioFocus: Boolean,
+    val playbackSpeed: Float
+)
+
+/**
  * Single authoritative DJ Audio Engine managing playback state, real-time DSP decoding
  * via MediaCodec + AudioTrack (EQ + Haas applied to actual audio), fallback procedural
  * synthesis for demo tracks, and DJ deck parameters (Pitch, EQ, 4-bar Looping, Cues).
@@ -41,7 +61,7 @@ import kotlin.math.sqrt
  * Playback resources (MediaExtractor, MediaCodec, AudioTrack) are persistent across
  * pause/resume to eliminate decoder recreation overhead.
  */
-class DjAudioEngine(private val context: Context) {
+class DjAudioEngine(val context: Context) {
 
     companion object {
         private const val TAG = "DjAudioEngine"
@@ -52,18 +72,26 @@ class DjAudioEngine(private val context: Context) {
         private var instance: DjAudioEngine? = null
 
         fun getInstance(context: Context): DjAudioEngine {
+            val appCtx = context.applicationContext
             val current = instance
-            if (current != null && !current.isEngineReleased) {
+            if (current != null && !current.isEngineReleased && current.context === appCtx) {
                 return current
             }
             return synchronized(this) {
                 val existing = instance
-                if (existing != null && !existing.isEngineReleased) {
+                if (existing != null && !existing.isEngineReleased && existing.context === appCtx) {
                     existing
                 } else {
-                    DjAudioEngine(context.applicationContext).also { instance = it }
+                    existing?.release()
+                    DjAudioEngine(appCtx).also { instance = it }
                 }
             }
+        }
+
+        @androidx.annotation.VisibleForTesting
+        fun resetInstance() {
+            instance?.release()
+            instance = null
         }
     }
 
@@ -86,6 +114,17 @@ class DjAudioEngine(private val context: Context) {
     @Volatile private var wasPlayingBeforeFocusLoss = false
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        val eventName = when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS -> "AUDIOFOCUS_LOSS"
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> "AUDIOFOCUS_LOSS_TRANSIENT"
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK"
+            AudioManager.AUDIOFOCUS_GAIN -> "AUDIOFOCUS_GAIN"
+            else -> "AUDIOFOCUS_CHANGE_$focusChange"
+        }
+        runCatching {
+            com.example.diagnostics.AudioOutputTracker.getInstance(context).recordAudioFocusEvent(eventName)
+        }
+
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS -> {
                 Log.d(TAG, "Audio focus lost permanently -> pausing")
@@ -211,17 +250,58 @@ class DjAudioEngine(private val context: Context) {
     @Volatile private var lastPublishedSecond: Int = -1
     @Volatile private var lastPositionPublishTimeMs: Long = 0L
 
-    // ── Playback rate tracking ─────────────────────────────────────────────
+    // ── Playback rate / Pitch / Key Lock tracking ──────────────────────────
     @Volatile private var lastAppliedPlaybackRate: Int = 0
+    @Volatile private var lastAppliedPitch: Float = 0f
+    @Volatile private var lastAppliedKeyLock: Boolean = true
 
     // ── Diagnostics ────────────────────────────────────────────────────────
     @Volatile private var underrunLogCounter: Int = 0
     @Volatile private var underrunCheckInterval: Int = 200
+    @Volatile private var activeDecoderName: String? = null
+    @Volatile private var activeMimeType: String? = null
+    @Volatile private var activeContainerFormat: String? = null
+    @Volatile private var activeBitrateBps: Int = 0
+    @Volatile private var isUsingProceduralSynthesis: Boolean = false
 
     // ── Pending seek ───────────────────────────────────────────────────────
     @Volatile private var pendingSeekMs: Long? = null
 
     @Volatile private var isEngineReleased = false
+
+    /**
+     * Obtains a point-in-time diagnostic snapshot of playback metrics, decoder info, and audio output state.
+     */
+    fun getPlaybackDiagnostics(): AudioEngineDiagnosticsSnapshot {
+        val track = _currentTrack.value
+        val decName = activeDecoderName ?: if (isUsingProceduralSynthesis) {
+            "Procedural Synthesizer (Demo/Fallback)"
+        } else if (activeCodec != null) {
+            "MediaCodec (Hardware/Software)"
+        } else {
+            "None (Idle)"
+        }
+        val format = activeContainerFormat ?: track?.format?.takeIf { it.isNotBlank() } ?: track?.filePath?.substringAfterLast('.', "")?.uppercase() ?: "Unknown"
+        val mime = activeMimeType ?: "audio/unknown"
+        val bitrate = if (activeBitrateBps > 0) activeBitrateBps / 1000 else track?.bitrateKbps ?: 0
+
+        return AudioEngineDiagnosticsSnapshot(
+            isPlaying = _isPlaying.value,
+            currentTrack = track,
+            positionMs = _currentPositionMs.value,
+            playbackProgress = _playbackProgress.value,
+            decoderName = decName,
+            containerFormat = format,
+            mimeType = mime,
+            sampleRate = activeSampleRate,
+            bitDepth = 16,
+            channelCount = activeChannelCount,
+            bitrateKbps = bitrate,
+            audioSessionId = activeAudioTrack?.audioSessionId ?: 0,
+            hasAudioFocus = hasAudioFocus,
+            playbackSpeed = 1.0f + (_pitchPercent.value / 100f)
+        )
+    }
 
     // ── Authoritative Playback State ───────────────────────────────────────
     private val _isPlaying = MutableStateFlow(false)
@@ -248,6 +328,10 @@ class DjAudioEngine(private val context: Context) {
     // DJ Deck controls state
     private val _pitchPercent = MutableStateFlow(0.0f)
     val pitchPercent = _pitchPercent.asStateFlow()
+
+    private val djPrefs = context.getSharedPreferences("soundsync_dj_prefs", Context.MODE_PRIVATE)
+    private val _keyLockEnabled = MutableStateFlow(djPrefs.getBoolean("key_lock_enabled", true))
+    val keyLockEnabled = _keyLockEnabled.asStateFlow()
 
     private val _effectiveBpm = MutableStateFlow(126.0)
     val effectiveBpm = _effectiveBpm.asStateFlow()
@@ -581,6 +665,31 @@ class DjAudioEngine(private val context: Context) {
         _pitchPercent.value = percent.coerceIn(-16f, 16f)
         val base = _currentTrack.value?.bpm ?: 126.0
         _effectiveBpm.value = base * (1.0 + _pitchPercent.value / 100.0)
+        applyPitchAndKeyLock()
+    }
+
+    fun setKeyLock(enabled: Boolean) {
+        _keyLockEnabled.value = enabled
+        djPrefs.edit().putBoolean("key_lock_enabled", enabled).commit()
+        applyPitchAndKeyLock()
+    }
+
+    fun applyPitchAndKeyLock(track: AudioTrack? = activeAudioTrack) {
+        track?.let { at ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val speed = (1f + _pitchPercent.value / 100f).coerceIn(0.5f, 2.0f)
+                val pitch = if (_keyLockEnabled.value) 1.0f else speed
+                val params = android.media.PlaybackParams().apply {
+                    this.speed = speed
+                    this.pitch = pitch
+                }
+                runCatching { at.playbackParams = params }
+            } else {
+                val sampleRate = if (activeSampleRate > 0) activeSampleRate else 44100
+                val desiredRate = (sampleRate * (1f + _pitchPercent.value / 100f)).toInt().coerceIn(4000, 192000)
+                runCatching { at.playbackRate = desiredRate }
+            }
+        }
     }
 
     fun setEqEnabled(enabled: Boolean) {
@@ -767,6 +876,11 @@ class DjAudioEngine(private val context: Context) {
             dec.start()
             codec = dec
             activeCodec = dec
+            activeDecoderName = try { dec.name } catch (_: Exception) { "MediaCodec ($mime)" }
+            activeMimeType = mime
+            activeBitrateBps = if (format.containsKey(MediaFormat.KEY_BIT_RATE)) format.getInteger(MediaFormat.KEY_BIT_RATE) else 0
+            activeContainerFormat = track.format.ifEmpty { track.filePath.substringAfterLast('.', "").uppercase() }
+            isUsingProceduralSynthesis = false
 
             // ── Calculate safe buffer size ──────────────────────────────
             val minBuf = AudioTrack.getMinBufferSize(
@@ -819,10 +933,10 @@ class DjAudioEngine(private val context: Context) {
 
             at.play()
 
-            // Apply initial pitch via AudioTrack playback rate
-            val initialRate = (sampleRate * (1f + _pitchPercent.value / 100f)).toInt().coerceIn(4000, 192000)
-            at.playbackRate = initialRate
-            lastAppliedPlaybackRate = initialRate
+            // Apply initial pitch and key lock
+            applyPitchAndKeyLock(at)
+            lastAppliedPitch = _pitchPercent.value
+            lastAppliedKeyLock = _keyLockEnabled.value
 
             // Seek to requested start position
             var startMs = _currentPositionMs.value.coerceAtLeast(0L)
@@ -1041,12 +1155,14 @@ class DjAudioEngine(private val context: Context) {
                                         dspEq.preampDb = parametricEqManager.preampDb.value
                                         dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
                                         dspEq.setBands(parametricEqManager.currentBands.value)
+                                        dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
                                     }
                                     dspEq.processStereo(pcmStereo, 0, filled)
                                 }
                                 if (haasEffect.isActive) {
                                     haasEffect.process(pcmStereo, 0, filled, sampleRate)
                                 }
+                                parametricEqManager.updateLiveSpectrum(pcmStereo, filled, sampleRate)
 
                                 // ── Live RMS & Clipping Metrics ────────
                                 val nowMs = System.currentTimeMillis()
@@ -1079,11 +1195,13 @@ class DjAudioEngine(private val context: Context) {
                                     writePcmBlocking(at, pcmStereo, filled * 2, session)
                                     renderedPositionUs += (filled.toLong()) * 1_000_000L / sampleRate
 
-                                    // ── Pitch / playback rate ──────────
-                                    val desiredRate = (sampleRate * (1f + _pitchPercent.value / 100f)).toInt().coerceIn(4000, 192000)
-                                    if (desiredRate != lastAppliedPlaybackRate) {
-                                        runCatching { at.playbackRate = desiredRate }
-                                        lastAppliedPlaybackRate = desiredRate
+                                    // ── Pitch / playback rate / Key Lock ──────────
+                                    val curPitch = _pitchPercent.value
+                                    val curKeyLock = _keyLockEnabled.value
+                                    if (curPitch != lastAppliedPitch || curKeyLock != lastAppliedKeyLock) {
+                                        lastAppliedPitch = curPitch
+                                        lastAppliedKeyLock = curKeyLock
+                                        applyPitchAndKeyLock(at)
                                     }
 
                                     // ── Position update ────────────────
@@ -1138,10 +1256,12 @@ class DjAudioEngine(private val context: Context) {
                                 dspEq.preampDb = parametricEqManager.preampDb.value
                                 dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
                                 dspEq.setBands(parametricEqManager.currentBands.value)
+                                dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
                             }
                             dspEq.processStereo(pcmStereo, 0, nextFrames)
                         }
                         if (haasEffect.isActive) haasEffect.process(pcmStereo, 0, nextFrames, sampleRate)
+                        parametricEqManager.updateLiveSpectrum(pcmStereo, nextFrames, sampleRate)
                         if (generationGate.isCurrent(session)) {
                             writePcmBlocking(at, pcmStereo, nextFrames * 2)
                             nextOnlyPositionFrames += nextFrames
@@ -1285,9 +1405,10 @@ class DjAudioEngine(private val context: Context) {
 
             at.play()
 
-            val initialRate = (sampleRate * (1f + _pitchPercent.value / 100f)).toInt().coerceIn(4000, 192000)
-            at.playbackRate = initialRate
-            lastAppliedPlaybackRate = initialRate
+            // Apply initial pitch and key lock
+            applyPitchAndKeyLock(at)
+            lastAppliedPitch = _pitchPercent.value
+            lastAppliedKeyLock = _keyLockEnabled.value
 
             var startMs = _currentPositionMs.value.coerceAtLeast(0L)
             pendingSeekMs?.let { startMs = it; pendingSeekMs = null }
@@ -1446,12 +1567,14 @@ class DjAudioEngine(private val context: Context) {
                             dspEq.preampDb = parametricEqManager.preampDb.value
                             dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
                             dspEq.setBands(parametricEqManager.currentBands.value)
+                            dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
                         }
                         dspEq.processStereo(pcmStereo, 0, filled)
                     }
                     if (haasEffect.isActive) {
                         haasEffect.process(pcmStereo, 0, filled, sampleRate)
                     }
+                    parametricEqManager.updateLiveSpectrum(pcmStereo, filled, sampleRate)
 
                     val nowMs = System.currentTimeMillis()
                     if (nowMs - lastMetricsPublishTimeMs >= 40L && filled > 0) {
@@ -1482,10 +1605,13 @@ class DjAudioEngine(private val context: Context) {
                         writePcmBlocking(at, pcmStereo, filled * 2, session)
                         renderedPositionUs += (filled.toLong()) * 1_000_000L / sampleRate
 
-                        val desiredRate = (sampleRate * (1f + _pitchPercent.value / 100f)).toInt().coerceIn(4000, 192000)
-                        if (desiredRate != lastAppliedPlaybackRate) {
-                            runCatching { at.playbackRate = desiredRate }
-                            lastAppliedPlaybackRate = desiredRate
+                        // ── Pitch / playback rate / Key Lock ──────────
+                        val curPitch = _pitchPercent.value
+                        val curKeyLock = _keyLockEnabled.value
+                        if (curPitch != lastAppliedPitch || curKeyLock != lastAppliedKeyLock) {
+                            lastAppliedPitch = curPitch
+                            lastAppliedKeyLock = curKeyLock
+                            applyPitchAndKeyLock(at)
                         }
 
                         if (!crossfadeStarted) {
@@ -1527,10 +1653,12 @@ class DjAudioEngine(private val context: Context) {
                                 dspEq.preampDb = parametricEqManager.preampDb.value
                                 dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
                                 dspEq.setBands(parametricEqManager.currentBands.value)
+                                dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
                             }
                             dspEq.processStereo(pcmStereo, 0, nextFrames)
                         }
                         if (haasEffect.isActive) haasEffect.process(pcmStereo, 0, nextFrames, sampleRate)
+                        parametricEqManager.updateLiveSpectrum(pcmStereo, nextFrames, sampleRate)
                         if (generationGate.isCurrent(session)) {
                             writePcmBlocking(at, pcmStereo, nextFrames * 2, session)
                             nextOnlyPositionFrames += nextFrames
@@ -1692,6 +1820,11 @@ class DjAudioEngine(private val context: Context) {
             }
         }
         activeAudioTrack = null
+        activeDecoderName = null
+        activeMimeType = null
+        activeContainerFormat = null
+        activeBitrateBps = 0
+        isUsingProceduralSynthesis = false
         releaseSynthesisTrack()
     }
 
@@ -1712,6 +1845,10 @@ class DjAudioEngine(private val context: Context) {
     private fun startAudioSynthesis(session: Long) {
         decoderShouldPause = false
         decoderRunning = true
+        isUsingProceduralSynthesis = true
+        activeDecoderName = "Procedural Synthesizer (Demo/Fallback)"
+        activeMimeType = "audio/pcm"
+        activeContainerFormat = "SYNTH_PCM"
         activeLoopSessionId = session
         audioThreadExecutor.execute {
             android.os.Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)

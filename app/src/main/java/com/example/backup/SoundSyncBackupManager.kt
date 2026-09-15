@@ -70,6 +70,7 @@ class SoundSyncBackupManager(
         private const val TAG = "SoundSyncBackupManager"
         private const val PREFS_NAME = "soundsync_backup_prefs"
         private const val KEY_AUTO_BACKUP_ENABLED = "auto_backup_enabled"
+        private const val KEY_AUTO_BACKUP_EXPLICIT_SET = "auto_backup_explicit_set"
         private const val KEY_CUSTOM_TREE_URI = "custom_backup_tree_uri"
         private const val KEY_LAST_BACKUP_TIME = "last_backup_time"
         private const val KEY_LAST_BACKUP_TRACKS = "last_backup_tracks"
@@ -89,14 +90,31 @@ class SoundSyncBackupManager(
                 }
             }
         }
+
+        @androidx.annotation.VisibleForTesting
+        fun resetInstance() {
+            INSTANCE = null
+        }
     }
 
     fun isAutoBackupEnabled(): Boolean {
-        return prefs.getBoolean(KEY_AUTO_BACKUP_ENABLED, true)
+        // Stage 1 requirement: Auto Backup MUST default to OFF.
+        // If the user has not explicitly configured it, default conservatively to false (OFF).
+        if (!prefs.contains(KEY_AUTO_BACKUP_EXPLICIT_SET)) {
+            return false
+        }
+        return prefs.getBoolean(KEY_AUTO_BACKUP_ENABLED, false)
     }
 
     fun setAutoBackupEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_AUTO_BACKUP_ENABLED, enabled).apply()
+        prefs.edit()
+            .putBoolean(KEY_AUTO_BACKUP_ENABLED, enabled)
+            .putBoolean(KEY_AUTO_BACKUP_EXPLICIT_SET, true)
+            .commit()
+        if (!enabled) {
+            autoBackupJob?.cancel()
+            autoBackupJob = null
+        }
         _summaryFlow.value = loadSummary()
     }
 
@@ -124,6 +142,12 @@ class SoundSyncBackupManager(
         autoBackupJob?.cancel()
         autoBackupJob = scope.launch {
             delay(5000)
+            try {
+                val analysisManager = com.example.analysis.TrackAnalysisManager.getInstance(context)
+                while (analysisManager.queueProgress.value.isRunning) {
+                    delay(3000)
+                }
+            } catch (_: Exception) {}
             Log.d(TAG, "Triggering automatic debounced backup...")
             createBackup()
         }
@@ -138,6 +162,15 @@ class SoundSyncBackupManager(
         try {
             val tracks = database.trackDao().getAllTracksSync()
             val songFinds = database.songFindDao().getAllSongFindsSync()
+            val djPrepList = database.djPrepDao().getAllPrepData()
+            val doctorPrefs = com.example.doctor.LibraryDoctorPreferences.getInstance(context)
+            val ignoredIssues = doctorPrefs.getAllIgnored().toList()
+            val reviewedIssues = doctorPrefs.getAllReviewed().toList()
+
+            val eqFile = File(context.filesDir, "parametric_eq_presets.json")
+            val eqConfig = if (eqFile.exists() && eqFile.length() > 0L) {
+                runCatching { eqFile.readText(java.nio.charset.StandardCharsets.UTF_8) }.getOrNull()
+            } else null
 
             val backup = SoundSyncBackup(
                 backupVersion = SoundSyncBackup.CURRENT_BACKUP_VERSION,
@@ -145,7 +178,11 @@ class SoundSyncBackupManager(
                 createdAt = prefs.getLong(KEY_LAST_BACKUP_TIME, System.currentTimeMillis()),
                 updatedAt = System.currentTimeMillis(),
                 songFinds = songFinds.map { SongFindBackupItem.fromEntity(it) },
-                tracks = tracks.map { TrackBackupItem.fromEntity(it) }
+                tracks = tracks.map { TrackBackupItem.fromEntity(it) },
+                doctorIgnoredIssues = ignoredIssues,
+                doctorReviewedIssues = reviewedIssues,
+                djPrepData = djPrepList.map { DjPrepBackupItem.fromEntity(it) },
+                eqConfigJson = eqConfig
             )
 
             val jsonString = serializeBackup(backup)
@@ -321,6 +358,46 @@ class SoundSyncBackupManager(
                         }
                     }
                 } catch (_: Throwable) {}
+
+                // 3. Restore Doctor review and ignore states
+                try {
+                    val doctorPrefs = com.example.doctor.LibraryDoctorPreferences.getInstance(context)
+                    if (backup.doctorIgnoredIssues.isNotEmpty()) {
+                        doctorPrefs.restoreIgnored(backup.doctorIgnoredIssues)
+                    }
+                    if (backup.doctorReviewedIssues.isNotEmpty()) {
+                        doctorPrefs.restoreReviewed(backup.doctorReviewedIssues)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed restoring Doctor issue preferences", e)
+                }
+
+                // 4. Restore DJ Prep Data (cues, memory cues, beat grids, phrases)
+                try {
+                    if (backup.djPrepData.isNotEmpty()) {
+                        for (prepItem in backup.djPrepData) {
+                            val existing = database.djPrepDao().getByTrackId(prepItem.trackId)
+                            if (existing == null || existing.prepStatus == "NOT_ANALYSED") {
+                                database.djPrepDao().insertOrUpdate(prepItem.toEntity())
+                            } else if (prepItem.updatedAt > existing.updatedAt) {
+                                database.djPrepDao().insertOrUpdate(prepItem.toEntity())
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed restoring DJ Prep data", e)
+                }
+
+                // 5. Restore EQ Configuration & Presets
+                try {
+                    if (!backup.eqConfigJson.isNullOrBlank()) {
+                        val eqFile = File(context.filesDir, "parametric_eq_presets.json")
+                        eqFile.writeText(backup.eqConfigJson, java.nio.charset.StandardCharsets.UTF_8)
+                        com.example.audio.ParametricEqManager.getInstance(context).restoreFromDisk()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed restoring EQ configuration", e)
+                }
             }
 
             _summaryFlow.value = loadSummary()
@@ -349,7 +426,7 @@ class SoundSyncBackupManager(
         }
         return try {
             val root = JSONObject(jsonString)
-            val version = root.optInt("backupVersion", -1)
+            val version = root.optInt("backupVersion", root.optInt("version", -1))
             if (version < 1) {
                 return ValidationResult.Invalid("Unsupported backup version or missing header.")
             }
@@ -357,9 +434,9 @@ class SoundSyncBackupManager(
                 return ValidationResult.Invalid("Backup was generated by a newer version ($version) of SoundSync.")
             }
 
-            val appVersion = root.optString("appVersion", "1.0.0")
-            val createdAt = root.optLong("createdAt", 0L)
-            val updatedAt = root.optLong("updatedAt", 0L)
+            val appVersion = root.optString("appVersion", "Unknown")
+            val createdAt = root.optLong("createdAt", System.currentTimeMillis())
+            val updatedAt = root.optLong("updatedAt", System.currentTimeMillis())
 
             val findsArray = root.optJSONArray("songFinds") ?: JSONArray()
             val songFinds = mutableListOf<SongFindBackupItem>()
@@ -373,6 +450,26 @@ class SoundSyncBackupManager(
                 tracks.add(TrackBackupItem.fromJson(tracksArray.getJSONObject(i)))
             }
 
+            val ignoredArray = root.optJSONArray("doctorIgnoredIssues") ?: JSONArray()
+            val doctorIgnored = mutableListOf<String>()
+            for (i in 0 until ignoredArray.length()) {
+                doctorIgnored.add(ignoredArray.getString(i))
+            }
+
+            val reviewedArray = root.optJSONArray("doctorReviewedIssues") ?: JSONArray()
+            val doctorReviewed = mutableListOf<String>()
+            for (i in 0 until reviewedArray.length()) {
+                doctorReviewed.add(reviewedArray.getString(i))
+            }
+
+            val djPrepArray = root.optJSONArray("djPrepData") ?: JSONArray()
+            val djPrepData = mutableListOf<DjPrepBackupItem>()
+            for (i in 0 until djPrepArray.length()) {
+                djPrepData.add(DjPrepBackupItem.fromJson(djPrepArray.getJSONObject(i)))
+            }
+
+            val eqConfigJson = root.optString("eqConfigJson", "").takeIf { it.isNotBlank() }
+
             ValidationResult.Valid(
                 SoundSyncBackup(
                     backupVersion = version,
@@ -380,7 +477,11 @@ class SoundSyncBackupManager(
                     createdAt = createdAt,
                     updatedAt = updatedAt,
                     songFinds = songFinds,
-                    tracks = tracks
+                    tracks = tracks,
+                    doctorIgnoredIssues = doctorIgnored,
+                    doctorReviewedIssues = doctorReviewed,
+                    djPrepData = djPrepData,
+                    eqConfigJson = eqConfigJson
                 )
             )
         } catch (e: Exception) {
@@ -473,7 +574,7 @@ class SoundSyncBackupManager(
         return findAvailableBackups().isNotEmpty()
     }
 
-    private fun serializeBackup(backup: SoundSyncBackup): String {
+    fun serializeBackup(backup: SoundSyncBackup): String {
         val root = JSONObject().apply {
             put("backupVersion", backup.backupVersion)
             put("appVersion", backup.appVersion)
@@ -487,8 +588,24 @@ class SoundSyncBackupManager(
             val tracksArray = JSONArray()
             backup.tracks.forEach { tracksArray.put(it.toJson()) }
             put("tracks", tracksArray)
+
+            val doctorIgnoredArray = JSONArray()
+            backup.doctorIgnoredIssues.forEach { doctorIgnoredArray.put(it) }
+            put("doctorIgnoredIssues", doctorIgnoredArray)
+
+            val doctorReviewedArray = JSONArray()
+            backup.doctorReviewedIssues.forEach { doctorReviewedArray.put(it) }
+            put("doctorReviewedIssues", doctorReviewedArray)
+
+            val djPrepArray = JSONArray()
+            backup.djPrepData.forEach { djPrepArray.put(it.toJson()) }
+            put("djPrepData", djPrepArray)
+
+            if (!backup.eqConfigJson.isNullOrBlank()) {
+                put("eqConfigJson", backup.eqConfigJson)
+            }
         }
-        return root.toString(2)
+        return root.toString()
     }
 
     private fun writeToDefaultDirectory(jsonString: String): File {

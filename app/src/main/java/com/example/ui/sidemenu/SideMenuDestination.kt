@@ -11,6 +11,7 @@ sealed class SideMenuDestination(val title: String) {
     object Eq : SideMenuDestination("Multipoint EQ")
     object HaasSurround : SideMenuDestination("Haas Surround")
     object CarMode : SideMenuDestination("Car Mode")
+    object DjPrep : SideMenuDestination("DJ Prep")
 
     // Settings
     object ListeningStats : SideMenuDestination("Listening Statistics")
@@ -22,6 +23,10 @@ sealed class SideMenuDestination(val title: String) {
     object GitHubUpdates : SideMenuDestination("GitHub & App Updates")
     object CarModeSettings : SideMenuDestination("Car Mode & Bluetooth")
     object LibraryHealth : SideMenuDestination("Library Health")
+    object LibraryDoctor : SideMenuDestination("Library Doctor")
     object MetadataReviewInbox : SideMenuDestination("Metadata Review Inbox")
     object LibraryIntegrity : SideMenuDestination("Library Integrity")
+    object AboutSoundSync : SideMenuDestination("About SoundSync")
+    object DeveloperDiagnostics : SideMenuDestination("Developer Diagnostics")
+    object SoundSyncSelfTest : SideMenuDestination("SoundSync Self-Test")
 }

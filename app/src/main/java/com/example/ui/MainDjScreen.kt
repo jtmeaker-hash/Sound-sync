@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -79,6 +80,7 @@ import com.example.model.UpdateState
 import com.example.ui.components.ApiConfigDialog
 import com.example.ui.components.DjMiniPlayer
 import com.example.ui.components.GoogleDriveBrowserView
+import com.example.ui.command.CommandPaletteDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
@@ -96,6 +98,7 @@ import com.example.ui.djtools.TapBpmTool
 import com.example.ui.settings.AppearanceSettingsScreen
 import com.example.ui.settings.GitHubSettingsScreen
 import com.example.ui.settings.LibrarySettingsScreen
+import com.example.ui.settings.MetadataSettingsScreen
 import com.example.ui.settings.PlaybackSettingsScreen
 import com.example.ui.sidemenu.SideMenuDestination
 import com.example.ui.sidemenu.SideNavigationDrawerContent
@@ -162,6 +165,11 @@ fun MainDjScreen(
     val inspectingTrackForProperties by viewModel.inspectingTrackForProperties.collectAsState()
     val playbackIssueDiagnostic by viewModel.playbackIssueDiagnostic.collectAsState()
     val playbackIssueTrack by viewModel.playbackIssueTrack.collectAsState()
+    val isCommandPaletteOpen by viewModel.isCommandPaletteOpen.collectAsState()
+    val commandPaletteQuery by viewModel.commandPaletteQuery.collectAsState()
+    val selectedTrackIds by viewModel.selectedTrackIds.collectAsState()
+    val playbackHistory by viewModel.queueManager.playbackHistory.collectAsState()
+    val recentTrackIds = remember(playbackHistory) { playbackHistory.map { it.id }.toSet() }
 
     // Song Finds States
     val songFinds by viewModel.songFinds.collectAsState()
@@ -282,6 +290,7 @@ fun MainDjScreen(
                             currentTab = selectedTab,
                             isScanning = isScanning,
                             onOpenMenu = { coroutineScope.launch { drawerState.open() } },
+                            onOpenCommandPalette = { viewModel.openCommandPalette() },
                             onOpenConfig = { viewModel.openApiConfigDialog() },
                             onRescan = { viewModel.scanDeviceMediaStore() }
                         )
@@ -310,12 +319,15 @@ fun MainDjScreen(
 
                         // Library Background Metadata Analysis Banner
                         val analysisProgress by viewModel.analysisProgress.collectAsState()
-                        AnimatedVisibility(visible = analysisProgress.isRunning && (analysisProgress.totalCount > 0 || analysisProgress.currentTrackTitle.isNotBlank())) {
+                        val brainSummary by viewModel.brainSummary.collectAsState()
+                        val isAnyAnalysisRunning = (analysisProgress.isRunning && (analysisProgress.totalCount > 0 || analysisProgress.currentTrackTitle.isNotBlank())) ||
+                                                   (brainSummary.isRunning && (brainSummary.queueLength > 0 || brainSummary.currentTrackTitle.isNotBlank()))
+                        AnimatedVisibility(visible = isAnyAnalysisRunning) {
                             Surface(
-                                color = if (analysisProgress.isPausedForPlayback) theme.surfaceSunken else theme.surfaceRaised,
+                                color = if (analysisProgress.isPausedForPlayback || brainSummary.isPaused) theme.surfaceSunken else theme.surfaceRaised,
                                 border = BorderStroke(
                                     0.5.dp,
-                                    if (analysisProgress.isPausedForPlayback) theme.warning.copy(alpha = 0.5f) else theme.accent.copy(alpha = 0.5f)
+                                    if (analysisProgress.isPausedForPlayback || brainSummary.isPaused) theme.warning.copy(alpha = 0.5f) else theme.accent.copy(alpha = 0.5f)
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -328,15 +340,19 @@ fun MainDjScreen(
                                 ) {
                                     CircularProgressIndicator(
                                         progress = {
-                                            if (analysisProgress.totalCount > 0) {
+                                            if (brainSummary.isRunning && brainSummary.totalTracks > 0) {
+                                                (brainSummary.completeCount.toFloat() / brainSummary.totalTracks.toFloat()).coerceIn(0f, 1f)
+                                            } else if (analysisProgress.totalCount > 0) {
                                                 (analysisProgress.processedCount.toFloat() / analysisProgress.totalCount.toFloat()).coerceIn(0f, 1f)
                                             } else 0f
                                         },
                                         modifier = Modifier.size(16.dp),
-                                        color = if (analysisProgress.isPausedForPlayback) theme.warning else theme.accent,
+                                        color = if (analysisProgress.isPausedForPlayback || brainSummary.isPaused) theme.warning else theme.accent,
                                         strokeWidth = 2.dp
                                     )
-                                    val bannerText = if (analysisProgress.isPausedForPlayback) {
+                                    val bannerText = if (brainSummary.isRunning && brainSummary.currentTrackTitle.isNotBlank()) {
+                                        "Library Brain · ${brainSummary.currentJobDescription} (${brainSummary.completeCount}/${brainSummary.totalTracks})"
+                                    } else if (analysisProgress.isPausedForPlayback) {
                                         if (analysisProgress.totalCount > 0) {
                                             "Analysis throttled for audio playback (${analysisProgress.processedCount}/${analysisProgress.totalCount})"
                                         } else {
@@ -609,6 +625,39 @@ fun MainDjScreen(
                     onDismiss = { viewModel.closeApiConfigDialog() }
                 )
             }
+
+            // Command & Search Palette Dialog
+            CommandPaletteDialog(
+                isOpen = isCommandPaletteOpen,
+                initialQuery = commandPaletteQuery,
+                allTracks = allTracks,
+                selectedTrackIds = selectedTrackIds,
+                recentTrackIds = recentTrackIds,
+                onDismiss = { viewModel.closeCommandPalette() },
+                onQueryChanged = { viewModel.setCommandPaletteQuery(it) },
+                onExecuteCommand = { cmd ->
+                    viewModel.executePaletteCommand(cmd) { dest -> activeSideDestination = dest }
+                },
+                onPlayTrack = { track ->
+                    viewModel.playTrack(track)
+                },
+                onPlayNext = { track ->
+                    viewModel.queueManager.playNext(track)
+                    viewModel.showSnackbar("Play next: '${track.title}'")
+                },
+                onAddToQueue = { track ->
+                    viewModel.queueManager.addToQueue(track)
+                    viewModel.showSnackbar("Added to queue: '${track.title}'")
+                },
+                onOpenDjPrep = { track ->
+                    viewModel.setDjPrepTrack(track)
+                    activeSideDestination = SideMenuDestination.DjPrep
+                },
+                onOpenFolder = { path ->
+                    viewModel.navigateToDirectory(path)
+                    viewModel.toggleFolderExplorer(true)
+                }
+            )
 
             // Save Song Find Dialog
             pendingShare?.let { share ->
@@ -918,6 +967,7 @@ private fun DjTopAppBar(
     currentTab: DjTab,
     isScanning: Boolean,
     onOpenMenu: () -> Unit,
+    onOpenCommandPalette: () -> Unit,
     onOpenConfig: () -> Unit,
     onRescan: () -> Unit
 ) {
@@ -1002,6 +1052,18 @@ private fun DjTopAppBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                IconButton(
+                    onClick = onOpenCommandPalette,
+                    modifier = Modifier.size(32.dp).testTag("command_palette_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search & Commands",
+                        tint = theme.accent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
                 IconButton(onClick = onOpenConfig, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Default.Settings, contentDescription = "API Config", tint = theme.textSecondary, modifier = Modifier.size(18.dp))
                 }
@@ -1385,7 +1447,13 @@ private fun SideDestinationScreen(
                         operationJournal = operationJournal,
                         scanServiceState = scanServiceState,
                         metadataSettings = viewModel.metadataSettings.collectAsState().value,
-                        focusMetadataOnly = false,
+                        brainSummary = viewModel.brainSummary.collectAsState().value,
+                        onPauseBrain = { viewModel.pauseBrainAnalysis() },
+                        onResumeBrain = { viewModel.resumeBrainAnalysis() },
+                        onRetryBrainFailed = { viewModel.retryBrainFailed() },
+                        onAnalyseIncompleteBrain = { viewModel.analyseIncompleteBrain() },
+                        onReanalyseBrainCategory = { viewModel.reanalyseBrainCategory(it) },
+                        onCancelBrainWork = { viewModel.cancelBrainWork() },
                         onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
                         onSetAppleSearchEnabled = viewModel::setAppleSearchEnabled,
                         onSetTheAudioDbEnabled = viewModel::setTheAudioDbEnabled,
@@ -1424,12 +1492,15 @@ private fun SideDestinationScreen(
                     )
                 }
                 SideMenuDestination.MetadataSettings -> {
-                    LibrarySettingsScreen(
-                        storageSources = storageSources,
-                        operationJournal = operationJournal,
-                        scanServiceState = scanServiceState,
+                    MetadataSettingsScreen(
                         metadataSettings = viewModel.metadataSettings.collectAsState().value,
-                        focusMetadataOnly = true,
+                        brainSummary = viewModel.brainSummary.collectAsState().value,
+                        onPauseBrain = { viewModel.pauseBrainAnalysis() },
+                        onResumeBrain = { viewModel.resumeBrainAnalysis() },
+                        onRetryBrainFailed = { viewModel.retryBrainFailed() },
+                        onAnalyseIncompleteBrain = { viewModel.analyseIncompleteBrain() },
+                        onReanalyseBrainCategory = { viewModel.reanalyseBrainCategory(it) },
+                        onCancelBrainWork = { viewModel.cancelBrainWork() },
                         onSetEnrichmentEnabled = viewModel::setEnrichmentEnabled,
                         onSetAppleSearchEnabled = viewModel::setAppleSearchEnabled,
                         onSetTheAudioDbEnabled = viewModel::setTheAudioDbEnabled,
@@ -1439,20 +1510,6 @@ private fun SideDestinationScreen(
                         onSetShowProvenanceBadges = viewModel::setShowProvenanceBadges,
                         onSetConcurrency = viewModel::setEnrichmentConcurrency,
                         onSetBpmRange = viewModel::setBpmRange,
-                        onTriggerSync = { viewModel.triggerCloudSync() },
-                        onUndoOperation = { viewModel.undoJournalOperation(it) },
-                        onMountSaf = onPickSafFolder,
-                        onPickAudioFiles = onPickAudioFiles,
-                        onScanMediaStore = { viewModel.scanDeviceMediaStore() },
-                        onCleanMissingFiles = { viewModel.cleanMissingFiles() },
-                        onLoadDemoTracks = { viewModel.loadDemoTracks() },
-                        onClearLibrary = { viewModel.clearLibrary() },
-                        onPauseScan = { viewModel.pauseScanService() },
-                        onResumeScan = { viewModel.resumeScanService() },
-                        onCancelScan = { viewModel.cancelScanService() },
-                        onOpenGoogleDrive = { viewModel.openGoogleDriveBrowser() },
-                        onConnectGoogleDrive = { viewModel.connectGoogleDrive(context as? Activity) },
-                        onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() },
                         isPushingMetadata = viewModel.isPushingMetadata.collectAsState().value,
                         pushProgress = viewModel.pushMetadataProgress.collectAsState().value,
                         pushReport = viewModel.pushMetadataReport.collectAsState().value,
@@ -1535,7 +1592,13 @@ private fun SideDestinationScreen(
                         },
                         onFilterTracks = { _ ->
                             onClose()
-                        }
+                        },
+                        onNavigateToDoctor = { onNavigate(SideMenuDestination.LibraryDoctor) }
+                    )
+                }
+                SideMenuDestination.LibraryDoctor -> {
+                    com.example.ui.doctor.LibraryDoctorScreen(
+                        onBack = onClose
                     )
                 }
                 SideMenuDestination.MetadataReviewInbox -> {
@@ -1547,6 +1610,41 @@ private fun SideDestinationScreen(
                     com.example.ui.library.LibraryIntegrityScreen(
                         onBack = onClose
                     )
+                }
+                SideMenuDestination.AboutSoundSync -> {
+                    com.example.ui.settings.AboutSettingsScreen(
+                        onBack = onClose,
+                        onNavigateToDiagnostics = { onNavigate(SideMenuDestination.DeveloperDiagnostics) },
+                        onNavigateToSelfTest = { onNavigate(SideMenuDestination.SoundSyncSelfTest) }
+                    )
+                }
+                SideMenuDestination.DeveloperDiagnostics -> {
+                    com.example.ui.diagnostics.DeveloperDiagnosticsScreen(
+                        viewModel = viewModel,
+                        audioEngine = viewModel.audioEngine,
+                        onBack = onClose,
+                        onNavigateToSelfTest = { onNavigate(SideMenuDestination.SoundSyncSelfTest) }
+                    )
+                }
+                SideMenuDestination.SoundSyncSelfTest -> {
+                    com.example.ui.diagnostics.SelfTestScreen(
+                        onBack = onClose
+                    )
+                }
+                SideMenuDestination.DjPrep -> {
+                    val track = viewModel.djPrepTrack.collectAsState().value ?: playingTrack ?: allTracks.firstOrNull()
+                    if (track != null) {
+                        com.example.ui.djprep.DjPrepScreen(
+                            track = track,
+                            viewModel = viewModel,
+                            audioEngine = viewModel.audioEngine,
+                            onClose = onClose
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No track selected for DJ Prep", color = TextSecondary)
+                        }
+                    }
                 }
             }
         }

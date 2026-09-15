@@ -206,7 +206,28 @@ fun MetadataReviewInboxScreen(
                         },
                         onApprove = {
                             coroutineScope.launch {
-                                reviewManager.acceptAllProposed(item.id)
+                                val success = reviewManager.acceptAllProposed(item.id)
+                                if (success) {
+                                    Toast.makeText(context, "Metadata & artwork embedded successfully!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "File write not completed (item kept in approval queue)", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        onApplySelected = { fields ->
+                            coroutineScope.launch {
+                                val success = reviewManager.acceptSelectedFields(item.id, fields)
+                                if (success) {
+                                    Toast.makeText(context, "Applied ${fields.size} fields to file & library", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "File write not completed (item kept in approval queue)", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        onKeepLocal = {
+                            coroutineScope.launch {
+                                reviewManager.keepLocal(item.id)
+                                Toast.makeText(context, "Preserved local metadata", Toast.LENGTH_SHORT).show()
                             }
                         },
                         onReject = {
@@ -289,9 +310,22 @@ private fun SafeReviewItemCard(
     isSelected: Boolean,
     onToggleSelect: () -> Unit,
     onApprove: () -> Unit,
+    onApplySelected: (Set<String>) -> Unit,
+    onKeepLocal: () -> Unit,
     onReject: () -> Unit,
     onRestore: () -> Unit
 ) {
+    val selectedFields = remember { mutableStateListOf<String>() }
+    val isManualCover = item.provider == "Manual Cover"
+
+    LaunchedEffect(item.id) {
+        if (isManualCover || !item.artworkCachePath.isNullOrBlank()) {
+            if (!selectedFields.contains("artwork")) {
+                selectedFields.add("artwork")
+            }
+        }
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
@@ -349,35 +383,130 @@ private fun SafeReviewItemCard(
             }
 
             // Side-by-Side Artwork Preview (Section 12)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ArtworkThumbnail(label = "Current Art", pathOrUrl = item.originalArtworkUrl)
-                Icon(Icons.Default.ArrowForward, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
-                ArtworkThumbnail(label = "Proposed Art", pathOrUrl = item.artworkCachePath ?: item.proposedArtworkUrl)
+            val hasArtworkChange = !item.artworkCachePath.isNullOrBlank() ||
+                    (!item.proposedArtworkUrl.isNullOrBlank() && item.proposedArtworkUrl != item.originalArtworkUrl) ||
+                    isManualCover
+
+            if (hasArtworkChange || !item.originalArtworkUrl.isNullOrBlank()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DjSurfaceDark.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Artwork", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Source: ${item.provider}", color = DeckACyan, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        ArtworkThumbnail(label = "OLD", pathOrUrl = item.originalArtworkUrl)
+                        Icon(Icons.Default.ArrowForward, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                        ArtworkThumbnail(label = "NEW", pathOrUrl = item.artworkCachePath ?: item.proposedArtworkUrl)
+
+                        val artChecked = selectedFields.contains("artwork")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable {
+                                if (artChecked) selectedFields.remove("artwork") else selectedFields.add("artwork")
+                            }
+                        ) {
+                            Checkbox(
+                                checked = artChecked,
+                                onCheckedChange = { chk ->
+                                    if (chk) selectedFields.add("artwork") else selectedFields.remove("artwork")
+                                }
+                            )
+                            Text(if (isManualCover) "Apply Cover" else "Apply Art", color = TextSecondary, fontSize = 10.sp)
+                        }
+                    }
+                }
             }
 
-            // Side-by-Side Metadata Comparison (Section 6: Highlight only fields that actually change)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DjSurfaceDark.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                HighlightableComparisonRow("Title", item.originalTitle, item.proposedTitle)
-                HighlightableComparisonRow("Artist", item.originalArtist, item.proposedArtist)
-                HighlightableComparisonRow("Album", item.originalAlbum, item.proposedAlbum)
-                if (item.proposedYear != null) {
-                    HighlightableComparisonRow("Year", "—", item.proposedYear.toString())
+            // Text Metadata Comparison or Artwork Mutation Indicator
+            val isTitleChanged = !item.originalTitle.equals(item.proposedTitle, ignoreCase = true) && item.proposedTitle.isNotBlank()
+            val isArtistChanged = !item.originalArtist.equals(item.proposedArtist, ignoreCase = true) && item.proposedArtist.isNotBlank()
+            val isAlbumChanged = !item.originalAlbum.equals(item.proposedAlbum, ignoreCase = true) && item.proposedAlbum.isNotBlank()
+            val hasTextChanges = isTitleChanged || isArtistChanged || isAlbumChanged || item.proposedYear != null || item.proposedGenre != null
+
+            if (hasTextChanges) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DjSurfaceDark.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    SelectableComparisonRow(
+                        label = "Title",
+                        current = item.originalTitle,
+                        proposed = item.proposedTitle,
+                        isChecked = selectedFields.contains("title"),
+                        onToggle = { chk -> if (chk) selectedFields.add("title") else selectedFields.remove("title") }
+                    )
+                    SelectableComparisonRow(
+                        label = "Artist",
+                        current = item.originalArtist,
+                        proposed = item.proposedArtist,
+                        isChecked = selectedFields.contains("artist"),
+                        onToggle = { chk -> if (chk) selectedFields.add("artist") else selectedFields.remove("artist") }
+                    )
+                    SelectableComparisonRow(
+                        label = "Album",
+                        current = item.originalAlbum,
+                        proposed = item.proposedAlbum,
+                        isChecked = selectedFields.contains("album"),
+                        onToggle = { chk -> if (chk) selectedFields.add("album") else selectedFields.remove("album") }
+                    )
+                    if (item.proposedYear != null) {
+                        SelectableComparisonRow(
+                            label = "Year",
+                            current = "—",
+                            proposed = item.proposedYear.toString(),
+                            isChecked = selectedFields.contains("year"),
+                            onToggle = { chk -> if (chk) selectedFields.add("year") else selectedFields.remove("year") }
+                        )
+                    }
+                    if (item.proposedGenre != null) {
+                        SelectableComparisonRow(
+                            label = "Genre",
+                            current = "—",
+                            proposed = item.proposedGenre,
+                            isChecked = selectedFields.contains("genre"),
+                            onToggle = { chk -> if (chk) selectedFields.add("genre") else selectedFields.remove("genre") }
+                        )
+                    }
+                    if (item.proposedTrackNumber != null && item.proposedTrackNumber > 0) {
+                        HighlightableComparisonRow("Track #", "—", item.proposedTrackNumber.toString())
+                    }
                 }
-                if (item.proposedGenre != null) {
-                    HighlightableComparisonRow("Genre", "—", item.proposedGenre)
-                }
-                if (item.proposedTrackNumber != null && item.proposedTrackNumber > 0) {
-                    HighlightableComparisonRow("Track #", "—", item.proposedTrackNumber.toString())
+            } else {
+                Surface(
+                    color = DjSurfaceDark.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Default.Image, contentDescription = null, tint = DeckACyan, modifier = Modifier.size(14.dp))
+                        Text(
+                            text = "Artwork mutation • ${item.originalArtist} - ${item.originalTitle}",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             }
 
@@ -422,29 +551,104 @@ private fun SafeReviewItemCard(
                 )
             }
 
-            // Action Buttons: Reject vs Approve (Section 7)
+            // Action Buttons: Keep Local vs Apply Selected vs Approve All vs Reject (Upgrade 26)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedButton(
-                    onClick = onReject,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonRed),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    onClick = onKeepLocal,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = DeckACyan),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                 ) {
-                    Text("Reject", fontSize = 12.sp)
+                    Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Keep Local", fontSize = 11.sp)
                 }
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = onApprove,
-                    colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)
-                ) {
-                    Text("Approve", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(
+                        onClick = onReject,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonRed),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text("Reject", fontSize = 11.sp)
+                    }
+
+                    if (selectedFields.isNotEmpty()) {
+                        Button(
+                            onClick = { onApplySelected(selectedFields.toSet()) },
+                            colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text("Apply Selected (${selectedFields.size})", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+
+                    Button(
+                        onClick = onApprove,
+                        colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text(if (isManualCover) "Approve / Write to Track" else "Approve All", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SelectableComparisonRow(
+    label: String,
+    current: String,
+    proposed: String,
+    isChecked: Boolean,
+    onToggle: (Boolean) -> Unit
+) {
+    val isChanged = !current.equals(proposed, ignoreCase = true) && proposed.isNotBlank() && proposed != "—"
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = isChanged) { onToggle(!isChecked) },
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (isChanged) {
+            Checkbox(
+                checked = isChecked,
+                onCheckedChange = onToggle,
+                modifier = Modifier.size(20.dp).padding(end = 4.dp)
+            )
+        } else {
+            Spacer(Modifier.width(20.dp))
+        }
+
+        Text(label, color = TextSecondary, fontSize = 11.sp, modifier = Modifier.width(45.dp))
+        Text(
+            text = current.ifBlank { "(empty)" },
+            color = TextMuted,
+            fontSize = 11.sp,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Icon(
+            Icons.Default.ArrowForward,
+            contentDescription = null,
+            tint = if (isChanged) DeckACyan else TextMuted,
+            modifier = Modifier.size(10.dp).padding(horizontal = 2.dp)
+        )
+        Text(
+            text = proposed,
+            color = if (isChanged) (if (isChecked) NeonGreen else DeckACyan) else TextPrimary,
+            fontWeight = if (isChanged) FontWeight.Bold else FontWeight.Normal,
+            fontSize = 11.sp,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

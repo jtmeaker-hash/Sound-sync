@@ -2,6 +2,7 @@ package com.example.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +34,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -66,6 +70,8 @@ fun GitHubSettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val devManager = remember { com.example.diagnostics.DeveloperModeManager.getInstance(context) }
+    val isDevMode by devManager.isDeveloperModeEnabled.collectAsState()
     val isChecking = updateState is UpdateState.Checking
 
     val formattedLastChecked = if (lastCheckedTimestamp > 0) {
@@ -191,11 +197,12 @@ fun GitHubSettingsScreen(
                         Surface(
                             color = DjSurfaceElevated,
                             shape = RoundedCornerShape(6.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isDevMode) DeckACyan else DjSurfaceBorder),
+                            modifier = Modifier.clickable { devManager.registerTap() }
                         ) {
                             Text(
-                                text = "v${BuildConfig.VERSION_NAME}",
-                                color = TextPrimary,
+                                text = "v${BuildConfig.VERSION_NAME}${if (isDevMode) " DEV" else ""}",
+                                color = if (isDevMode) DeckACyan else TextPrimary,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace,

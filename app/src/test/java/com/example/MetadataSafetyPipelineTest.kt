@@ -266,6 +266,9 @@ class MetadataSafetyPipelineTest {
             override fun playbackSessionDao(): PlaybackSessionDao = Proxy.newProxyInstance(PlaybackSessionDao::class.java.classLoader, arrayOf(PlaybackSessionDao::class.java)) { _, _, _ -> null } as PlaybackSessionDao
             override fun bulkOperationHistoryDao(): BulkOperationHistoryDao = Proxy.newProxyInstance(BulkOperationHistoryDao::class.java.classLoader, arrayOf(BulkOperationHistoryDao::class.java)) { _, _, _ -> null } as BulkOperationHistoryDao
             override fun lyricsDao(): LyricsDao = Proxy.newProxyInstance(LyricsDao::class.java.classLoader, arrayOf(LyricsDao::class.java)) { _, _, _ -> null } as LyricsDao
+            override fun trackBrainDao(): TrackBrainDao = Proxy.newProxyInstance(TrackBrainDao::class.java.classLoader, arrayOf(TrackBrainDao::class.java)) { _, _, _ -> null } as TrackBrainDao
+            override fun djPrepDao(): com.example.djprep.DjPrepDao = Proxy.newProxyInstance(com.example.djprep.DjPrepDao::class.java.classLoader, arrayOf(com.example.djprep.DjPrepDao::class.java)) { _, _, _ -> null } as com.example.djprep.DjPrepDao
+            override fun artistDao(): com.example.data.ArtistDao = Proxy.newProxyInstance(com.example.data.ArtistDao::class.java.classLoader, arrayOf(com.example.data.ArtistDao::class.java)) { _, _, _ -> null } as com.example.data.ArtistDao
             override fun clearAllTables() {
                 tracks.clear()
                 reviewEntries.clear()

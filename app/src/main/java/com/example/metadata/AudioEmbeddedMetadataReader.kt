@@ -62,13 +62,20 @@ object AudioEmbeddedMetadataReader {
     private const val TAG = "AudioEmbeddedMetadata"
     private const val MAX_TAG_HEADER_READ = 1024 * 1024 // Read up to 1MB for embedded tags
 
-    fun read(context: Context? = null, filePathOrUri: String): EmbeddedAudioMetadata {
+    fun read(
+        context: Context? = null,
+        filePathOrUri: String,
+        includeArtworkBytes: Boolean = false
+    ): EmbeddedAudioMetadata {
         if (filePathOrUri.isBlank()) return EmbeddedAudioMetadata()
 
-        val retrieverMetadata = readWithRetriever(context, filePathOrUri)
+        val retrieverMetadata = readWithRetriever(context, filePathOrUri, includeArtworkBytes)
         val streamMetadata = readFromStream(context, filePathOrUri)
 
         var merged = mergeMetadata(retrieverMetadata, streamMetadata)
+        if (!includeArtworkBytes && merged.embeddedArtworkBytes != null) {
+            merged = merged.copy(embeddedArtworkBytes = null)
+        }
 
         // If duration is <= 1 second, check container directly via WavContainerParser for WAV / RIFF audio
         if (merged.durationSeconds <= 1) {
@@ -86,7 +93,11 @@ object AudioEmbeddedMetadataReader {
         return merged
     }
 
-    private fun readWithRetriever(context: Context?, filePathOrUri: String): EmbeddedAudioMetadata {
+    private fun readWithRetriever(
+        context: Context?,
+        filePathOrUri: String,
+        includeArtworkBytes: Boolean
+    ): EmbeddedAudioMetadata {
         val retriever = MediaMetadataRetriever()
         return try {
             if (filePathOrUri.startsWith("content://") || filePathOrUri.startsWith("file://")) {
@@ -129,7 +140,7 @@ object AudioEmbeddedMetadataReader {
             val mBpm = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toDoubleOrNull()
                 ?.takeIf { it in 30.0..300.0 }
 
-            val embeddedPic = retriever.embeddedPicture
+            val embeddedPic = if (includeArtworkBytes) retriever.embeddedPicture else null
             val hasArt = embeddedPic != null && embeddedPic.isNotEmpty()
             val artSize = embeddedPic?.size ?: 0
 

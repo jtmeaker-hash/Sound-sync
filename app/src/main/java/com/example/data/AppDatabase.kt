@@ -21,9 +21,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MetadataReviewItemEntity::class,
         WatchedFolderEntity::class,
         LyricsEntity::class,
-        MetadataBackupEntity::class
+        MetadataBackupEntity::class,
+        TrackBrainStatusEntity::class,
+        com.example.djprep.DjPrepEntity::class,
+        ArtistEntity::class,
+        TrackArtistEntity::class
     ],
-    version = 17,
+    version = 22,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -38,6 +42,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun watchedFolderDao(): WatchedFolderDao
     abstract fun lyricsDao(): LyricsDao
     abstract fun metadataBackupDao(): MetadataBackupDao
+    abstract fun trackBrainDao(): TrackBrainDao
+    abstract fun djPrepDao(): com.example.djprep.DjPrepDao
+    abstract fun artistDao(): ArtistDao
 
     companion object {
         @Volatile
@@ -624,6 +631,230 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `track_brain_status` (
+                            `trackId` TEXT NOT NULL PRIMARY KEY,
+                            `overallStatus` TEXT NOT NULL DEFAULT 'PENDING',
+                            `metadataStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `artworkStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `bpmStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `keyStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `waveformStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `qualityStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `lyricsStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `replayGainStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `duplicateStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `fileValidationStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                            `lastAttemptTime` INTEGER DEFAULT NULL,
+                            `lastSuccessTime` INTEGER DEFAULT NULL,
+                            `retryCount` INTEGER NOT NULL DEFAULT 0,
+                            `errorCode` TEXT DEFAULT NULL,
+                            `errorMessage` TEXT DEFAULT NULL,
+                            `analysisVersion` INTEGER NOT NULL DEFAULT 1,
+                            `sourceProvider` TEXT DEFAULT NULL,
+                            `bpmVersion` INTEGER NOT NULL DEFAULT 2,
+                            `keyVersion` INTEGER NOT NULL DEFAULT 2,
+                            `waveformVersion` INTEGER NOT NULL DEFAULT 1,
+                            `qualityVersion` INTEGER NOT NULL DEFAULT 1,
+                            `replayGainVersion` INTEGER NOT NULL DEFAULT 1,
+                            `loudnessLufs` REAL DEFAULT NULL,
+                            `loudnessPeak` REAL DEFAULT NULL,
+                            `fileModifiedTimestamp` INTEGER NOT NULL DEFAULT 0,
+                            `fileSize` INTEGER NOT NULL DEFAULT 0
+                        )
+                        """.trimIndent()
+                    )
+                } catch (_: Exception) {}
+
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_overallStatus` ON `track_brain_status` (`overallStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_metadataStatus` ON `track_brain_status` (`metadataStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_artworkStatus` ON `track_brain_status` (`artworkStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_bpmStatus` ON `track_brain_status` (`bpmStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_keyStatus` ON `track_brain_status` (`keyStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_waveformStatus` ON `track_brain_status` (`waveformStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_qualityStatus` ON `track_brain_status` (`qualityStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_lyricsStatus` ON `track_brain_status` (`lyricsStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_replayGainStatus` ON `track_brain_status` (`replayGainStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_duplicateStatus` ON `track_brain_status` (`duplicateStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_fileValidationStatus` ON `track_brain_status` (`fileValidationStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_brain_status_lastAttemptTime` ON `track_brain_status` (`lastAttemptTime`)")
+                } catch (_: Exception) {}
+
+                try {
+                    db.execSQL(
+                        """
+                        INSERT OR IGNORE INTO `track_brain_status` (
+                            `trackId`, `overallStatus`, `metadataStatus`, `artworkStatus`,
+                            `bpmStatus`, `keyStatus`, `waveformStatus`, `qualityStatus`,
+                            `fileValidationStatus`, `lastAttemptTime`, `lastSuccessTime`,
+                            `fileModifiedTimestamp`
+                        )
+                        SELECT
+                            `id`,
+                            CASE
+                                WHEN `analysisState` = 'COMPLETE' THEN 'COMPLETE'
+                                WHEN `analysisState` = 'FAILED' THEN 'FAILED'
+                                WHEN `playabilityStatus` = 'MISSING_FILE' THEN 'MISSING_FILE'
+                                ELSE 'PENDING'
+                            END,
+                            CASE WHEN `artist` != 'Unknown Artist' AND `title` != 'Unknown Title' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `artworkCachePath` IS NOT NULL AND `artworkCachePath` != '' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `bpm` > 0.0 THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `musicalKey` != '' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `analysisState` = 'COMPLETE' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `qualityRating` != 'UNKNOWN_BITRATE' THEN 'COMPLETE' ELSE 'NOT_STARTED' END,
+                            CASE WHEN `playabilityStatus` = 'PLAYABLE' THEN 'COMPLETE' WHEN `playabilityStatus` = 'MISSING_FILE' THEN 'FAILED' ELSE 'NOT_STARTED' END,
+                            `lastAnalysedAt`,
+                            CASE WHEN `analysisState` = 'COMPLETE' THEN `lastAnalysedAt` ELSE NULL END,
+                            `fileModifiedTimestamp`
+                        FROM `tracks`
+                        """.trimIndent()
+                    )
+                } catch (_: Exception) {}
+            }
+        }
+
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_title` ON `tracks` (`title`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_artist` ON `tracks` (`artist`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_album` ON `tracks` (`album`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_bpm` ON `tracks` (`bpm`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_camelotKey` ON `tracks` (`camelotKey`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_musicalKey` ON `tracks` (`musicalKey`)")
+                } catch (_: Exception) {}
+            }
+        }
+
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    db.execSQL("ALTER TABLE `tracks` ADD COLUMN `fieldProvenanceJson` TEXT NOT NULL DEFAULT '{}'")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("ALTER TABLE `metadata_backups` ADD COLUMN `fieldProvenanceJson` TEXT")
+                } catch (_: Exception) {}
+            }
+        }
+
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `dj_prep_data` (
+                        `trackId` TEXT NOT NULL PRIMARY KEY,
+                        `bpm` REAL NOT NULL DEFAULT 0.0,
+                        `isManualBpm` INTEGER NOT NULL DEFAULT 0,
+                        `musicalKey` TEXT NOT NULL DEFAULT '',
+                        `camelotKey` TEXT NOT NULL DEFAULT '',
+                        `isManualKey` INTEGER NOT NULL DEFAULT 0,
+                        `firstDownbeatMs` INTEGER NOT NULL DEFAULT 0,
+                        `gridOffsetMs` INTEGER NOT NULL DEFAULT 0,
+                        `isManualGrid` INTEGER NOT NULL DEFAULT 0,
+                        `hotCuesJson` TEXT NOT NULL DEFAULT '[]',
+                        `memoryCuesJson` TEXT NOT NULL DEFAULT '[]',
+                        `phraseMarkersJson` TEXT NOT NULL DEFAULT '[]',
+                        `prepStatus` TEXT NOT NULL DEFAULT 'NOT_ANALYSED',
+                        `notes` TEXT NOT NULL DEFAULT '',
+                        `updatedAt` INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                try {
+                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_dj_prep_data_trackId` ON `dj_prep_data` (`trackId`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_dj_prep_data_prepStatus` ON `dj_prep_data` (`prepStatus`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_dj_prep_data_updatedAt` ON `dj_prep_data` (`updatedAt`)")
+                } catch (_: Exception) {}
+            }
+        }
+
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `artists` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `name` TEXT NOT NULL,
+                        `normalizedName` TEXT NOT NULL,
+                        `songCount` INTEGER NOT NULL DEFAULT 0,
+                        `albumCount` INTEGER NOT NULL DEFAULT 0,
+                        `totalDurationSeconds` INTEGER NOT NULL DEFAULT 0,
+                        `updatedAt` INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_artists_name` ON `artists` (`name`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_artists_normalizedName` ON `artists` (`normalizedName`)")
+                } catch (_: Exception) {}
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `track_artists` (
+                        `trackId` TEXT NOT NULL,
+                        `artistId` TEXT NOT NULL,
+                        `artistName` TEXT NOT NULL,
+                        `role` TEXT NOT NULL DEFAULT 'PRIMARY',
+                        PRIMARY KEY(`trackId`, `artistId`)
+                    )
+                    """.trimIndent()
+                )
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_artists_trackId` ON `track_artists` (`trackId`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_artists_artistId` ON `track_artists` (`artistId`)")
+                } catch (_: Exception) {}
+                try {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_artists_artistName` ON `track_artists` (`artistName`)")
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -647,7 +878,12 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_13_14,
                     MIGRATION_14_15,
                     MIGRATION_15_16,
-                    MIGRATION_16_17
+                    MIGRATION_16_17,
+                    MIGRATION_17_18,
+                    MIGRATION_18_19,
+                    MIGRATION_19_20,
+                    MIGRATION_20_21,
+                    MIGRATION_21_22
                 )
                 .fallbackToDestructiveMigration()
                 .build()

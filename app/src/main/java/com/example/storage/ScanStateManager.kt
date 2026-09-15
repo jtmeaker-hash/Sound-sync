@@ -60,16 +60,56 @@ class ScanStateManager(context: Context) {
         get() = prefs.getString(KEY_ACTIVE_RUN_ID, null)
         set(value) = prefs.edit().putString(KEY_ACTIVE_RUN_ID, value).apply()
 
+    var checkpointProcessedCount: Int
+        get() = prefs.getInt(KEY_CHECKPOINT_PROCESSED, 0)
+        set(value) = prefs.edit().putInt(KEY_CHECKPOINT_PROCESSED, value).apply()
+
+    var checkpointTotalCount: Int
+        get() = prefs.getInt(KEY_CHECKPOINT_TOTAL, 0)
+        set(value) = prefs.edit().putInt(KEY_CHECKPOINT_TOTAL, value).apply()
+
+    var checkpointLastTrackId: String?
+        get() = prefs.getString(KEY_CHECKPOINT_LAST_ID, null)
+        set(value) = prefs.edit().putString(KEY_CHECKPOINT_LAST_ID, value).apply()
+
+    var checkpointLastFilePath: String?
+        get() = prefs.getString(KEY_CHECKPOINT_LAST_PATH, null)
+        set(value) = prefs.edit().putString(KEY_CHECKPOINT_LAST_PATH, value).apply()
+
+    fun saveCheckpoint(processed: Int, total: Int, trackId: String?, filePath: String?) {
+        prefs.edit()
+            .putInt(KEY_CHECKPOINT_PROCESSED, processed)
+            .putInt(KEY_CHECKPOINT_TOTAL, total)
+            .putString(KEY_CHECKPOINT_LAST_ID, trackId)
+            .putString(KEY_CHECKPOINT_LAST_PATH, filePath)
+            .apply()
+    }
+
+    fun clearCheckpoint() {
+        prefs.edit()
+            .remove(KEY_CHECKPOINT_PROCESSED)
+            .remove(KEY_CHECKPOINT_TOTAL)
+            .remove(KEY_CHECKPOINT_LAST_ID)
+            .remove(KEY_CHECKPOINT_LAST_PATH)
+            .apply()
+    }
+
     /**
      * Check if a previous scan crashed or was killed by the OS mid-execution.
-     * If status is SCANNING, RUNNING, or QUEUED at startup, we reset to FAILED
-     * and clear the active run ID to prevent repeating broken scan loops automatically on launch.
+     * If status is SCANNING, RUNNING, or QUEUED at startup, we reset to PAUSED or FAILED
+     * with checkpoint retention to resume remaining unanalyzed items without restarting from zero.
      */
     fun checkAndRecoverInterruptedScan(): Boolean {
         if (status == ScanStatus.SCANNING || status == ScanStatus.RUNNING || status == ScanStatus.QUEUED) {
-            Log.w(TAG, "Detected interrupted scan from previous app session. Safely recovering state.")
-            status = ScanStatus.FAILED
-            lastErrorMessage = "Previous scan was interrupted or app was closed during scan."
+            val processed = checkpointProcessedCount
+            val total = checkpointTotalCount
+            Log.w(TAG, "Detected interrupted scan from previous app session ($processed / $total completed). Safely recovering checkpoint.")
+            status = ScanStatus.PAUSED
+            lastErrorMessage = if (total > 0) {
+                "Previous scan was paused at $processed/$total items. Resuming remaining work."
+            } else {
+                "Previous scan was interrupted. Ready to continue."
+            }
             activeRunId = null
             return true
         }
@@ -84,5 +124,9 @@ class ScanStateManager(context: Context) {
         private const val KEY_LAST_SCANNED_COUNT = "key_last_scanned_count"
         private const val KEY_LAST_ERROR = "key_last_error"
         private const val KEY_ACTIVE_RUN_ID = "key_active_run_id"
+        private const val KEY_CHECKPOINT_PROCESSED = "key_checkpoint_processed"
+        private const val KEY_CHECKPOINT_TOTAL = "key_checkpoint_total"
+        private const val KEY_CHECKPOINT_LAST_ID = "key_checkpoint_last_id"
+        private const val KEY_CHECKPOINT_LAST_PATH = "key_checkpoint_last_path"
     }
 }

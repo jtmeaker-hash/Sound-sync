@@ -17,10 +17,14 @@ data class SoundSyncBackup(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val songFinds: List<SongFindBackupItem> = emptyList(),
-    val tracks: List<TrackBackupItem> = emptyList()
+    val tracks: List<TrackBackupItem> = emptyList(),
+    val doctorIgnoredIssues: List<String> = emptyList(),
+    val doctorReviewedIssues: List<String> = emptyList(),
+    val djPrepData: List<DjPrepBackupItem> = emptyList(),
+    val eqConfigJson: String? = null
 ) {
     companion object {
-        const val CURRENT_BACKUP_VERSION = 1
+        const val CURRENT_BACKUP_VERSION = 3
     }
 }
 
@@ -143,7 +147,8 @@ data class TrackBackupItem(
     val analysisFailureReason: String? = null,
     val analysisRetryCount: Int = 0,
     val fileModifiedTimestamp: Long = 0L,
-    val metadataWriteState: String = "NOT_ANALYSED"
+    val metadataWriteState: String = "NOT_ANALYSED",
+    val fieldProvenanceJson: String = "{}"
 ) {
     fun toEntity(): TrackEntity = TrackEntity(
         id = id,
@@ -212,7 +217,8 @@ data class TrackBackupItem(
         resolvedArtist = resolvedArtist,
         metadataSource = metadataSource,
         metadataConfidence = metadataConfidence,
-        metadataWriteState = metadataWriteState
+        metadataWriteState = metadataWriteState,
+        fieldProvenanceJson = fieldProvenanceJson
     )
 
     companion object {
@@ -283,7 +289,8 @@ data class TrackBackupItem(
             analysisFailureReason = entity.analysisFailureReason,
             analysisRetryCount = entity.analysisRetryCount,
             fileModifiedTimestamp = entity.fileModifiedTimestamp,
-            metadataWriteState = entity.metadataWriteState
+            metadataWriteState = entity.metadataWriteState,
+            fieldProvenanceJson = entity.fieldProvenanceJson
         )
 
         fun fromJson(json: JSONObject): TrackBackupItem = TrackBackupItem(
@@ -450,4 +457,96 @@ sealed class RestoreResult {
 sealed class ValidationResult {
     data class Valid(val backup: SoundSyncBackup) : ValidationResult()
     data class Invalid(val reason: String) : ValidationResult()
+}
+
+data class DjPrepBackupItem(
+    val trackId: String,
+    val bpm: Double = 0.0,
+    val isManualBpm: Boolean = false,
+    val musicalKey: String = "",
+    val camelotKey: String = "",
+    val isManualKey: Boolean = false,
+    val firstDownbeatMs: Long = 0L,
+    val gridOffsetMs: Long = 0L,
+    val isManualGrid: Boolean = false,
+    val hotCuesJson: String = "[]",
+    val memoryCuesJson: String = "[]",
+    val phraseMarkersJson: String = "[]",
+    val prepStatus: String = "NOT_ANALYSED",
+    val notes: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
+) {
+    fun toEntity(): com.example.djprep.DjPrepEntity = com.example.djprep.DjPrepEntity(
+        trackId = trackId,
+        bpm = bpm,
+        isManualBpm = isManualBpm,
+        musicalKey = musicalKey,
+        camelotKey = camelotKey,
+        isManualKey = isManualKey,
+        firstDownbeatMs = firstDownbeatMs,
+        gridOffsetMs = gridOffsetMs,
+        isManualGrid = isManualGrid,
+        hotCuesJson = hotCuesJson,
+        memoryCuesJson = memoryCuesJson,
+        phraseMarkersJson = phraseMarkersJson,
+        prepStatus = prepStatus,
+        notes = notes,
+        updatedAt = updatedAt
+    )
+
+    companion object {
+        fun fromEntity(entity: com.example.djprep.DjPrepEntity): DjPrepBackupItem = DjPrepBackupItem(
+            trackId = entity.trackId,
+            bpm = entity.bpm,
+            isManualBpm = entity.isManualBpm,
+            musicalKey = entity.musicalKey,
+            camelotKey = entity.camelotKey,
+            isManualKey = entity.isManualKey,
+            firstDownbeatMs = entity.firstDownbeatMs,
+            gridOffsetMs = entity.gridOffsetMs,
+            isManualGrid = entity.isManualGrid,
+            hotCuesJson = entity.hotCuesJson,
+            memoryCuesJson = entity.memoryCuesJson,
+            phraseMarkersJson = entity.phraseMarkersJson,
+            prepStatus = entity.prepStatus,
+            notes = entity.notes,
+            updatedAt = entity.updatedAt
+        )
+
+        fun fromJson(json: JSONObject): DjPrepBackupItem = DjPrepBackupItem(
+            trackId = json.optString("trackId"),
+            bpm = json.optDouble("bpm", 0.0),
+            isManualBpm = json.optBoolean("isManualBpm", false),
+            musicalKey = json.optString("musicalKey", ""),
+            camelotKey = json.optString("camelotKey", ""),
+            isManualKey = json.optBoolean("isManualKey", false),
+            firstDownbeatMs = json.optLong("firstDownbeatMs", 0L),
+            gridOffsetMs = json.optLong("gridOffsetMs", 0L),
+            isManualGrid = json.optBoolean("isManualGrid", false),
+            hotCuesJson = json.optString("hotCuesJson", "[]"),
+            memoryCuesJson = json.optString("memoryCuesJson", "[]"),
+            phraseMarkersJson = json.optString("phraseMarkersJson", "[]"),
+            prepStatus = json.optString("prepStatus", "NOT_ANALYSED"),
+            notes = json.optString("notes", ""),
+            updatedAt = json.optLong("updatedAt", System.currentTimeMillis())
+        )
+    }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("trackId", trackId)
+        put("bpm", bpm)
+        put("isManualBpm", isManualBpm)
+        put("musicalKey", musicalKey)
+        put("camelotKey", camelotKey)
+        put("isManualKey", isManualKey)
+        put("firstDownbeatMs", firstDownbeatMs)
+        put("gridOffsetMs", gridOffsetMs)
+        put("isManualGrid", isManualGrid)
+        put("hotCuesJson", hotCuesJson)
+        put("memoryCuesJson", memoryCuesJson)
+        put("phraseMarkersJson", phraseMarkersJson)
+        put("prepStatus", prepStatus)
+        put("notes", notes)
+        put("updatedAt", updatedAt)
+    }
 }

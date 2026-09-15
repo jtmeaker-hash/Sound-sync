@@ -86,7 +86,7 @@ class MetadataResolver(
         if (!forceRefresh && com.example.storage.TrackIdentityReconciler.isMetadataScanComplete(track.metadataScanState) && !track.filePath.isBlank()) {
             // Even for COMPLETE tracks, validate the album field to catch folder-name albums
             // stored by older versions of the app or incorrect MediaStore data.
-            if (!AlbumValidator.isValidAlbum(track.album, track.filePath)) {
+            if (!track.album.isNullOrBlank() && !AlbumValidator.isValidAlbum(track.album, track.filePath)) {
                 Log.d(TAG, "AlbumRepair: track '${track.title}' (${track.metadataScanState}) has invalid album '${track.album}' — clearing in DB")
                 val repairedTrack = track.copy(album = "")
                 val db = database ?: try { AppDatabase.getDatabase(context) } catch (_: Exception) { null }
@@ -288,46 +288,13 @@ class MetadataResolver(
 
         Log.d(TAG, "selected track: \"${selectedCandidate.artistName} - ${selectedCandidate.trackName}\" (status=$matchState, confidence=${"%.1f".format(candidateScore)})")
 
-        // 5. Canonical Textual Metadata Authority: Apple iTunes (Sections 7, 8, 9, 10, 17)
+        // 5. High-quality Album Artwork (Section 11, Rule 6 - No MusicBrainz!)
         val resolvedArtist = selectedCandidate.artistName
         val resolvedTitle = selectedCandidate.trackName
         val resolvedAlbum = selectedCandidate.collectionName ?: track.album
         val resolvedYear = selectedCandidate.releaseYear ?: track.releaseYear
         val resolvedGenre = selectedCandidate.primaryGenreName ?: track.genre
 
-        // Respect manual user edits (Section 17) and apply high-confidence metadata (Section 7, 9)
-        val finalTitle = if (track.userConfirmedMetadata) {
-            track.title
-        } else if (settings.replaceExistingTitle || !TrackIdentityParser.isTitleValid(track.title) || candidateScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD) {
-            resolvedTitle
-        } else {
-            parsed.title.ifBlank { track.title }
-        }
-
-        val finalArtist = if (track.userConfirmedMetadata) {
-            track.artist
-        } else if (settings.replaceExistingArtist || !TrackIdentityParser.isArtistValid(track.artist) || candidateScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD) {
-            resolvedArtist
-        } else {
-            parsed.artist ?: track.artist
-        }
-
-        val finalAlbum = if (track.userConfirmedMetadata) {
-            track.album
-        } else if (TrackIdentityParser.isGenericAlbumName(track.album) || !resolvedAlbum.isNullOrBlank()) {
-            val candidate = resolvedAlbum ?: "Single"
-            if (AlbumValidator.isValidAlbum(candidate, track.filePath)) {
-                Log.d(TAG, "AlbumAccepted: $candidate")
-                candidate
-            } else {
-                Log.d(TAG, "AlbumRejected: $candidate, Reason=INVALID_OR_FOLDER_NAME")
-                ""
-            }
-        } else {
-            track.album
-        }
-
-        // 6. High-quality Album Artwork (Section 11, Rule 6 - No MusicBrainz!)
         var resolvedArtworkUrl: String? = track.artworkUrl
         var artworkSource: String? = track.artworkSource
         var artworkCachePath: String? = track.artworkCachePath
@@ -394,14 +361,39 @@ class MetadataResolver(
             }
         }
 
-        // Protect existing artwork unless explicitly configured to replace
-        val finalArtworkUrl = if (settings.replaceExistingArtwork || track.artworkUrl.isNullOrBlank()) {
-            resolvedArtworkUrl
-        } else {
-            track.artworkUrl
-        }
+        // 6. Local-First Deterministic Metadata Merge (Upgrade 26)
+        val candidateMeta = com.example.metadata.merge.CandidateMetadata(
+            title = resolvedTitle,
+            artist = resolvedArtist,
+            album = if (resolvedAlbum != null && AlbumValidator.isValidAlbum(resolvedAlbum, track.filePath)) resolvedAlbum else null,
+            genre = resolvedGenre,
+            releaseYear = resolvedYear,
+            releaseDate = selectedCandidate.releaseDate,
+            trackNumber = selectedCandidate.trackNumber,
+            discNumber = selectedCandidate.discNumber,
+            artworkUrl = resolvedArtworkUrl,
+            artworkCachePath = artworkCachePath,
+            artworkSource = artworkSource,
+            appleTrackId = selectedCandidate.trackId,
+            appleCollectionId = selectedCandidate.collectionId,
+            appleArtistId = selectedCandidate.artistId,
+            provider = "Apple iTunes Search API"
+        )
 
-        // 7. Store Proposed Metadata Separately in DB Review Inbox
+        val mergeResult = com.example.metadata.merge.LocalFirstMetadataMerger.merge(
+            localTrack = track.copy(
+                title = if (track.title.isBlank()) parsed.title else track.title,
+                artist = if (track.artist.isBlank()) (parsed.artist ?: "") else track.artist
+            ),
+            candidate = candidateMeta,
+            candidateScore = candidateScore,
+            matchState = matchState,
+            replaceExistingArtistSetting = settings.replaceExistingArtist,
+            replaceExistingTitleSetting = settings.replaceExistingTitle,
+            replaceExistingArtworkSetting = settings.replaceExistingArtwork
+        )
+
+        // 7. Store Proposed Metadata Separately in DB Review Inbox if conflicts exist
         val db = database ?: try { AppDatabase.getDatabase(context) } catch (_: Exception) { null }
         if (db != null) {
             val inboxEntity = MetadataReviewItemEntity(
@@ -413,53 +405,42 @@ class MetadataResolver(
                 originalAlbum = track.album,
                 proposedArtist = resolvedArtist,
                 proposedTitle = resolvedTitle,
-                proposedAlbum = resolvedAlbum,
+                proposedAlbum = resolvedAlbum ?: track.album,
                 proposedGenre = resolvedGenre,
                 proposedYear = resolvedYear,
                 proposedTrackNumber = selectedCandidate.trackNumber ?: track.trackNumber,
                 proposedArtworkUrl = resolvedArtworkUrl,
                 provider = "Apple iTunes Search API",
                 confidenceScore = candidateScore,
-                evidenceSummary = candidateEvaluation?.summary ?: "Identified via Apple Search",
+                evidenceSummary = if (mergeResult.conflicts.isNotEmpty())
+                    "Local-first merge preserved local tags. Conflicts: ${mergeResult.conflicts.joinToString { it.fieldName }}"
+                else
+                    candidateEvaluation?.summary ?: "Identified via Apple Search",
                 status = "PENDING",
                 timestamp = System.currentTimeMillis(),
                 originalArtworkUrl = track.artworkUrl,
                 artworkCachePath = artworkCachePath,
-                matchStatus = matchState.name,
+                matchStatus = if (mergeResult.conflicts.isNotEmpty()) MetadataScanState.REVIEW_REQUIRED.name else matchState.name,
                 candidatesJson = AppleTrackResult.listToJson(allCandidatesList)
             )
             try {
                 db.metadataReviewInboxDao().insertItem(inboxEntity)
-                Log.d(TAG, "Queued proposal in metadata_review_inbox for track ${track.id} (matchState=$matchState)")
+                Log.d(TAG, "Queued proposal in metadata_review_inbox for track ${track.id} (conflicts=${mergeResult.conflicts.size})")
             } catch (e: Exception) {
                 Log.w(TAG, "Could not insert review inbox item: ${e.message}")
             }
         }
 
-        var intermediateTrack = track.copy(
-            artist = finalArtist,
-            title = finalTitle,
-            album = finalAlbum,
-            releaseDate = selectedCandidate.releaseDate ?: track.releaseDate,
-            releaseYear = resolvedYear,
-            genre = resolvedGenre,
-            trackNumber = selectedCandidate.trackNumber ?: track.trackNumber,
-            discNumber = selectedCandidate.discNumber ?: track.discNumber,
+        var intermediateTrack = mergeResult.mergedTrack.copy(
             originalArtist = track.originalArtist ?: track.artist.takeIf { it != resolvedArtist },
-            resolvedArtist = resolvedArtist,
-            metadataSource = "Apple iTunes Search API",
-            metadataConfidence = candidateScore,
-            appleTrackId = selectedCandidate.trackId,
-            appleCollectionId = selectedCandidate.collectionId,
-            appleArtistId = selectedCandidate.artistId,
-            metadataScanState = matchState.name
+            resolvedArtist = resolvedArtist
         )
 
         val isWav = track.filePath.endsWith(".wav", ignoreCase = true)
 
         // Stage 1 logging: Metadata identification
         if (isWav) {
-            Log.i("WavPipeline", "[Stage 1: Metadata identification] SUCCESS: \"$finalTitle\" by \"$finalArtist\" (confidence: ${"%.1f".format(candidateScore)}%)")
+            Log.i("WavPipeline", "[Stage 1: Metadata identification] SUCCESS: \"${intermediateTrack.title}\" by \"${intermediateTrack.artist}\" (confidence: ${"%.1f".format(candidateScore)}%)")
         }
 
         // Stage 2 logging: Artwork lookup
@@ -501,7 +482,7 @@ class MetadataResolver(
             |Duration comparison: Local: ${track.durationSeconds}s, Remote: ${selectedCandidate.durationSeconds}s
             |Confidence: ${"%.1f".format(candidateScore)}%
             |Chosen metadata source: Apple iTunes Search API
-            |Final: Title: $finalTitle, Artist: $finalArtist, Album: $finalAlbum
+            |Final: Title: ${intermediateTrack.title}, Artist: ${intermediateTrack.artist}, Album: ${intermediateTrack.album}
             |---------------------------------
         """.trimMargin())
 
@@ -518,9 +499,10 @@ class MetadataResolver(
 
         if (shouldWritePhysicalFile) {
             Log.d("MetadataWriter", "Physical tag writing for ${track.filePath}")
+            val artworkBytesToWrite = if (intermediateTrack.artworkCachePath == artworkCachePath) activeArtworkBytes else null
             val writeResult = fileWriter.writeAsync(
                 track = intermediateTrack,
-                artworkBytes = activeArtworkBytes,
+                artworkBytes = artworkBytesToWrite,
                 artworkMimeType = activeArtworkMime
             )
             fileWriteState = writeResult.writeState
@@ -591,9 +573,6 @@ class MetadataResolver(
         }
 
         val finalTrack = intermediateTrack.copy(
-            artworkUrl = finalArtworkUrl,
-            artworkSource = artworkSource,
-            artworkCachePath = artworkCachePath,
             metadataScanState = finalScanState.name,
             metadataWriteState = fileWriteState.name
         )
@@ -630,8 +609,11 @@ class MetadataResolver(
             updatedTrack = finalTrack,
             scanState = finalScanState,
             confidence = candidateScore,
-            wasRepaired = wasArtistRepaired || (candidateScore >= MetadataConfidenceScorer.COMMIT_CONFIDENCE_THRESHOLD),
-            message = "Identified via Apple iTunes Search (score: ${"%.1f".format(candidateScore)}, state: $finalScanState)"
+            wasRepaired = mergeResult.wasRepaired || wasArtistRepaired,
+            message = if (mergeResult.conflicts.isNotEmpty())
+                "Local-first merge preserved local tags (${mergeResult.conflicts.size} conflicts queued for review)"
+            else
+                "Identified via Apple iTunes Search (score: ${"%.1f".format(candidateScore)}, state: $finalScanState)"
         )
     }
 }
