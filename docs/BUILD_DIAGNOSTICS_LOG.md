@@ -1228,3 +1228,54 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 35080001811 — PASS
+
+- **Date:** 2026-09-16T09:38:50.877761+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`619fbb7749`](https://github.com/jtmeaker-hash/Sound-sync/commit/619fbb77494550d3c6e0bb8e482d20ddd84ee379)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35080001811)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ✅ PASS |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+No CI build/test failures detected in this run.
+
+### Summary of changes
+
+feat: add cover art filtering and management
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+619fbb7 feat: add cover art filtering and management
+ .../metadata/artwork/CanonicalArtworkResolver.kt   |  14 +
+ app/src/main/java/com/example/model/Models.kt      |   6 +
+ .../main/java/com/example/ui/MainDjViewModel.kt    |   7 +
+ .../example/ui/inspector/TrackInspectorScreen.kt   |  32 +-
+ .../com/example/ui/library/LocalLibraryScreen.kt   |   3 +
+ .../java/com/example/ui/library/SongsScreen.kt     | 377 ++++++++++++++++++---
+ .../com/example/ui/sidemenu/SideMenuDestination.kt |  10 +-
+ .../example/ui/sidemenu/SideNavigationDrawer.kt    | 228 ++++++++-----
+ .../main/java/com/example/util/AlbumArtHelper.kt   | 126 +++++++
+ 9 files changed, 667 insertions(+), 136 deletions(-)
+```
+
+---
