@@ -203,104 +203,126 @@ object AlbumArtHelper : CanonicalArtworkResolver {
         generated
     }
 
+    private val albumArtworkSemaphore = kotlinx.coroutines.sync.Semaphore(3)
+
     override suspend fun getArtworkForAlbum(context: Context, album: Album, sizePx: Int): Bitmap = withContext(Dispatchers.IO) {
-        val cacheKey = computeAlbumCacheKey(album, sizePx)
+        val safeSize = sizePx.coerceIn(64, 512)
+        val cacheKey = computeAlbumCacheKey(album, safeSize)
         memoryCache.get(cacheKey)?.let { return@withContext it }
 
-        // 1. Check explicit album.artworkUri if present
-        val artUri = album.artworkUri
-        if (!artUri.isNullOrBlank()) {
-            if (artUri.startsWith("/") || artUri.startsWith("file://")) {
-                val path = if (artUri.startsWith("file://")) Uri.parse(artUri).path else artUri
-                if (path != null) {
-                    val file = File(path)
-                    if (file.exists() && file.canRead()) {
-                        decodeFileToBitmap(file, sizePx)?.let { decoded ->
-                            memoryCache.put(cacheKey, decoded)
-                            return@withContext decoded
-                        }
-                    }
-                }
-            } else if (artUri.startsWith("content://")) {
-                try {
-                    context.contentResolver.openInputStream(Uri.parse(artUri))?.use { stream ->
-                        decodeStreamToBitmap(stream, sizePx)?.let { decoded ->
-                            memoryCache.put(cacheKey, decoded)
-                            return@withContext decoded
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-        }
-
-        // 2. Check ArtworkCache by artist + album
+        // Use a semaphore to bound concurrent artwork decoding across album grid items
+        albumArtworkSemaphore.acquire()
         try {
-            val artworkCache = ArtworkCache(context)
-            val cachedFile = artworkCache.getCachedArtworkFile(album.artist, album.title)
-            if (cachedFile != null && cachedFile.exists() && cachedFile.length() > 0) {
-                decodeFileToBitmap(cachedFile, sizePx)?.let { decoded ->
-                    memoryCache.put(cacheKey, decoded)
-                    return@withContext decoded
+            // Re-check cache after acquiring semaphore
+            memoryCache.get(cacheKey)?.let { return@withContext it }
+
+            // 1. Check explicit album.artworkUri if present
+            val artUri = album.artworkUri
+            if (!artUri.isNullOrBlank()) {
+                if (artUri.startsWith("/") || artUri.startsWith("file://")) {
+                    val path = if (artUri.startsWith("file://")) Uri.parse(artUri).path else artUri
+                    if (path != null) {
+                        val file = File(path)
+                        if (file.exists() && file.canRead()) {
+                            decodeFileToBitmap(file, safeSize)?.let { decoded ->
+                                memoryCache.put(cacheKey, decoded)
+                                return@withContext decoded
+                            }
+                        }
+                    }
+                } else if (artUri.startsWith("content://")) {
+                    try {
+                        context.contentResolver.openInputStream(Uri.parse(artUri))?.use { stream ->
+                            decodeStreamToBitmap(stream, safeSize)?.let { decoded ->
+                                memoryCache.put(cacheKey, decoded)
+                                return@withContext decoded
+                            }
+                        }
+                    } catch (_: Throwable) {}
                 }
             }
-        } catch (_: Exception) {}
 
-        // 3. Deterministic check across member tracks
-        val sortedTracks = album.tracks.sortedWith(
-            compareBy<Track> { it.discNumber }
-                .thenBy { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
-                .thenBy { it.title.lowercase() }
-        )
-
-        // 3a. First check tracks with explicit disk cache path
-        for (track in sortedTracks) {
-            val trackCache = track.artworkCachePath ?: track.artworkUrl?.takeIf { it.startsWith("/") || it.startsWith("file://") }
-            if (!trackCache.isNullOrBlank()) {
-                val path = if (trackCache.startsWith("file://")) Uri.parse(trackCache).path else trackCache
-                if (path != null && File(path).exists() && File(path).canRead()) {
-                    decodeFileToBitmap(File(path), sizePx)?.let { decoded ->
+            // 2. Check ArtworkCache by artist + album
+            try {
+                val artworkCache = ArtworkCache(context)
+                val cachedFile = artworkCache.getCachedArtworkFile(album.artist, album.title)
+                if (cachedFile != null && cachedFile.exists() && cachedFile.length() > 0) {
+                    decodeFileToBitmap(cachedFile, safeSize)?.let { decoded ->
                         memoryCache.put(cacheKey, decoded)
                         return@withContext decoded
                     }
                 }
-            }
-        }
+            } catch (_: Throwable) {}
 
-        // 3b. Next check embedded artwork in member tracks
-        for (track in sortedTracks) {
-            val embedded = extractEmbeddedPicture(context, track.filePath, sizePx)
-            if (embedded != null) {
-                memoryCache.put(cacheKey, embedded)
-                return@withContext embedded
-            }
-        }
+            // 3. Deterministic check across member tracks (bounded to top candidates)
+            val sortedTracks = album.tracks.sortedWith(
+                compareBy<Track> { it.discNumber }
+                    .thenBy { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
+                    .thenBy { it.title.lowercase() }
+            )
 
-        // 4. Check folder artwork in directory of first track
-        val firstDir = sortedTracks.firstOrNull()?.directoryPath ?: sortedTracks.firstOrNull()?.filePath?.let {
-            if (it.contains("/")) it.substringBeforeLast("/") else null
-        }
-        if (!firstDir.isNullOrBlank() && !firstDir.startsWith("content://")) {
-            val dir = File(firstDir)
-            if (dir.exists() && dir.isDirectory) {
-                val candidates = listOf("cover.jpg", "folder.jpg", "album.jpg", "front.jpg", "cover.png", "folder.png")
-                for (name in candidates) {
-                    val coverFile = File(dir, name)
-                    if (coverFile.exists() && coverFile.canRead() && coverFile.length() > 0) {
-                        decodeFileToBitmap(coverFile, sizePx)?.let { decoded ->
+            // 3a. First check tracks with explicit disk cache path
+            for (track in sortedTracks.take(5)) {
+                val trackCache = track.artworkCachePath ?: track.artworkUrl?.takeIf { it.startsWith("/") || it.startsWith("file://") }
+                if (!trackCache.isNullOrBlank()) {
+                    val path = if (trackCache.startsWith("file://")) Uri.parse(trackCache).path else trackCache
+                    if (path != null && File(path).exists() && File(path).canRead()) {
+                        decodeFileToBitmap(File(path), safeSize)?.let { decoded ->
                             memoryCache.put(cacheKey, decoded)
                             return@withContext decoded
                         }
                     }
                 }
             }
-        }
 
-        // 5. Fallback vinyl artwork for this album
-        val fallbackKey = "fallback_album_${album.id}_$sizePx"
-        fallbackCache.get(fallbackKey)?.let { return@withContext it }
-        val generated = generateFallbackArtwork(title = album.title, artist = album.artist, seedId = album.id, size = sizePx)
-        fallbackCache.put(fallbackKey, generated)
-        generated
+            // 3b. Next check embedded artwork in member tracks (bounded to at most 2 tracks to prevent ANR/native exhaustion)
+            for (track in sortedTracks.take(2)) {
+                val embedded = extractEmbeddedPicture(context, track.filePath, safeSize)
+                if (embedded != null) {
+                    memoryCache.put(cacheKey, embedded)
+                    return@withContext embedded
+                }
+            }
+
+            // 4. Check folder artwork in directory of first track
+            val firstDir = sortedTracks.firstOrNull()?.directoryPath ?: sortedTracks.firstOrNull()?.filePath?.let {
+                if (it.contains("/")) it.substringBeforeLast("/") else null
+            }
+            if (!firstDir.isNullOrBlank() && !firstDir.startsWith("content://")) {
+                val dir = File(firstDir)
+                if (dir.exists() && dir.isDirectory) {
+                    val candidates = listOf("cover.jpg", "folder.jpg", "album.jpg", "front.jpg", "cover.png", "folder.png")
+                    for (name in candidates) {
+                        val coverFile = File(dir, name)
+                        if (coverFile.exists() && coverFile.canRead() && coverFile.length() > 0) {
+                            decodeFileToBitmap(coverFile, safeSize)?.let { decoded ->
+                                memoryCache.put(cacheKey, decoded)
+                                return@withContext decoded
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 5. Fallback vinyl artwork for this album
+            val fallbackKey = "fallback_album_${album.id}_$safeSize"
+            fallbackCache.get(fallbackKey)?.let { return@withContext it }
+            val generated = generateFallbackArtwork(title = album.title, artist = album.artist, seedId = album.id, size = safeSize)
+            fallbackCache.put(fallbackKey, generated)
+            generated
+        } catch (oom: OutOfMemoryError) {
+            Log.e(TAG, "OutOfMemoryError in getArtworkForAlbum for '${album.title}': ${oom.message}")
+            try {
+                memoryCache.evictAll()
+                fallbackCache.evictAll()
+            } catch (_: Throwable) {}
+            generateFallbackArtwork(title = album.title, artist = album.artist, seedId = album.id, size = 64)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Error resolving artwork for album '${album.title}': ${t.message}")
+            generateFallbackArtwork(title = album.title, artist = album.artist, seedId = album.id, size = safeSize)
+        } finally {
+            albumArtworkSemaphore.release()
+        }
     }
 
     override fun invalidateTrack(trackId: String, artist: String?, album: String?) {
@@ -474,52 +496,72 @@ object AlbumArtHelper : CanonicalArtworkResolver {
 
     fun decodeByteArrayToBitmap(bytes: ByteArray, targetSize: Int): Bitmap? {
         if (bytes.isEmpty()) return null
+        val target = targetSize.coerceIn(32, 1024)
         return try {
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            if (options.outHeight <= 0 || options.outWidth <= 0) return null
+
             var sampleSize = 1
-            if (options.outHeight > targetSize || options.outWidth > targetSize) {
+            if (options.outHeight > target || options.outWidth > target) {
                 val halfHeight = options.outHeight / 2
                 val halfWidth = options.outWidth / 2
-                while ((halfHeight / sampleSize) >= targetSize && (halfWidth / sampleSize) >= targetSize) {
+                while ((halfHeight / sampleSize) >= target && (halfWidth / sampleSize) >= target) {
                     sampleSize *= 2
+                    if (sampleSize >= 64) break
                 }
             }
             val decodeOptions = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
-                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inPreferredConfig = Bitmap.Config.RGB_565
             }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decode byte array: ${e.message}")
+        } catch (oom: OutOfMemoryError) {
+            Log.w(TAG, "OOM decoding byte array: ${oom.message}")
+            try {
+                memoryCache.evictAll()
+            } catch (_: Throwable) {}
+            null
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to decode byte array: ${t.message}")
             null
         }
     }
 
     fun decodeFileToBitmap(file: File, targetSize: Int): Bitmap? {
         if (!file.exists() || !file.canRead() || file.length() == 0L) return null
+        val target = targetSize.coerceIn(32, 1024)
         return try {
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
             BitmapFactory.decodeFile(file.absolutePath, options)
+            if (options.outHeight <= 0 || options.outWidth <= 0) return null
+
             var sampleSize = 1
-            if (options.outHeight > targetSize || options.outWidth > targetSize) {
+            if (options.outHeight > target || options.outWidth > target) {
                 val halfHeight = options.outHeight / 2
                 val halfWidth = options.outWidth / 2
-                while ((halfHeight / sampleSize) >= targetSize && (halfWidth / sampleSize) >= targetSize) {
+                while ((halfHeight / sampleSize) >= target && (halfWidth / sampleSize) >= target) {
                     sampleSize *= 2
+                    if (sampleSize >= 64) break
                 }
             }
             val decodeOptions = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
-                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inPreferredConfig = Bitmap.Config.RGB_565
             }
             BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decode cached artwork file ${file.absolutePath}: ${e.message}")
+        } catch (oom: OutOfMemoryError) {
+            Log.w(TAG, "OOM decoding cached artwork file ${file.absolutePath}: ${oom.message}")
+            try {
+                memoryCache.evictAll()
+            } catch (_: Throwable) {}
+            null
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to decode cached artwork file ${file.absolutePath}: ${t.message}")
             null
         }
     }
@@ -527,14 +569,15 @@ object AlbumArtHelper : CanonicalArtworkResolver {
     private fun extractEmbeddedPicture(context: Context, uriOrPath: String, targetSize: Int): Bitmap? {
         if (uriOrPath.isBlank() || uriOrPath.startsWith("demo://")) return null
 
-        val retriever = MediaMetadataRetriever()
+        var retriever: MediaMetadataRetriever? = null
         return try {
+            retriever = MediaMetadataRetriever()
             if (uriOrPath.startsWith("content://")) {
                 try {
                     context.contentResolver.openFileDescriptor(Uri.parse(uriOrPath), "r")?.use { pfd ->
                         retriever.setDataSource(pfd.fileDescriptor)
                     } ?: return null
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     retriever.setDataSource(context, Uri.parse(uriOrPath))
                 }
             } else if (uriOrPath.startsWith("file://")) {
@@ -554,13 +597,16 @@ object AlbumArtHelper : CanonicalArtworkResolver {
 
             val picture = retriever.embeddedPicture ?: return null
             decodeByteArrayToBitmap(picture, targetSize)
-        } catch (e: Exception) {
-            Log.v(TAG, "No embedded artwork for $uriOrPath: ${e.message}")
+        } catch (oom: OutOfMemoryError) {
+            Log.w(TAG, "OOM extracting embedded picture for $uriOrPath: ${oom.message}")
+            null
+        } catch (t: Throwable) {
+            Log.v(TAG, "No embedded artwork for $uriOrPath: ${t.message}")
             null
         } finally {
             try {
-                retriever.release()
-            } catch (ignored: Exception) {}
+                retriever?.release()
+            } catch (_: Throwable) {}
         }
     }
 
@@ -569,72 +615,77 @@ object AlbumArtHelper : CanonicalArtworkResolver {
     }
 
     fun generateFallbackArtwork(title: String, artist: String, seedId: String, size: Int): Bitmap {
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
+        val safeSize = size.coerceIn(32, 512)
+        return try {
+            val bitmap = Bitmap.createBitmap(safeSize, safeSize, Bitmap.Config.RGB_565)
+            val canvas = Canvas(bitmap)
 
-        // Generate consistent colors from track/album title + artist + id
-        val hash = (title + artist + seedId).hashCode()
-        val hue = (hash and 0xFFFF) % 360f
-        val darkBg = Color.HSVToColor(floatArrayOf(hue, 0.75f, 0.18f))
-        val accentColor = Color.HSVToColor(floatArrayOf((hue + 45f) % 360f, 0.85f, 0.90f))
-        val vinylColor = Color.rgb(24, 24, 28)
+            // Generate consistent colors from track/album title + artist + id
+            val hash = (title + artist + seedId).hashCode()
+            val hue = (hash and 0xFFFF) % 360f
+            val darkBg = Color.HSVToColor(floatArrayOf(hue, 0.75f, 0.18f))
+            val accentColor = Color.HSVToColor(floatArrayOf((hue + 45f) % 360f, 0.85f, 0.90f))
+            val vinylColor = Color.rgb(24, 24, 28)
 
-        // Background
-        val bgPaint = Paint().apply {
-            color = darkBg
-            isAntiAlias = true
+            // Background
+            val bgPaint = Paint().apply {
+                color = darkBg
+                isAntiAlias = true
+            }
+            canvas.drawRect(0f, 0f, safeSize.toFloat(), safeSize.toFloat(), bgPaint)
+
+            // Vinyl record disc circle
+            val discPaint = Paint().apply {
+                color = vinylColor
+                isAntiAlias = true
+                style = Paint.Style.FILL
+            }
+            val center = safeSize / 2f
+            val discRadius = safeSize * 0.42f
+            canvas.drawCircle(center, center, discRadius, discPaint)
+
+            // Vinyl grooves
+            val groovePaint = Paint().apply {
+                color = Color.argb(40, 255, 255, 255)
+                isAntiAlias = true
+                style = Paint.Style.STROKE
+                strokeWidth = 2f
+            }
+            canvas.drawCircle(center, center, discRadius * 0.85f, groovePaint)
+            canvas.drawCircle(center, center, discRadius * 0.70f, groovePaint)
+            canvas.drawCircle(center, center, discRadius * 0.55f, groovePaint)
+
+            // Center label
+            val labelPaint = Paint().apply {
+                color = accentColor
+                isAntiAlias = true
+                style = Paint.Style.FILL
+            }
+            canvas.drawCircle(center, center, discRadius * 0.35f, labelPaint)
+
+            // Center spindle hole
+            val centerHolePaint = Paint().apply {
+                color = darkBg
+                isAntiAlias = true
+                style = Paint.Style.FILL
+            }
+            canvas.drawCircle(center, center, discRadius * 0.10f, centerHolePaint)
+
+            // Initial letter
+            val textPaint = Paint().apply {
+                color = Color.WHITE
+                textSize = safeSize * 0.12f
+                isAntiAlias = true
+                textAlign = Paint.Align.CENTER
+                isFakeBoldText = true
+            }
+            val letter = title.trim().take(1).uppercase().ifBlank { "♪" }
+            val textY = center + (textPaint.textSize / 3f)
+            canvas.drawText(letter, center, textY, textPaint)
+
+            bitmap
+        } catch (_: Throwable) {
+            Bitmap.createBitmap(32, 32, Bitmap.Config.RGB_565)
         }
-        canvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), bgPaint)
-
-        // Vinyl record disc circle
-        val discPaint = Paint().apply {
-            color = vinylColor
-            isAntiAlias = true
-            style = Paint.Style.FILL
-        }
-        val center = size / 2f
-        val discRadius = size * 0.42f
-        canvas.drawCircle(center, center, discRadius, discPaint)
-
-        // Vinyl grooves
-        val groovePaint = Paint().apply {
-            color = Color.argb(40, 255, 255, 255)
-            isAntiAlias = true
-            style = Paint.Style.STROKE
-            strokeWidth = 2f
-        }
-        canvas.drawCircle(center, center, discRadius * 0.85f, groovePaint)
-        canvas.drawCircle(center, center, discRadius * 0.70f, groovePaint)
-        canvas.drawCircle(center, center, discRadius * 0.55f, groovePaint)
-
-        // Center label
-        val labelPaint = Paint().apply {
-            color = accentColor
-            isAntiAlias = true
-            style = Paint.Style.FILL
-        }
-        canvas.drawCircle(center, center, discRadius * 0.35f, labelPaint)
-
-        // Center spindle hole
-        val centerHolePaint = Paint().apply {
-            color = darkBg
-            isAntiAlias = true
-            style = Paint.Style.FILL
-        }
-        canvas.drawCircle(center, center, discRadius * 0.10f, centerHolePaint)
-
-        // Initial letter
-        val textPaint = Paint().apply {
-            color = Color.WHITE
-            textSize = size * 0.12f
-            isAntiAlias = true
-            textAlign = Paint.Align.CENTER
-            isFakeBoldText = true
-        }
-        val letter = title.trim().take(1).uppercase().ifBlank { "♪" }
-        val textY = center + (textPaint.textSize / 3f)
-        canvas.drawText(letter, center, textY, textPaint)
-
-        return bitmap
     }
 }

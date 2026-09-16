@@ -1,5 +1,6 @@
 package com.example.ui.library
 
+import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,18 +61,25 @@ import com.example.ui.theme.TextSecondary
 @Composable
 fun AlbumsScreen(
     albums: List<Album>,
-    onSelectAlbum: (Album) -> Unit
+    onSelectAlbum: (Album) -> Unit,
+    isScanning: Boolean = false
 ) {
     var searchQuery by remember { mutableStateOf("") }
 
     val filteredAlbums = remember(albums, searchQuery) {
         val q = searchQuery.trim().lowercase()
-        if (q.isBlank()) {
+        val list = if (q.isBlank()) {
             albums
         } else {
             albums.filter {
                 it.title.lowercase().contains(q) || it.artist.lowercase().contains(q)
             }
+        }
+        // Guarantee 100% stable unique keys for Compose LazyVerticalGrid
+        val seen = mutableSetOf<String>()
+        list.filter { album ->
+            val key = album.id.ifBlank { "album_${album.title}_${album.artist}" }
+            seen.add(key)
         }
     }
 
@@ -98,21 +107,39 @@ fun AlbumsScreen(
                     .padding(32.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Album,
-                        contentDescription = null,
-                        tint = TextMuted,
-                        modifier = Modifier.size(56.dp)
-                    )
-                    Text(
-                        text = if (searchQuery.isNotBlank()) "No albums matching '$searchQuery'" else "No albums found in library",
-                        fontSize = 15.sp,
-                        color = TextSecondary
-                    )
+                if (isScanning) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = DeckACyan,
+                            strokeWidth = 3.dp,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Text(
+                            text = "Scanning and organizing albums...",
+                            fontSize = 14.sp,
+                            color = TextSecondary
+                        )
+                    }
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Album,
+                            contentDescription = null,
+                            tint = TextMuted,
+                            modifier = Modifier.size(56.dp)
+                        )
+                        Text(
+                            text = if (searchQuery.isNotBlank()) "No albums matching '$searchQuery'" else "No albums found in library",
+                            fontSize = 15.sp,
+                            color = TextSecondary
+                        )
+                    }
                 }
             }
         } else {
@@ -125,7 +152,7 @@ fun AlbumsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp)
             ) {
-                items(filteredAlbums, key = { it.id }) { album ->
+                items(filteredAlbums, key = { it.id.ifBlank { "album_${it.title}_${it.artist}" } }) { album ->
                     AlbumGridCard(
                         album = album,
                         onClick = { onSelectAlbum(album) }
@@ -143,12 +170,22 @@ fun AlbumGridCard(
 ) {
     val context = LocalContext.current
     var artworkBitmap by remember(album.id, album.artworkUri) {
-        mutableStateOf(AlbumArtHelper.getCachedArtworkForAlbum(album, 320))
+        mutableStateOf(
+            try {
+                AlbumArtHelper.getCachedArtworkForAlbum(album, 320)
+            } catch (_: Throwable) {
+                null
+            }
+        )
     }
 
     LaunchedEffect(album.id, album.artworkUri) {
         if (artworkBitmap == null) {
-            artworkBitmap = AlbumArtHelper.getArtworkForAlbum(context, album, 320)
+            try {
+                artworkBitmap = AlbumArtHelper.getArtworkForAlbum(context, album, 320)
+            } catch (t: Throwable) {
+                Log.w("AlbumGridCard", "Failed to load artwork for album '${album.title}': ${t.message}")
+            }
         }
     }
 
@@ -171,9 +208,10 @@ fun AlbumGridCard(
                     .background(DjSurfaceCard),
                 contentAlignment = Alignment.Center
             ) {
-                if (artworkBitmap != null) {
+                val bmp = artworkBitmap
+                if (bmp != null && !bmp.isRecycled && bmp.width > 0 && bmp.height > 0) {
                     Image(
-                        bitmap = artworkBitmap!!.asImageBitmap(),
+                        bitmap = bmp.asImageBitmap(),
                         contentDescription = "${album.title} artwork",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
@@ -191,7 +229,7 @@ fun AlbumGridCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = album.title,
+                text = album.title.ifBlank { "Unknown Album" },
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 color = TextPrimary,
@@ -200,7 +238,7 @@ fun AlbumGridCard(
             )
 
             Text(
-                text = album.artist,
+                text = album.artist.ifBlank { "Unknown Artist" },
                 fontSize = 12.sp,
                 color = TextSecondary,
                 maxLines = 1,
@@ -210,10 +248,11 @@ fun AlbumGridCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "${album.trackCount} tracks",
+                text = "${album.trackCount} ${if (album.trackCount == 1) "track" else "tracks"}",
                 fontSize = 11.sp,
                 color = TextMuted
             )
         }
     }
 }
+

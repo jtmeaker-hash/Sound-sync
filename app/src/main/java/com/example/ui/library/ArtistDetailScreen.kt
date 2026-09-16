@@ -260,7 +260,7 @@ fun ArtistDetailScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             contentPadding = PaddingValues(horizontal = 4.dp)
                         ) {
-                            items(artist.albums, key = { it.id }) { album ->
+                            items(artist.albums, key = { it.id.ifBlank { "album_${it.title}" } }) { album ->
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
                                     color = DjSurfaceDark,
@@ -320,7 +320,9 @@ fun ArtistDetailScreen(
             }
 
             // Song Rows
-            itemsIndexed(artist.songs, key = { _, track -> track.id }) { index, track ->
+            itemsIndexed(artist.songs, key = { index, track ->
+                if (track.id.isNotBlank()) "${track.id}_$index" else "artist_song_$index"
+            }) { index, track ->
                 SongTrackRow(
                     track = track,
                     isCurrent = currentPlayingTrack?.id == track.id,

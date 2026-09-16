@@ -369,12 +369,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         syncQueueToSession()
     }
 
-    // Local Library Sub-Navigation State
+    // Local Library Sub-Navigation State with Crash Loop Protection
     private val _selectedLocalCategory = MutableStateFlow(
-        try {
-            LocalCategory.valueOf(restoredSession.libraryUi.selectedLocalCategory)
-        } catch (_: Exception) {
-            LocalCategory.SONGS
+        run {
+            val requestedCategory = try {
+                LocalCategory.valueOf(restoredSession.libraryUi.selectedLocalCategory)
+            } catch (_: Exception) {
+                LocalCategory.SONGS
+            }
+            try {
+                com.example.util.CrashProtectionManager.checkAndApplyRecovery(getApplication(), requestedCategory)
+            } catch (_: Throwable) {
+                requestedCategory
+            }
         }
     )
     val selectedLocalCategory = _selectedLocalCategory.asStateFlow()
@@ -864,24 +871,40 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }.flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // Dynamically grouped Albums from Real indexed tracks
-    val allAlbums: StateFlow<List<com.example.model.Album>> = allTracks.map { tracks ->
+    // Dynamically grouped Albums from Real indexed tracks with robust fault tolerance and unique key guarantees
+    val allAlbums: StateFlow<List<com.example.model.Album>> = allTracks.map { rawTracks ->
         val startNs = System.nanoTime()
-        val albums = tracks.filter { it.album.isNotBlank() }
-            .groupBy {
-                val artistKey = if (it.albumArtist.isNotBlank()) it.albumArtist.trim().lowercase() else it.artist.trim().lowercase()
-                "${artistKey}:::${it.album.trim().lowercase()}"
-            }
-            .map { entry ->
-                val albumTracks = entry.value.sortedWith(
+        try {
+            val tracks = ArrayList(rawTracks)
+            if (tracks.isEmpty()) return@map emptyList<com.example.model.Album>()
+
+            val grouped = tracks.filter { it.album.isNotBlank() }
+                .groupBy { track ->
+                    val artistKey = if (track.albumArtist.isNotBlank()) {
+                        track.albumArtist.trim().lowercase()
+                    } else if (track.artist.isNotBlank()) {
+                        track.artist.trim().lowercase()
+                    } else {
+                        "unknown artist"
+                    }
+                    val albumKey = track.album.trim().lowercase()
+                    "${artistKey}:::${albumKey}"
+                }
+
+            val seenIds = mutableSetOf<String>()
+            val albums = grouped.mapNotNull { (groupKey, trackList) ->
+                if (trackList.isEmpty()) return@mapNotNull null
+                val albumTracks = trackList.sortedWith(
                     compareBy<Track> { it.discNumber }
                         .thenBy { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
                         .thenBy { it.title.lowercase() }
                 )
-                val firstTrack = albumTracks.first()
-                val albumTitle = firstTrack.album.ifBlank { "Single" }
-                val artistName = firstTrack.albumArtist.ifBlank { firstTrack.artist.ifBlank { "Unknown Artist" } }
-                val totalSec = albumTracks.sumOf { it.durationSeconds }
+                val firstTrack = albumTracks.firstOrNull() ?: return@mapNotNull null
+                val albumTitle = firstTrack.album.trim().ifBlank { "Single" }
+                val artistName = firstTrack.albumArtist.trim().ifBlank {
+                    firstTrack.artist.trim().ifBlank { "Unknown Artist" }
+                }
+                val totalSec = albumTracks.sumOf { it.durationSeconds.coerceAtLeast(0) }
 
                 // Deterministic representative artwork selection:
                 // Find member track with valid cached artwork, then embedded artwork, then first track
@@ -893,8 +916,19 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     ?: trackWithArt.artworkUrl?.takeIf { it.isNotBlank() }
                     ?: trackWithArt.filePath.takeIf { it.isNotBlank() }
 
+                // Stable unique composite ID derived from sanitized artist, title, and media/track ID
+                val artistSlug = artistName.lowercase().replace(Regex("[^a-z0-9_-]"), "_").take(32)
+                val titleSlug = albumTitle.lowercase().replace(Regex("[^a-z0-9_-]"), "_").take(32)
+                val baseId = "album_${artistSlug}_${titleSlug}_${artistName.hashCode()}_${albumTitle.hashCode()}"
+
+                var uniqueId = baseId
+                var disambiguation = 1
+                while (!seenIds.add(uniqueId)) {
+                    uniqueId = "${baseId}_${disambiguation++}"
+                }
+
                 com.example.model.Album(
-                    id = "album_${artistName.hashCode()}_${albumTitle.hashCode()}",
+                    id = uniqueId,
                     title = albumTitle,
                     artist = artistName,
                     trackCount = albumTracks.size,
@@ -903,21 +937,39 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     year = albumTracks.mapNotNull { it.releaseYear }.firstOrNull { it > 0 } ?: 0,
                     artworkUri = resolvedArtUri
                 )
-            }
-            .sortedBy { it.title.lowercase() }
-        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
-        Log.d("SoundSyncPerf", "album grouping in ${elapsedMs}ms (${albums.size} albums)")
-        albums
+            }.sortedBy { it.title.lowercase() }
+
+            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+            Log.d("SoundSyncPerf", "album grouping in ${elapsedMs}ms (${albums.size} albums)")
+            albums
+        } catch (t: Throwable) {
+            Log.e("MainDjViewModel", "Error in album grouping: ${t.message}", t)
+            emptyList()
+        }
     }.flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Dynamically grouped Artists splitting collaborations into individual artist entities
     val allArtists: StateFlow<List<com.example.model.Artist>> = combine(allTracks, allAlbums) { tracks, albums ->
         val startNs = System.nanoTime()
-        val artists = com.example.metadata.artist.ArtistIndexManager.buildArtistsFromTracks(tracks, albums)
-        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
-        Log.d("SoundSyncPerf", "individual artist grouping in ${elapsedMs}ms (${artists.size} individual artists)")
-        artists
+        try {
+            val artists = com.example.metadata.artist.ArtistIndexManager.buildArtistsFromTracks(tracks, albums)
+            val seenIds = mutableSetOf<String>()
+            val uniqueArtists = artists.map { artist ->
+                var uniqueId = artist.id
+                var disambiguation = 1
+                while (!seenIds.add(uniqueId)) {
+                    uniqueId = "${artist.id}_${disambiguation++}"
+                }
+                if (uniqueId != artist.id) artist.copy(id = uniqueId) else artist
+            }
+            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+            Log.d("SoundSyncPerf", "individual artist grouping in ${elapsedMs}ms (${uniqueArtists.size} individual artists)")
+            uniqueArtists
+        } catch (t: Throwable) {
+            Log.e("MainDjViewModel", "Error building artists: ${t.message}", t)
+            emptyList()
+        }
     }.flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
@@ -1184,6 +1236,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         trackAnalysisManager.triggerQueueProcessing()
         setupAutoBackupObserver()
         observeTrackMetadataUpdates()
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(15_000L)
+            try {
+                com.example.util.CrashProtectionManager.markStartupHealthy(getApplication())
+            } catch (_: Throwable) {}
+        }
     }
 
     private fun observeTrackMetadataUpdates() {
@@ -2206,6 +2264,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectLocalCategory(category: LocalCategory) {
         _selectedLocalCategory.value = category
+        try {
+            com.example.util.CrashProtectionManager.recordCurrentCategory(getApplication(), category)
+        } catch (_: Throwable) {}
         persistentSessionManager.updateLibraryUi(selectedLocalCategory = category.name)
         _selectedAlbum.value = null
         _selectedArtist.value = null

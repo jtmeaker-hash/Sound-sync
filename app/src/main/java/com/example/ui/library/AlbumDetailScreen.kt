@@ -148,11 +148,19 @@ fun AlbumDetailScreen(
             ) {
                 val context = LocalContext.current
                 var artworkBitmap by remember(album.id, album.artworkUri) {
-                    mutableStateOf(AlbumArtHelper.getCachedArtworkForAlbum(album, 512))
+                    mutableStateOf(
+                        try {
+                            AlbumArtHelper.getCachedArtworkForAlbum(album, 512)
+                        } catch (_: Throwable) {
+                            null
+                        }
+                    )
                 }
                 LaunchedEffect(album.id, album.artworkUri) {
                     if (artworkBitmap == null) {
-                        artworkBitmap = AlbumArtHelper.getArtworkForAlbum(context, album, 512)
+                        try {
+                            artworkBitmap = AlbumArtHelper.getArtworkForAlbum(context, album, 512)
+                        } catch (_: Throwable) {}
                     }
                 }
 
@@ -163,9 +171,10 @@ fun AlbumDetailScreen(
                         .background(DjSurfaceCard),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (artworkBitmap != null) {
+                    val bmp = artworkBitmap
+                    if (bmp != null && !bmp.isRecycled && bmp.width > 0 && bmp.height > 0) {
                         Image(
-                            bitmap = artworkBitmap!!.asImageBitmap(),
+                            bitmap = bmp.asImageBitmap(),
                             contentDescription = "${album.title} artwork",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
@@ -271,7 +280,9 @@ fun AlbumDetailScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(bottom = 96.dp)
         ) {
-            itemsIndexed(album.tracks, key = { _, track -> track.id }) { index, track ->
+            itemsIndexed(album.tracks, key = { index, track ->
+                if (track.id.isNotBlank()) "${track.id}_$index" else "track_${index}"
+            }) { index, track ->
                 AlbumTrackRow(
                     index = index + 1,
                     track = track,

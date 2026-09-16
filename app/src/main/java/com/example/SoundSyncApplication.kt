@@ -28,6 +28,11 @@ class SoundSyncApplication : Application() {
             try {
                 Log.e(TAG, "FATAL UNCAUGHT EXCEPTION on thread '${thread.name}' (id=${thread.id}): ${throwable.message}", throwable)
 
+                // Record crash for startup loop recovery
+                try {
+                    com.example.util.CrashProtectionManager.recordCrash(this)
+                } catch (_: Throwable) {}
+
                 // Write crash report to internal storage so it survives process death
                 val crashDir = File(filesDir, "crashes")
                 if (!crashDir.exists()) {

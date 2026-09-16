@@ -105,6 +105,7 @@ fun LocalLibraryScreen(
     val playbackPositionMs by viewModel.audioEngine.currentPositionMs.collectAsState()
     val unplayableTracks by viewModel.unplayableTracks.collectAsState()
     val isTrackGridView by viewModel.isTrackGridView.collectAsState()
+    val isScanning by viewModel.isScanning.collectAsState()
 
     // Add to Playlist bottom sheet
     if (showAddToPlaylistSheet != null) {
@@ -375,7 +376,8 @@ fun LocalLibraryScreen(
                     LocalCategory.ALBUMS -> {
                         AlbumsScreen(
                             albums = allAlbums,
-                            onSelectAlbum = { album -> viewModel.openAlbum(album) }
+                            onSelectAlbum = { album -> viewModel.openAlbum(album) },
+                            isScanning = isScanning
                         )
                     }
                     LocalCategory.ARTISTS -> {
