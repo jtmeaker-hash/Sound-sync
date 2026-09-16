@@ -907,14 +907,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 val totalSec = albumTracks.sumOf { it.durationSeconds.coerceAtLeast(0) }
 
                 // Deterministic representative artwork selection:
-                // Find member track with valid cached artwork, then embedded artwork, then first track
+                // Find member track with valid canonical artwork
                 val trackWithArt = albumTracks.firstOrNull {
-                    !it.artworkCachePath.isNullOrBlank() || (!it.artworkUrl.isNullOrBlank() && !it.artworkUrl.startsWith("http"))
-                } ?: albumTracks.firstOrNull { it.isEmbeddedInFile } ?: firstTrack
+                    com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(getApplication(), it)
+                }
 
-                val resolvedArtUri = trackWithArt.artworkCachePath?.takeIf { it.isNotBlank() }
-                    ?: trackWithArt.artworkUrl?.takeIf { it.isNotBlank() }
-                    ?: trackWithArt.filePath.takeIf { it.isNotBlank() }
+                val resolvedArtUri = if (trackWithArt != null) {
+                    trackWithArt.artworkCachePath?.takeIf { it.isNotBlank() }
+                        ?: trackWithArt.artworkUrl?.takeIf { it.isNotBlank() }
+                        ?: trackWithArt.filePath.takeIf { it.isNotBlank() }
+                } else null
 
                 // Stable unique composite ID derived from sanitized artist, title, and media/track ID
                 val artistSlug = artistName.lowercase().replace(Regex("[^a-z0-9_-]"), "_").take(32)

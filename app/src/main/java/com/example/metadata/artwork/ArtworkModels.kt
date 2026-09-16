@@ -3,6 +3,19 @@ package com.example.metadata.artwork
 import java.io.File
 
 /**
+ * Canonical artwork presence status for SoundSync tracks.
+ * Used universally across Local Library filters, Library Insights, Health Doctor,
+ * Smart Crates, and UI components to ensure 100% consistent artwork classification.
+ */
+enum class ArtworkStatus {
+    HAS_ARTWORK,
+    NO_ARTWORK;
+
+    val hasArtwork: Boolean get() = this == HAS_ARTWORK
+    val isMissing: Boolean get() = this == NO_ARTWORK
+}
+
+/**
  * High-precision lookup states for tracking artwork resolution progress and provenance.
  */
 enum class ArtworkLookupState {

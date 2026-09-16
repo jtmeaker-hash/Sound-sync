@@ -316,7 +316,7 @@ object CommandPaletteEngine {
             is PaletteFilter.Missing -> {
                 when (filter.fieldType) {
                     MissingFieldType.ARTWORK -> {
-                        track.artworkCachePath.isNullOrBlank() && track.artworkUrl.isNullOrBlank()
+                        com.example.metadata.artwork.CanonicalArtworkDetector.isMissingArtwork(null, track)
                     }
                     MissingFieldType.BPM -> {
                         !track.hasValidBpm || track.bpm <= 0.0

@@ -73,7 +73,7 @@ fun LibraryHealthScreen(
     val missingTitle = remember(tracks) { tracks.count { it.title.isBlank() || it.title.equals("Untitled", true) } }
     val missingArtist = remember(tracks) { tracks.count { it.artist.isBlank() || it.artist.equals("Unknown Artist", true) } }
     val missingAlbum = remember(tracks) { tracks.count { it.album.isBlank() || it.album.equals("Single", true) || it.album.equals("Unknown Album", true) } }
-    val missingArtwork = remember(tracks) { tracks.count { it.artworkCachePath.isNullOrBlank() && it.artworkUrl.isNullOrBlank() } }
+    val missingArtwork = remember(tracks) { tracks.count { com.example.metadata.artwork.CanonicalArtworkDetector.isMissingArtwork(context, it) } }
     val missingBpm = remember(tracks) { tracks.count { it.bpm <= 0.0 } }
     val missingKey = remember(tracks) { tracks.count { it.musicalKey.isBlank() && it.camelotKey.isBlank() } }
     val missingFingerprint = remember(tracks) { tracks.count { it.contentFingerprint.isBlank() } }

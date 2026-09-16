@@ -69,7 +69,7 @@ object SmartCrateEngine {
             }
             SmartField.FOLDER -> evaluateString(track.filePath, rule.operator, ruleVal)
             SmartField.HAS_ARTWORK -> {
-                val hasArt = !track.artworkCachePath.isNullOrBlank() || !track.artworkUrl.isNullOrBlank()
+                val hasArt = com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(null, track)
                 if (ruleVal.equals("false", ignoreCase = true) || ruleVal == "0") !hasArt else hasArt
             }
             SmartField.ENERGY -> evaluateNumeric(track.energyRating.toDouble(), rule.operator, ruleVal, secVal)

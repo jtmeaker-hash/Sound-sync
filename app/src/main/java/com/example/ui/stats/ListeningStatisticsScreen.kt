@@ -699,6 +699,7 @@ private fun StatsLibraryMetricsTab(
     allTracks: List<Track>,
     onInspectTrack: (Track) -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val totalTracks = allTracks.size
     val totalDurationSec = remember(allTracks) { allTracks.sumOf { it.durationSeconds.toLong() } }
     val totalSizeMb = remember(allTracks) { allTracks.sumOf { it.fileSizeMb } }
@@ -709,7 +710,7 @@ private fun StatsLibraryMetricsTab(
 
     val missingBpm = remember(allTracks) { allTracks.count { !it.hasValidBpm } }
     val missingKey = remember(allTracks) { allTracks.count { !it.hasValidKey } }
-    val missingArtwork = remember(allTracks) { allTracks.count { it.artworkUrl == null } }
+    val missingArtwork = remember(allTracks) { allTracks.count { com.example.metadata.artwork.CanonicalArtworkDetector.isMissingArtwork(context, it) } }
 
     val losslessCount = remember(allTracks) { allTracks.count { it.isLossless } }
     val mp3320Count = remember(allTracks) { allTracks.count { it.bitrateKbps >= 320 && !it.isLossless } }

@@ -18,6 +18,7 @@ class SoundSyncApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         setupGlobalCrashHandler()
         Log.i(TAG, "SoundSyncApplication initialized. SDK: ${Build.VERSION.SDK_INT}, PID: ${Process.myPid()}")
     }
@@ -75,5 +76,9 @@ class SoundSyncApplication : Application() {
 
     companion object {
         private const val TAG = "SoundSyncApp"
+
+        @Volatile
+        var instance: SoundSyncApplication? = null
+            private set
     }
 }

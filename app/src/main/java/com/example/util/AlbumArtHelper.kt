@@ -338,6 +338,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
         // Invalidate fast artwork check cache for this track
         val keysToRemove = usableArtworkCache.keys.filter { it.startsWith("${trackId}_") || it.startsWith("${trackId}:") }
         keysToRemove.forEach { usableArtworkCache.remove(it) }
+        com.example.metadata.artwork.CanonicalArtworkDetector.invalidate(trackId)
 
         if (!artist.isNullOrBlank() && !album.isNullOrBlank()) {
             invalidateAlbum(artist, album)
@@ -364,124 +365,32 @@ object AlbumArtHelper : CanonicalArtworkResolver {
         memoryCache.evictAll()
         fallbackCache.evictAll()
         usableArtworkCache.clear()
+        com.example.metadata.artwork.CanonicalArtworkDetector.clearCache()
     }
 
     /**
-     * Determines whether [track] has usable cover artwork across all supported sources:
-     * 1. Embedded artwork inside the audio file
-     * 2. Artwork previously downloaded by the metadata/artwork scanner
-     * 3. Manually selected artwork
-     * 4. Cached artwork on disk (persistent ArtworkCache)
-     * 5. Artwork paths/URIs stored in SoundSync's database
-     * 6. MediaStore album art
-     * 7. Directory cover art (cover.jpg, folder.jpg)
-     *
-     * Returns false if SoundSync's normal artwork resolver would otherwise display the generic vinyl placeholder.
-     * Caches results in memory to avoid repeated disk reads.
+     * Determines whether [track] has usable cover artwork across all supported sources.
+     * Delegates directly to [CanonicalArtworkDetector].
      */
     override fun hasUsableCoverArtwork(context: Context, track: Track): Boolean {
-        // Fast path 0: Check manual override
-        usableArtworkCache["${track.id}_override"]?.let { return it }
+        return com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(context, track)
+    }
 
-        // Fast path 1: In-memory cache keyed by track ID and artwork properties
-        val cacheKey = "${track.id}:${track.artworkCachePath.orEmpty()}:${track.artworkUrl.orEmpty()}:${track.artworkSource.orEmpty()}:${track.metadataWriteState}:${track.fileModifiedTimestamp}"
-        usableArtworkCache[cacheKey]?.let { return it }
-
-        // 1. User-selected or persistent DB cache file
-        if (!track.artworkCachePath.isNullOrBlank()) {
-            val file = File(track.artworkCachePath)
-            if (file.exists() && file.length() > 0) {
-                usableArtworkCache[cacheKey] = true
-                return true
-            }
-        }
-
-        // 2. Artwork URL / Content URI / Local file URL
-        if (!track.artworkUrl.isNullOrBlank()) {
-            val url = track.artworkUrl
-            if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("content://")) {
-                usableArtworkCache[cacheKey] = true
-                return true
-            }
-            val actualPath = if (url.startsWith("file://")) Uri.parse(url).path else url
-            if (actualPath != null && File(actualPath).let { it.exists() && it.length() > 0 }) {
-                usableArtworkCache[cacheKey] = true
-                return true
-            }
-        }
-
-        // 3. Persistent disk cache check
-        try {
-            val artworkCache = ArtworkCache(context)
-            if (artworkCache.getCachedArtworkFileForTrack(track.id) != null) {
-                usableArtworkCache[cacheKey] = true
-                return true
-            }
-            if (track.artist.isNotBlank() && !track.album.isNullOrBlank() && track.album != "Single") {
-                if (artworkCache.getCachedArtworkFile(track.artist, track.album) != null) {
-                    usableArtworkCache[cacheKey] = true
-                    return true
-                }
-            }
-        } catch (_: Exception) {}
-
-        // 4. Artwork source / confirmed metadata flags
-        if (track.artworkSource in listOf("Embedded Tag", "Embedded", "Manual Selection", "User Selected", "Custom", "Manual Cover", "Apple iTunes", "TheAudioDB")) {
-            if (track.artworkSource == "Embedded Tag" || track.artworkSource == "Embedded") {
-                usableArtworkCache[cacheKey] = true
-                return true
-            }
-        }
-        if (track.isEmbeddedInFile || track.metadataWriteState == com.example.model.MetadataWriteState.ARTWORK_SAVED.name) {
-            usableArtworkCache[cacheKey] = true
-            return true
-        }
-
-        // 5. MediaStore external audio albumart content provider
-        if (track.mediaStoreId != null) {
-            try {
-                val albumArtUri = Uri.parse("content://media/external/audio/media/${track.mediaStoreId}/albumart")
-                context.contentResolver.openFileDescriptor(albumArtUri, "r")?.use {
-                    usableArtworkCache[cacheKey] = true
-                    return true
-                }
-            } catch (_: Exception) {}
-        }
-
-        // 6. Embedded audio file tags (ID3v2, Vorbis, MP4)
-        if (track.filePath.isNotBlank()) {
-            try {
-                val embedded = AudioEmbeddedMetadataReader.read(context, track.filePath, includeArtworkBytes = false)
-                if (embedded.hasEmbeddedArtwork) {
-                    usableArtworkCache[cacheKey] = true
-                    return true
-                }
-            } catch (_: Exception) {}
-
-            // 7. Directory cover art (cover.jpg, folder.jpg, album.jpg, front.jpg)
-            try {
-                val parentDir = File(track.filePath).parentFile
-                if (parentDir != null && parentDir.exists() && parentDir.isDirectory) {
-                    val patterns = listOf("cover.", "folder.", "album.", "front.", "art.")
-                    val hasFolderArt = parentDir.listFiles()?.any { f ->
-                        f.isFile && f.length() > 0 && patterns.any { p -> f.name.lowercase().startsWith(p) }
-                    } ?: false
-                    if (hasFolderArt) {
-                        usableArtworkCache[cacheKey] = true
-                        return true
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-
-        usableArtworkCache[cacheKey] = false
-        return false
+    /**
+     * Canonical status detection method defined in CanonicalArtworkResolver.
+     */
+    override fun detectArtworkStatus(context: Context, track: Track): com.example.metadata.artwork.ArtworkStatus {
+        return com.example.metadata.artwork.CanonicalArtworkDetector.detectArtworkStatus(context, track)
     }
 
     fun setTrackHasCoverArt(trackId: String, hasArt: Boolean) {
         val keysToRemove = usableArtworkCache.keys.filter { it.startsWith("${trackId}_") || it.startsWith("${trackId}:") }
         keysToRemove.forEach { usableArtworkCache.remove(it) }
         usableArtworkCache["${trackId}_override"] = hasArt
+        com.example.metadata.artwork.CanonicalArtworkDetector.setTrackArtworkStatus(
+            trackId,
+            if (hasArt) com.example.metadata.artwork.ArtworkStatus.HAS_ARTWORK else com.example.metadata.artwork.ArtworkStatus.NO_ARTWORK
+        )
     }
 
     fun decodeStreamToBitmap(inputStream: InputStream, targetSize: Int): Bitmap? {

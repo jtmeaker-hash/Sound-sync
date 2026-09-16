@@ -144,7 +144,7 @@ class LibraryBrain private constructor(
                             trackId = t.id,
                             overallStatus = overall,
                             metadataStatus = if (t.artist != "Unknown Artist" && t.title != "Unknown Title") BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
-                            artworkStatus = if (!t.artworkCachePath.isNullOrBlank()) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
+                            artworkStatus = if (com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(context, t.toTrack())) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
                             bpmStatus = if (t.bpm > 0.0) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
                             keyStatus = if (t.musicalKey.isNotBlank()) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
                             waveformStatus = if (t.analysisState == AnalysisState.COMPLETE.name) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
@@ -700,13 +700,13 @@ class LibraryBrain private constructor(
             if (currentStatus.artworkStatus != BrainSubStatus.COMPLETE.name) {
                 currentStatus = currentStatus.copy(artworkStatus = BrainSubStatus.RUNNING.name)
                 try {
-                    val hasArt = !currentTrack.artworkCachePath.isNullOrBlank() &&
-                                 File(currentTrack.artworkCachePath).exists()
+                    val hasArt = com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(context, currentTrack)
                     if (hasArt) {
                         currentStatus = currentStatus.copy(artworkStatus = BrainSubStatus.COMPLETE.name)
                     } else {
-                        val art = AlbumArtHelper.getArtworkForTrack(context, currentTrack, 512)
-                        if (art != null) {
+                        AlbumArtHelper.getArtworkForTrack(context, currentTrack, 512)
+                        val nowHasArt = com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(context, currentTrack)
+                        if (nowHasArt) {
                             currentStatus = currentStatus.copy(artworkStatus = BrainSubStatus.COMPLETE.name)
                         } else {
                             currentStatus = currentStatus.copy(artworkStatus = BrainSubStatus.SKIPPED.name)

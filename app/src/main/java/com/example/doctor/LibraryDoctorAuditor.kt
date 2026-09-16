@@ -132,16 +132,9 @@ class LibraryDoctorAuditor(
             }
 
             // --- CATEGORY 1: MISSING ARTWORK ---
-            val hasArt = !track.artworkCachePath.isNullOrBlank() || !track.artworkUrl.isNullOrBlank()
-            var artFileMissing = false
-            if (!track.artworkCachePath.isNullOrBlank()) {
-                val artFile = File(track.artworkCachePath)
-                if (!artFile.exists() || artFile.length() == 0L) {
-                    artFileMissing = true
-                }
-            }
+            val hasArt = com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(context, track)
 
-            if (!hasArt || artFileMissing) {
+            if (!hasArt) {
                 missingArtworkCount++
                 trackHasIssue = true
                 val issueId = "missing_art_${track.id}"
@@ -155,11 +148,11 @@ class LibraryDoctorAuditor(
                         artist = track.artist,
                         album = track.album,
                         filePath = track.filePath,
-                        problem = if (artFileMissing) "Cached artwork file is missing or zero-length" else "Front cover artwork not indexed",
-                        evidence = if (artFileMissing) "File path ${track.artworkCachePath} no longer exists on disk" else "Neither embedded nor remote artwork URL is available",
+                        problem = "Front cover artwork not available or broken",
+                        evidence = "No valid embedded, cached, local file, or provider artwork found",
                         recommendedAction = "Fetch artwork via Library Brain and online metadata providers",
                         confidence = 0.95f,
-                        currentValue = track.artworkCachePath ?: "None",
+                        currentValue = track.artworkCachePath ?: track.artworkUrl ?: "None",
                         proposedValue = "Fetch via Library Brain",
                         isSafeAutoRepair = true,
                         severity = DoctorIssueSeverity.INFO,

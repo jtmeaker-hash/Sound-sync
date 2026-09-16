@@ -48,18 +48,15 @@ interface CanonicalArtworkResolver {
     fun invalidateTrack(trackId: String, artist: String? = null, album: String? = null)
 
     /**
-     * Determines whether the track has usable cover artwork across all supported sources:
-     * - Embedded artwork inside the audio file
-     * - Artwork previously downloaded by the metadata/artwork scanner
-     * - Manually selected artwork
-     * - Cached artwork on disk
-     * - Artwork paths/URIs stored in SoundSync's database
-     * - MediaStore album art
-     * - Folder artwork (cover.jpg, folder.jpg)
-     *
+     * Determines whether the track has usable cover artwork across all supported sources.
      * Returns false if SoundSync's normal artwork resolver would otherwise display generic placeholder art.
      */
     fun hasUsableCoverArtwork(context: Context, track: Track): Boolean
+
+    /**
+     * Returns the canonical artwork presence status (HAS_ARTWORK vs NO_ARTWORK).
+     */
+    fun detectArtworkStatus(context: Context, track: Track): ArtworkStatus
 
     /**
      * Invalidates memory cache and emits an invalidation event for an album.

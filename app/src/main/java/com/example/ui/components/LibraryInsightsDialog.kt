@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -62,8 +63,9 @@ fun LibraryInsightsDialog(
     onOpenSmartCrates: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val report = remember(allTracks.size) {
-        SoundSyncIntelligenceEngine.getLibraryHealthInsights(allTracks)
+    val context = LocalContext.current
+    val report = remember(allTracks) {
+        SoundSyncIntelligenceEngine.getLibraryHealthInsights(allTracks, context)
     }
 
     Dialog(onDismissRequest = onDismiss) {

@@ -190,7 +190,7 @@ fun SongsScreen(
     var showCoverArtFilterMenu by remember { mutableStateOf(false) }
 
     val noCoverArtCount = remember(tracks) {
-        tracks.count { !AlbumArtHelper.hasUsableCoverArtwork(context, it) }
+        tracks.count { com.example.metadata.artwork.CanonicalArtworkDetector.isMissingArtwork(context, it) }
     }
     val hasCoverArtCount = remember(tracks, noCoverArtCount) {
         (tracks.size - noCoverArtCount).coerceAtLeast(0)
@@ -202,8 +202,8 @@ fun SongsScreen(
             val matchesAvailability = !hideUnavailableTracks || track.isAvailable
             val matchesCoverArt = when (activeCoverArtFilter) {
                 CoverArtFilter.ALL -> true
-                CoverArtFilter.NO_COVER_ART -> !AlbumArtHelper.hasUsableCoverArtwork(context, track)
-                CoverArtFilter.HAS_COVER_ART -> AlbumArtHelper.hasUsableCoverArtwork(context, track)
+                CoverArtFilter.NO_COVER_ART -> com.example.metadata.artwork.CanonicalArtworkDetector.isMissingArtwork(context, track)
+                CoverArtFilter.HAS_COVER_ART -> com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(context, track)
             }
             val matchesQuery = q.isBlank() ||
                 track.title.lowercase().contains(q) ||

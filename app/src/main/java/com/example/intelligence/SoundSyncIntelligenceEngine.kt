@@ -254,7 +254,7 @@ object SoundSyncIntelligenceEngine {
     // Part G: Factual Library Health Insights
     // ──────────────────────────────────────────────────────────────────────────
 
-    fun getLibraryHealthInsights(library: List<Track>): LibraryHealthReport {
+    fun getLibraryHealthInsights(library: List<Track>, context: android.content.Context? = null): LibraryHealthReport {
         if (library.isEmpty()) {
             return LibraryHealthReport(0, 0, 0, 0, 0, 0, 0, 0, "None", emptyList(), emptyList())
         }
@@ -276,7 +276,7 @@ object SoundSyncIntelligenceEngine {
 
         for (t in library) {
             if (t.artist.isBlank() || t.artist.equals("Unknown Artist", ignoreCase = true)) missingArtist++
-            if (t.artworkCachePath.isNullOrBlank() && t.artworkUrl.isNullOrBlank()) missingArt++
+            if (com.example.metadata.artwork.CanonicalArtworkDetector.isMissingArtwork(context, t)) missingArt++
             if (t.bpm <= 0.0 || (t.musicalKey.isBlank() && t.camelotKey.isBlank())) missingBpmKey++
             if (t.rating == 0) neverPlayed++
             if (t.dateAdded <= oneYearAgo) unplayed1Year++
@@ -398,7 +398,7 @@ object SoundSyncIntelligenceEngine {
         var trust = 0.5f
         if (track.title.isNotBlank() && !track.title.startsWith("Track ")) trust += 0.2f
         if (track.artist.isNotBlank() && !track.artist.equals("Unknown Artist", ignoreCase = true)) trust += 0.2f
-        if (!track.artworkCachePath.isNullOrBlank() || !track.artworkUrl.isNullOrBlank()) trust += 0.1f
+        if (com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(null, track)) trust += 0.1f
 
         val identityConfidence = if (track.contentFingerprint.isNotBlank()) 0.95f else trust
 
