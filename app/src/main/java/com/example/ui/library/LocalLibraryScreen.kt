@@ -77,6 +77,7 @@ fun LocalLibraryScreen(
     val folderTree by viewModel.folderTree.collectAsState()
     val expandedFolderIds by viewModel.expandedFolderIds.collectAsState()
     val hideUnavailableTracks by viewModel.hideUnavailableTracks.collectAsState()
+    val coverArtFilter by viewModel.coverArtFilter.collectAsState()
 
     val selectedAlbum by viewModel.selectedAlbum.collectAsState()
     val selectedArtist by viewModel.selectedArtist.collectAsState()
@@ -350,6 +351,8 @@ fun LocalLibraryScreen(
                             isPlaying = isPlaying,
                             hideUnavailableTracks = hideUnavailableTracks,
                             onToggleHideUnavailable = { viewModel.toggleHideUnavailableTracks() },
+                            coverArtFilter = coverArtFilter,
+                            onSetCoverArtFilter = { viewModel.setCoverArtFilter(it) },
                             isTrackGridView = isTrackGridView,
                             onToggleTrackGridView = { viewModel.toggleTrackGridView() },
                             onPlayTrack = { track -> viewModel.playTrack(track) },

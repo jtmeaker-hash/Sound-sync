@@ -248,6 +248,22 @@ fun TrackInspectorScreen(
                     }
                 },
                 onFindCover = { showFindCoverDialog = true },
+                onRemoveCover = {
+                    val updated = currentTrack.copy(
+                        artworkCachePath = null,
+                        artworkUrl = null,
+                        artworkSource = null,
+                        userConfirmedMetadata = false,
+                        metadataWriteState = com.example.model.MetadataWriteState.NOT_ANALYSED.name
+                    )
+                    currentTrack = updated
+                    coroutineScope.launch(Dispatchers.IO) {
+                        trackDao.updateTrack(TrackEntity.fromTrack(updated))
+                        com.example.metadata.ArtworkCache(context).evictArtworkForTrack(updated.id)
+                        com.example.util.AlbumArtHelper.invalidateTrack(updated.id, updated.artist, updated.album)
+                    }
+                    Toast.makeText(context, "Cover artwork removed", Toast.LENGTH_SHORT).show()
+                },
                 onEmbedInFile = {
                     Toast.makeText(context, "Embedding metadata into audio file...", Toast.LENGTH_SHORT).show()
                     val writingState = if (currentTrack.artworkCachePath != null) {
@@ -799,7 +815,8 @@ private fun InspectorHeaderCard(
     track: Track,
     onRatingChanged: (Int) -> Unit,
     onFindCover: (() -> Unit)? = null,
-    onEmbedInFile: (() -> Unit)? = null
+    onEmbedInFile: (() -> Unit)? = null,
+    onRemoveCover: (() -> Unit)? = null
 ) {
     val isPro = SoundSyncTheme.isPro
     val theme = SoundSyncTheme.current
@@ -1019,6 +1036,19 @@ private fun InspectorHeaderCard(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
                                 .clickable { onFindCover.invoke() }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+
+                    if (onRemoveCover != null && (artworkModel != null || !track.artworkCachePath.isNullOrBlank() || !track.artworkUrl.isNullOrBlank())) {
+                        Text(
+                            text = "Remove Cover",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFFF5252),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { onRemoveCover.invoke() }
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }

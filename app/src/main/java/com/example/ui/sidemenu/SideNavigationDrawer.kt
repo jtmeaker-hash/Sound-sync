@@ -91,11 +91,14 @@ import com.example.util.ExternalAppOpener
 
 /**
  * SoundSync Workstation sidebar navigation drawer.
- * Grouped strictly into 4 professional categories inspired by Pioneer rekordbox:
- * - MUSIC: Library & Scanning, Metadata & Artwork, Listening Stats, Spotify, SoundCloud, Suno, ACE Studio
+ * Grouped into professional categories:
+ * - MUSIC: DJ Prep, Listening Stats, Car Mode, MD Approval Tool
+ * - AUDIO: Multipoint EQ, HAAS Surround, Crossfade and Transitions, Playback & Behaviour
+ * - STREAMING: Spotify, SoundCloud
+ * - AI ASSISTANTS: Suno AI Music, ACE Studio
  * - TOOLS: Metronome, Tap BPM, Key Converter, RMS Meter, Clipping Detector, DR Meter
- * - AUDIO: Multipoint EQ, Haas Surround, Crossfade & Transitions, Playback Behaviour
- * - SYSTEM: Appearance & Density, SoundSync GitHub, Check for Updates
+ * - SETTINGS: Library Doctor, Backup & Restore, Appearance & Density, Car Mode & Bluetooth, Metadata & Artwork, Storage & Storage Services
+ * - SYSTEM: GitHub Repository, Check for Updates, About SoundSync, Developer Diagnostics, SoundSync Self-Test
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -112,8 +115,11 @@ fun SideNavigationDrawerContent(
     val expandedMap = remember {
         mutableStateMapOf(
             "MUSIC" to true,
-            "TOOLS" to true,
             "AUDIO" to true,
+            "STREAMING" to true,
+            "AI ASSISTANTS" to true,
+            "TOOLS" to true,
+            "SETTINGS" to true,
             "SYSTEM" to false
         )
     }
@@ -212,111 +218,12 @@ fun SideNavigationDrawerContent(
                 // ── 1. MUSIC ─────────────────────────────────────
                 ProCategoryHeader(
                     title = "MUSIC",
-                    badge = "9 ITEMS",
+                    badge = "4 ITEMS",
                     isExpanded = expandedMap["MUSIC"] == true,
                     onToggle = { expandedMap["MUSIC"] = !(expandedMap["MUSIC"] ?: false) }
                 )
                 AnimatedVisibility(
                     visible = expandedMap["MUSIC"] == true,
-                    enter = expandVertically(),
-                    exit = shrinkVertically()
-                ) {
-                    Column(modifier = Modifier.padding(start = 8.dp)) {
-                        ProDrawerItem(
-                            title = "Library Doctor",
-                            subtitle = "Audit health, diagnose issues & safe automated repairs",
-                            icon = Icons.Default.Healing,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.LibraryDoctor)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "Scanning & Storage Sources",
-                            subtitle = "Mount points, MediaStore index, USB",
-                            icon = Icons.Default.LibraryMusic,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.LibrarySettings)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "Metadata & Artwork",
-                            subtitle = "Apple iTunes Search, TheAudioDB & local DSP",
-                            icon = Icons.Default.AutoAwesome,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.MetadataSettings)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "MD Approval Tool",
-                            subtitle = "Review & approve proposed metadata changes",
-                            icon = Icons.Default.Verified,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.MetadataReviewInbox)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "Listening Statistics",
-                            subtitle = "Play history, top tracks & artists",
-                            icon = Icons.Default.Equalizer,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.ListeningStats)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "Spotify",
-                            subtitle = "Launch external Spotify client",
-                            icon = Icons.Default.Cloud,
-                            onClick = {
-                                onCloseDrawer()
-                                ExternalAppOpener.openSpotify(context)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "SoundCloud",
-                            subtitle = "Launch SoundCloud streaming",
-                            icon = Icons.Default.Cloud,
-                            onClick = {
-                                onCloseDrawer()
-                                ExternalAppOpener.openSoundCloud(context)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "Suno AI Music",
-                            subtitle = "AI music creation platform",
-                            icon = Icons.Default.AutoAwesome,
-                            onClick = {
-                                onCloseDrawer()
-                                ExternalAppOpener.openSuno(context)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "ACE Studio Vocals",
-                            subtitle = "AI singing synthesizer & voice modeling",
-                            icon = Icons.Default.Mic,
-                            onClick = {
-                                onCloseDrawer()
-                                ExternalAppOpener.openAceStudio(context)
-                            }
-                        )
-                    }
-                }
-
-                HorizontalDivider(color = theme.divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
-
-                // ── 2. TOOLS ─────────────────────────────────────
-                ProCategoryHeader(
-                    title = "TOOLS",
-                    badge = "7 TOOLS",
-                    isExpanded = expandedMap["TOOLS"] == true,
-                    onToggle = { expandedMap["TOOLS"] = !(expandedMap["TOOLS"] ?: false) }
-                )
-                AnimatedVisibility(
-                    visible = expandedMap["TOOLS"] == true,
                     enter = expandVertically(),
                     exit = shrinkVertically()
                 ) {
@@ -330,6 +237,177 @@ fun SideNavigationDrawerContent(
                                 onSelectDestination(SideMenuDestination.DjPrep)
                             }
                         )
+                        ProDrawerItem(
+                            title = "Listening Stats",
+                            subtitle = "Play history, top tracks & artists",
+                            icon = Icons.Default.Equalizer,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.ListeningStats)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "Car Mode",
+                            subtitle = "Distraction-free, glanceable vehicle dashboard",
+                            icon = Icons.Default.DirectionsCar,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.CarMode)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "MD Approval Tool",
+                            subtitle = "Review & approve proposed metadata changes",
+                            icon = Icons.Default.Verified,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.MetadataReviewInbox)
+                            }
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = theme.divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
+
+                // ── 2. AUDIO ─────────────────────────────────────
+                ProCategoryHeader(
+                    title = "AUDIO",
+                    badge = "4 ITEMS",
+                    isExpanded = expandedMap["AUDIO"] == true,
+                    onToggle = { expandedMap["AUDIO"] = !(expandedMap["AUDIO"] ?: false) }
+                )
+                AnimatedVisibility(
+                    visible = expandedMap["AUDIO"] == true,
+                    enter = expandVertically(),
+                    exit = shrinkVertically()
+                ) {
+                    Column(modifier = Modifier.padding(start = 8.dp)) {
+                        ProDrawerItem(
+                            title = "Multipoint EQ",
+                            subtitle = "3-band parametric DSP tone controls",
+                            icon = Icons.Default.Tune,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.Eq)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "HAAS Surround",
+                            subtitle = "Binaural stereo-width acoustic delay effect",
+                            icon = Icons.Default.SurroundSound,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.HaasSurround)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "Crossfade and Transitions",
+                            subtitle = "Track overlap duration (0-12s)",
+                            icon = Icons.Default.Tune,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.PlaybackSettings)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "Playback & Behaviour",
+                            subtitle = "Repeat mode, shuffle, and player preferences",
+                            icon = Icons.Default.VolumeUp,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.PlaybackSettings)
+                            }
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = theme.divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
+
+                // ── 3. STREAMING ─────────────────────────────────
+                ProCategoryHeader(
+                    title = "STREAMING",
+                    badge = "2 APPS",
+                    isExpanded = expandedMap["STREAMING"] == true,
+                    onToggle = { expandedMap["STREAMING"] = !(expandedMap["STREAMING"] ?: false) }
+                )
+                AnimatedVisibility(
+                    visible = expandedMap["STREAMING"] == true,
+                    enter = expandVertically(),
+                    exit = shrinkVertically()
+                ) {
+                    Column(modifier = Modifier.padding(start = 8.dp)) {
+                        ProDrawerItem(
+                            title = "Spotify",
+                            subtitle = "Launch external Spotify client",
+                            icon = Icons.Default.Cloud,
+                            onClick = {
+                                onCloseDrawer()
+                                ExternalAppOpener.openSpotify(context)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "Soundcloud",
+                            subtitle = "Launch SoundCloud streaming",
+                            icon = Icons.Default.Cloud,
+                            onClick = {
+                                onCloseDrawer()
+                                ExternalAppOpener.openSoundCloud(context)
+                            }
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = theme.divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
+
+                // ── 4. AI ASSISTANTS ─────────────────────────────
+                ProCategoryHeader(
+                    title = "AI ASSISTANTS",
+                    badge = "2 APPS",
+                    isExpanded = expandedMap["AI ASSISTANTS"] == true,
+                    onToggle = { expandedMap["AI ASSISTANTS"] = !(expandedMap["AI ASSISTANTS"] ?: false) }
+                )
+                AnimatedVisibility(
+                    visible = expandedMap["AI ASSISTANTS"] == true,
+                    enter = expandVertically(),
+                    exit = shrinkVertically()
+                ) {
+                    Column(modifier = Modifier.padding(start = 8.dp)) {
+                        ProDrawerItem(
+                            title = "Suno AI Music",
+                            subtitle = "AI music creation platform",
+                            icon = Icons.Default.AutoAwesome,
+                            onClick = {
+                                onCloseDrawer()
+                                ExternalAppOpener.openSuno(context)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "ACE Studio",
+                            subtitle = "AI singing synthesizer & voice modeling",
+                            icon = Icons.Default.Mic,
+                            onClick = {
+                                onCloseDrawer()
+                                ExternalAppOpener.openAceStudio(context)
+                            }
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = theme.divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
+
+                // ── 5. TOOLS ─────────────────────────────────────
+                ProCategoryHeader(
+                    title = "TOOLS",
+                    badge = "6 TOOLS",
+                    isExpanded = expandedMap["TOOLS"] == true,
+                    onToggle = { expandedMap["TOOLS"] = !(expandedMap["TOOLS"] ?: false) }
+                )
+                AnimatedVisibility(
+                    visible = expandedMap["TOOLS"] == true,
+                    enter = expandVertically(),
+                    exit = shrinkVertically()
+                ) {
+                    Column(modifier = Modifier.padding(start = 8.dp)) {
                         ProDrawerItem(
                             title = "Metronome",
                             subtitle = "Sample-accurate rhythmic hardware click",
@@ -389,91 +467,28 @@ fun SideNavigationDrawerContent(
 
                 HorizontalDivider(color = theme.divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
 
-                // ── 3. AUDIO ─────────────────────────────────────
+                // ── 6. SETTINGS ──────────────────────────────────
                 ProCategoryHeader(
-                    title = "AUDIO",
+                    title = "SETTINGS",
                     badge = "6 ITEMS",
-                    isExpanded = expandedMap["AUDIO"] == true,
-                    onToggle = { expandedMap["AUDIO"] = !(expandedMap["AUDIO"] ?: false) }
+                    isExpanded = expandedMap["SETTINGS"] == true,
+                    onToggle = { expandedMap["SETTINGS"] = !(expandedMap["SETTINGS"] ?: false) }
                 )
                 AnimatedVisibility(
-                    visible = expandedMap["AUDIO"] == true,
+                    visible = expandedMap["SETTINGS"] == true,
                     enter = expandVertically(),
                     exit = shrinkVertically()
                 ) {
                     Column(modifier = Modifier.padding(start = 8.dp)) {
                         ProDrawerItem(
-                            title = "Car Mode",
-                            subtitle = "Distraction-free, glanceable vehicle dashboard",
-                            icon = Icons.Default.DirectionsCar,
+                            title = "Library Doctor",
+                            subtitle = "Audit health, diagnose issues & safe automated repairs",
+                            icon = Icons.Default.Healing,
                             onClick = {
                                 onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.CarMode)
+                                onSelectDestination(SideMenuDestination.LibraryDoctor)
                             }
                         )
-                        ProDrawerItem(
-                            title = "Multipoint EQ",
-                            subtitle = "3-band parametric DSP tone controls",
-                            icon = Icons.Default.Tune,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.Eq)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "Haas Surround",
-                            subtitle = "Binaural stereo-width acoustic delay effect",
-                            icon = Icons.Default.SurroundSound,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.HaasSurround)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "Crossfade & Transitions",
-                            subtitle = "Track overlap duration (0-12s)",
-                            icon = Icons.Default.Tune,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.PlaybackSettings)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "Playback Behaviour",
-                            subtitle = "Repeat mode, shuffle, and player preferences",
-                            icon = Icons.Default.VolumeUp,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.PlaybackSettings)
-                            }
-                        )
-                        ProDrawerItem(
-                            title = "Car Mode & Bluetooth",
-                            subtitle = "Vehicle pairing, driving profiles, and audio tuning",
-                            icon = Icons.Default.DirectionsCar,
-                            onClick = {
-                                onCloseDrawer()
-                                onSelectDestination(SideMenuDestination.CarModeSettings)
-                            }
-                        )
-                    }
-                }
-
-                HorizontalDivider(color = theme.divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
-
-                // ── 4. SYSTEM ────────────────────────────────────
-                ProCategoryHeader(
-                    title = "SYSTEM",
-                    badge = "4 ITEMS",
-                    isExpanded = expandedMap["SYSTEM"] == true,
-                    onToggle = { expandedMap["SYSTEM"] = !(expandedMap["SYSTEM"] ?: false) }
-                )
-                AnimatedVisibility(
-                    visible = expandedMap["SYSTEM"] == true,
-                    enter = expandVertically(),
-                    exit = shrinkVertically()
-                ) {
-                    Column(modifier = Modifier.padding(start = 8.dp)) {
                         ProDrawerItem(
                             title = "Backup & Restore",
                             subtitle = "Survives app uninstall, auto-backup, export/import",
@@ -492,6 +507,51 @@ fun SideNavigationDrawerContent(
                                 onSelectDestination(SideMenuDestination.AppearanceSettings)
                             }
                         )
+                        ProDrawerItem(
+                            title = "Car Mode & Bluetooth",
+                            subtitle = "Vehicle pairing, driving profiles, and audio tuning",
+                            icon = Icons.Default.DirectionsCar,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.CarModeSettings)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "Metadata & Artwork",
+                            subtitle = "Apple iTunes Search, TheAudioDB & local DSP",
+                            icon = Icons.Default.AutoAwesome,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.MetadataSettings)
+                            }
+                        )
+                        ProDrawerItem(
+                            title = "Storage & Storage Services",
+                            subtitle = "Mount points, MediaStore index, USB",
+                            icon = Icons.Default.LibraryMusic,
+                            onClick = {
+                                onCloseDrawer()
+                                onSelectDestination(SideMenuDestination.LibrarySettings)
+                            }
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = theme.divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
+
+                // ── 7. SYSTEM ────────────────────────────────────
+                ProCategoryHeader(
+                    title = "SYSTEM",
+                    badge = if (isDeveloperMode) "5 ITEMS" else "3 ITEMS",
+                    isExpanded = expandedMap["SYSTEM"] == true,
+                    onToggle = { expandedMap["SYSTEM"] = !(expandedMap["SYSTEM"] ?: false) }
+                )
+                AnimatedVisibility(
+                    visible = expandedMap["SYSTEM"] == true,
+                    enter = expandVertically(),
+                    exit = shrinkVertically()
+                ) {
+                    Column(modifier = Modifier.padding(start = 8.dp)) {
                         ProDrawerItem(
                             title = "GitHub Repository",
                             subtitle = "jtmeaker-hash/Sound-sync repository",

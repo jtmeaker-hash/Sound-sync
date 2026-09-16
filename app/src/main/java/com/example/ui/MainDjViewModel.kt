@@ -1110,6 +1110,13 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         persistentSessionManager.updateLibraryUi(hideUnavailableTracks = hide)
     }
 
+    private val _coverArtFilter = MutableStateFlow(com.example.model.CoverArtFilter.ALL)
+    val coverArtFilter: StateFlow<com.example.model.CoverArtFilter> = _coverArtFilter.asStateFlow()
+
+    fun setCoverArtFilter(filter: com.example.model.CoverArtFilter) {
+        _coverArtFilter.value = filter
+    }
+
     // Filtered tracks for Library view
     val filteredTracks: StateFlow<List<Track>> = combine(
         allTracks,

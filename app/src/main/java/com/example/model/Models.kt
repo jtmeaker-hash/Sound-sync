@@ -35,6 +35,12 @@ enum class SyncState {
     MODIFIED_OFFLINE
 }
 
+enum class CoverArtFilter(val label: String) {
+    ALL("All Tracks"),
+    NO_COVER_ART("No Cover Art"),
+    HAS_COVER_ART("Has Cover Art")
+}
+
 enum class AudioQualityRating(val label: String, val description: String, val cutoffKhz: Float, val isLossless: Boolean) {
     STUDIO_LOSSLESS("24-bit Hi-Res FLAC", "No spectral cutoffs. Full frequencies up to 24kHz+", 24.0f, true),
     TRUE_LOSSLESS("16-bit Lossless FLAC", "Full dynamic range. Pure uncompressed acoustic frequency up to 22.05kHz", 22.0f, true),
