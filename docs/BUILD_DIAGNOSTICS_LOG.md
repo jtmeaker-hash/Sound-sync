@@ -1329,3 +1329,70 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 35119339701 — FAIL
+
+- **Date:** 2026-09-16T16:08:53.517502+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`ad02cb8048`](https://github.com/jtmeaker-hash/Sound-sync/commit/ad02cb804881e24aeec96b3bd03c91bb988efdee)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35119339701)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `SoundSyncStep3LyricsIntelligenceTest > testGetLibraryHealthInsights FAILED`
+- `java.lang.AssertionError at SoundSyncStep3LyricsIntelligenceTest.kt:443`
+- `501 tests completed, 1 failed, 2 skipped`
+- `> Task :app:testDebugUnitTest FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+- `Execution failed for task ':app:testDebugUnitTest'.`
+- `BUILD FAILED in 4m 58s`
+
+### Summary of changes
+
+feat: centralize artwork detection logic
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+ad02cb8 feat: centralize artwork detection logic
+ .../main/java/com/example/SoundSyncApplication.kt  |   5 +
+ .../main/java/com/example/brain/LibraryBrain.kt    |  10 +-
+ .../com/example/command/CommandPaletteEngine.kt    |   2 +-
+ .../com/example/doctor/LibraryDoctorAuditor.kt     |  17 +-
+ .../intelligence/SoundSyncIntelligenceEngine.kt    |   6 +-
+ .../com/example/metadata/artwork/ArtworkModels.kt  |  13 +
+ .../metadata/artwork/CanonicalArtworkDetector.kt   | 352 +++++++++++++++++++++
+ .../metadata/artwork/CanonicalArtworkResolver.kt   |  15 +-
+ .../com/example/smartcrate/SmartCrateEngine.kt     |   2 +-
+ .../main/java/com/example/ui/MainDjViewModel.kt    |  14 +-
+ .../example/ui/components/LibraryInsightsDialog.kt |   6 +-
+ .../com/example/ui/library/LibraryHealthScreen.kt  |   2 +-
+ .../java/com/example/ui/library/SongsScreen.kt     |   6 +-
+ .../example/ui/stats/ListeningStatisticsScreen.kt  |   3 +-
+ .../main/java/com/example/util/AlbumArtHelper.kt   | 121 +------
+ 15 files changed, 424 insertions(+), 150 deletions(-)
+```
+
+---
