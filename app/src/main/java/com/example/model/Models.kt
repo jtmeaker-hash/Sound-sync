@@ -38,8 +38,16 @@ enum class SyncState {
 enum class CoverArtFilter(val label: String) {
     ALL("All Tracks"),
     NO_COVER_ART("No Cover Art"),
-    HAS_COVER_ART("Has Cover Art")
+    HAS_COVER_ART("Has Cover Art");
+
+    companion object {
+        val NO_COVER: CoverArtFilter get() = NO_COVER_ART
+        val HAS_COVER: CoverArtFilter get() = HAS_COVER_ART
+    }
 }
+
+typealias CoverArtFilterMode = CoverArtFilter
+
 
 enum class AudioQualityRating(val label: String, val description: String, val cutoffKhz: Float, val isLossless: Boolean) {
     STUDIO_LOSSLESS("24-bit Hi-Res FLAC", "No spectral cutoffs. Full frequencies up to 24kHz+", 24.0f, true),
@@ -278,6 +286,12 @@ data class Track(
 
     val tagsList: List<String>
         get() = customTags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+
+    val hasRealArtwork: Boolean
+        get() = com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(track = this)
+
+    val artworkStatus: com.example.metadata.artwork.ArtworkStatus
+        get() = com.example.metadata.artwork.CanonicalArtworkDetector.detectArtworkStatus(track = this)
 
     val isLossless: Boolean
         get() = qualityRating.isLossless || format.equals("FLAC", true) || format.equals("WAV", true) || format.equals("AIFF", true)

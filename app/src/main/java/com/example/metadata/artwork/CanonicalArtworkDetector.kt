@@ -176,11 +176,7 @@ object CanonicalArtworkDetector {
         val cachePath = track.artworkCachePath
         if (!isPlaceholderOrUnusable(cachePath)) {
             val localPath = if (cachePath!!.startsWith("file://", ignoreCase = true)) {
-                try {
-                    Uri.parse(cachePath).path ?: cachePath.removePrefix("file://")
-                } catch (_: Throwable) {
-                    cachePath.removePrefix("file://")
-                }
+                cachePath.substring(7)
             } else {
                 cachePath
             }
@@ -196,24 +192,13 @@ object CanonicalArtworkDetector {
             val urlStr = artUrl!!.trim()
             when {
                 urlStr.startsWith("http://", ignoreCase = true) || urlStr.startsWith("https://", ignoreCase = true) -> {
-                    val isValidHttp = try {
-                        val parsed = Uri.parse(urlStr)
-                        val host = parsed.host
-                        !host.isNullOrBlank() && !host.contains("example.com") && !parsed.path.orEmpty().contains("placeholder")
-                    } catch (_: Throwable) {
-                        false
-                    }
-                    if (isValidHttp) {
+                    if (!urlStr.lowercase(Locale.ROOT).contains("placeholder")) {
                         return ArtworkStatus.HAS_ARTWORK
                     }
                 }
                 urlStr.startsWith("file://", ignoreCase = true) || urlStr.startsWith("/") -> {
                     val path = if (urlStr.startsWith("file://", ignoreCase = true)) {
-                        try {
-                            Uri.parse(urlStr).path ?: urlStr.removePrefix("file://")
-                        } catch (_: Throwable) {
-                            urlStr.removePrefix("file://")
-                        }
+                        urlStr.substring(7)
                     } else {
                         urlStr
                     }
@@ -223,7 +208,24 @@ object CanonicalArtworkDetector {
                     }
                 }
                 urlStr.startsWith("content://", ignoreCase = true) -> {
-                    if (effectiveContext != null) {
+                    val isMediaStoreAutoAlbumArt = urlStr.startsWith("content://media/external/audio/albumart", ignoreCase = true) ||
+                            urlStr.startsWith("content://0@media/external/audio/albumart", ignoreCase = true) ||
+                            urlStr.startsWith("content://media/external_primary/audio/albumart", ignoreCase = true)
+
+                    if (isMediaStoreAutoAlbumArt) {
+                        if (effectiveContext != null) {
+                            val isUsableContent = try {
+                                effectiveContext.contentResolver.openFileDescriptor(Uri.parse(urlStr), "r")?.use { pfd ->
+                                    pfd.statSize > 0L
+                                } ?: false
+                            } catch (_: Throwable) {
+                                false
+                            }
+                            if (isUsableContent) {
+                                return ArtworkStatus.HAS_ARTWORK
+                            }
+                        }
+                    } else if (effectiveContext != null) {
                         val isUsableContent = try {
                             val uri = Uri.parse(urlStr)
                             effectiveContext.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
