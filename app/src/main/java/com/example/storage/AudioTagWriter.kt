@@ -47,7 +47,9 @@ data class CompleteTagPayload(
     val composer: String? = null,
     val comment: String? = null,
     val artworkBytes: ByteArray? = null,
-    val artworkMimeType: String = "image/jpeg"
+    val artworkMimeType: String = "image/jpeg",
+    /** When true, ONLY artwork is written; all textual tag fields are preserved as-is. */
+    val artworkOnly: Boolean = false
 )
 
 sealed interface TagWriteResult {
@@ -1410,18 +1412,13 @@ object AudioTagWriter {
             }
             val listChunkBytes = listChunkStream.toByteArray()
 
-            // 3. Build companion compact 'id3 ' chunk (BPM, Key, comments)
-            // Safe artwork rule for WAV: Never embed massive artwork (> 64KB) in WAV containers
-            // to avoid RIFF chunk overflow, corruption of legacy WAV players, and out-of-memory errors.
-            // Artwork is safely cached on disk and in the database.
-            // If artwork is small (e.g. <= 64KB), it can be embedded safely.
-            val safeArtworkBytes = if (payload.artworkBytes != null && payload.artworkBytes.size <= 64 * 1024) {
-                payload.artworkBytes
-            } else {
-                null
-            }
-            val id3Payload = payload.copy(artworkBytes = safeArtworkBytes, artworkMimeType = if (safeArtworkBytes != null) payload.artworkMimeType else "")
-            val wavId3Frames = if (safeArtworkBytes == null) {
+            // 3. Build companion 'id3 ' chunk with full metadata including artwork.
+            // WAV files support arbitrarily-sized ID3 chunks; the RIFF chunk size field
+            // is a 32-bit integer allowing up to ~4GB payloads. Modern players (Kid3,
+            // VLC, foobar2000, MusicBee) all read artwork from WAV id3 chunks correctly.
+            // We embed artwork at any size — the same as MP3 and AIFF.
+            val id3Payload = payload
+            val wavId3Frames = if (payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()) {
                 existingId3Frames.filter { it.id != "APIC" && it.id != "PIC" }
             } else {
                 existingId3Frames
@@ -2354,35 +2351,37 @@ object AudioTagWriter {
                     commentsList.add(c)
                 }
             }
-            payload.title?.takeIf { it.isNotBlank() }?.let { commentsList.add("TITLE=$it") }
-            payload.artist?.takeIf { it.isNotBlank() }?.let { commentsList.add("ARTIST=$it") }
-            payload.album?.takeIf { it.isNotBlank() }?.let { commentsList.add("ALBUM=$it") }
-            payload.albumArtist?.takeIf { it.isNotBlank() }?.let { commentsList.add("ALBUMARTIST=$it") }
-            payload.genre?.takeIf { it.isNotBlank() }?.let { commentsList.add("GENRE=$it") }
-            payload.composer?.takeIf { it.isNotBlank() }?.let { commentsList.add("COMPOSER=$it") }
-            payload.comment?.takeIf { it.isNotBlank() }?.let { commentsList.add("COMMENT=$it") }
-            payload.trackNumber?.takeIf { it > 0 }?.let {
-                commentsList.add("TRACKNUMBER=$it")
-                payload.totalTracks?.takeIf { tot -> tot > 0 }?.let { tot -> commentsList.add("TRACKTOTAL=$tot") }
-            }
-            payload.discNumber?.takeIf { it > 0 }?.let {
-                commentsList.add("DISCNUMBER=$it")
-                payload.totalDiscs?.takeIf { tot -> tot > 0 }?.let { tot -> commentsList.add("DISCTOTAL=$tot") }
-            }
-            payload.releaseYear?.takeIf { it > 0 }?.let {
-                commentsList.add("DATE=$it")
-                commentsList.add("YEAR=$it")
-            } ?: payload.releaseDate?.takeIf { it.isNotBlank() }?.let {
-                commentsList.add("DATE=$it")
-                it.take(4).toIntOrNull()?.let { y -> commentsList.add("YEAR=$y") }
-            }
-            payload.bpm?.takeIf { it in 30.0..300.0 }?.let {
-                val bStr = if (it == it.roundToInt().toDouble()) it.toInt().toString() else String.format(Locale.US, "%.1f", it)
-                commentsList.add("BPM=$bStr")
-            }
-            payload.musicalKey?.takeIf { it.isNotBlank() && it != "—" }?.let {
-                commentsList.add("KEY=$it")
-                commentsList.add("INITIALKEY=$it")
+            if (!payload.artworkOnly) {
+                payload.title?.takeIf { it.isNotBlank() }?.let { commentsList.add("TITLE=$it") }
+                payload.artist?.takeIf { it.isNotBlank() }?.let { commentsList.add("ARTIST=$it") }
+                payload.album?.takeIf { it.isNotBlank() }?.let { commentsList.add("ALBUM=$it") }
+                payload.albumArtist?.takeIf { it.isNotBlank() }?.let { commentsList.add("ALBUMARTIST=$it") }
+                payload.genre?.takeIf { it.isNotBlank() }?.let { commentsList.add("GENRE=$it") }
+                payload.composer?.takeIf { it.isNotBlank() }?.let { commentsList.add("COMPOSER=$it") }
+                payload.comment?.takeIf { it.isNotBlank() }?.let { commentsList.add("COMMENT=$it") }
+                payload.trackNumber?.takeIf { it > 0 }?.let {
+                    commentsList.add("TRACKNUMBER=$it")
+                    payload.totalTracks?.takeIf { tot -> tot > 0 }?.let { tot -> commentsList.add("TRACKTOTAL=$tot") }
+                }
+                payload.discNumber?.takeIf { it > 0 }?.let {
+                    commentsList.add("DISCNUMBER=$it")
+                    payload.totalDiscs?.takeIf { tot -> tot > 0 }?.let { tot -> commentsList.add("DISCTOTAL=$tot") }
+                }
+                payload.releaseYear?.takeIf { it > 0 }?.let {
+                    commentsList.add("DATE=$it")
+                    commentsList.add("YEAR=$it")
+                } ?: payload.releaseDate?.takeIf { it.isNotBlank() }?.let {
+                    commentsList.add("DATE=$it")
+                    it.take(4).toIntOrNull()?.let { y -> commentsList.add("YEAR=$y") }
+                }
+                payload.bpm?.takeIf { it in 30.0..300.0 }?.let {
+                    val bStr = if (it == it.roundToInt().toDouble()) it.toInt().toString() else String.format(Locale.US, "%.1f", it)
+                    commentsList.add("BPM=$bStr")
+                }
+                payload.musicalKey?.takeIf { it.isNotBlank() && it != "—" }?.let {
+                    commentsList.add("KEY=$it")
+                    commentsList.add("INITIALKEY=$it")
+                }
             }
 
             if (payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()) {
@@ -2461,6 +2460,52 @@ object AudioTagWriter {
     private data class Id3Frame(val id: String, val data: ByteArray)
 
     private fun buildId3v2Tag(payload: CompleteTagPayload, existingFrames: List<Id3Frame>): ByteArray {
+        // In artwork-only mode: preserve ALL existing text frames, only replace APIC.
+        if (payload.artworkOnly) {
+            val updatingFrameIds = mutableSetOf<String>()
+            if (payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()) updatingFrameIds.addAll(listOf("APIC", "PIC"))
+            val framesToWrite = existingFrames.filter { it.id !in updatingFrameIds }.toMutableList()
+            if (payload.artworkBytes != null && payload.artworkBytes.isNotEmpty()) {
+                val apicStream = java.io.ByteArrayOutputStream()
+                apicStream.write(0x00)
+                val mime = payload.artworkMimeType.ifBlank { "image/jpeg" }
+                apicStream.write(mime.toByteArray(StandardCharsets.ISO_8859_1))
+                apicStream.write(0x00)
+                apicStream.write(0x03)
+                apicStream.write(0x00)
+                apicStream.write(payload.artworkBytes)
+                framesToWrite.add(Id3Frame("APIC", apicStream.toByteArray()))
+            }
+            val rawTagStream = java.io.ByteArrayOutputStream()
+            for (frame in framesToWrite) {
+                val frameIdBytes = frame.id.padEnd(4, ' ').take(4).toByteArray(StandardCharsets.ISO_8859_1)
+                rawTagStream.write(frameIdBytes)
+                val frameLen = frame.data.size
+                rawTagStream.write((frameLen shr 24) and 0xFF)
+                rawTagStream.write((frameLen shr 16) and 0xFF)
+                rawTagStream.write((frameLen shr 8) and 0xFF)
+                rawTagStream.write(frameLen and 0xFF)
+                rawTagStream.write(0)
+                rawTagStream.write(0)
+                rawTagStream.write(frame.data)
+            }
+            rawTagStream.write(ByteArray(1024))
+            val tagBody = rawTagStream.toByteArray()
+            val syncSafeSize = encodeSyncSafe(tagBody.size)
+            val newHeader = ByteArray(10)
+            newHeader[0] = 'I'.code.toByte()
+            newHeader[1] = 'D'.code.toByte()
+            newHeader[2] = '3'.code.toByte()
+            newHeader[3] = 3
+            newHeader[4] = 0
+            newHeader[5] = 0
+            System.arraycopy(syncSafeSize, 0, newHeader, 6, 4)
+            val fullTag = ByteArray(newHeader.size + tagBody.size)
+            System.arraycopy(newHeader, 0, fullTag, 0, newHeader.size)
+            System.arraycopy(tagBody, 0, fullTag, newHeader.size, tagBody.size)
+            return fullTag
+        }
+
         val updatingFrameIds = mutableSetOf<String>()
         if (!payload.title.isNullOrBlank()) updatingFrameIds.addAll(listOf("TIT2", "TT2"))
         if (!payload.artist.isNullOrBlank()) updatingFrameIds.addAll(listOf("TPE1", "TP1"))

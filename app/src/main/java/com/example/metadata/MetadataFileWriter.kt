@@ -84,7 +84,8 @@ class MetadataFileWriter(
     suspend fun writeAsync(
         track: Track,
         artworkBytes: ByteArray? = null,
-        artworkMimeType: String = "image/jpeg"
+        artworkMimeType: String = "image/jpeg",
+        artworkOnly: Boolean = false
     ): MetadataWriteResult = withContext(Dispatchers.IO) {
         val path = track.filePath
         Log.d(TAG, "File write started for track id=${track.id} path=\"$path\"")
@@ -321,21 +322,22 @@ class MetadataFileWriter(
         } ?: artworkMimeType
 
         val payload = CompleteTagPayload(
-            title = mergedTitle,
-            artist = mergedArtist,
-            album = mergedAlbum,
-            albumArtist = mergedAlbumArtist,
-            genre = mergedGenre,
-            trackNumber = mergedTrackNumber,
-            discNumber = mergedDiscNumber,
-            releaseYear = mergedReleaseYear,
-            releaseDate = mergedReleaseDate,
-            bpm = mergedBpm,
-            musicalKey = mergedMusicalKey,
-            composer = mergedComposer,
-            comment = mergedComment,
+            title = if (artworkOnly) null else mergedTitle,
+            artist = if (artworkOnly) null else mergedArtist,
+            album = if (artworkOnly) null else mergedAlbum,
+            albumArtist = if (artworkOnly) null else mergedAlbumArtist,
+            genre = if (artworkOnly) null else mergedGenre,
+            trackNumber = if (artworkOnly) null else mergedTrackNumber,
+            discNumber = if (artworkOnly) null else mergedDiscNumber,
+            releaseYear = if (artworkOnly) null else mergedReleaseYear,
+            releaseDate = if (artworkOnly) null else mergedReleaseDate,
+            bpm = if (artworkOnly) null else mergedBpm,
+            musicalKey = if (artworkOnly) null else mergedMusicalKey,
+            composer = if (artworkOnly) null else mergedComposer,
+            comment = if (artworkOnly) null else mergedComment,
             artworkBytes = activeArtworkBytes,
-            artworkMimeType = activeArtworkMime
+            artworkMimeType = activeArtworkMime,
+            artworkOnly = artworkOnly
         )
 
         com.example.storage.SoundSyncMetadataRewriteDebug.logWrite(
@@ -540,15 +542,10 @@ class MetadataFileWriter(
         // 7. Verify embedded artwork
         if (activeArtworkBytes != null && activeArtworkBytes.isNotEmpty()) {
             if (!verified.hasEmbeddedArtwork || verified.embeddedArtworkSize <= 0) {
-                if (ext == "wav") {
-                    Log.i(TAG, "WAV artwork preserved in SoundSync database/cache rather than bloated into RIFF container")
-                    unverifiedFields.add("artwork (stored in library)")
-                } else {
-                    Log.w(TAG, "Write verification notice: embedded artwork not detected on disk after write")
-                    unverifiedFields.add("embeddedArtwork")
-                }
+                Log.w(TAG, "Write verification notice: embedded artwork not detected on disk after write (format=.$ext)")
+                unverifiedFields.add("embeddedArtwork")
             } else {
-                Log.d(TAG, "Embedded artwork verified: ${verified.embeddedArtworkSize} bytes on disk")
+                Log.d(TAG, "Embedded artwork verified: ${verified.embeddedArtworkSize} bytes on disk (format=.$ext)")
             }
         }
 
@@ -662,9 +659,10 @@ class MetadataFileWriter(
     fun write(
         track: Track,
         artworkBytes: ByteArray? = null,
-        artworkMimeType: String = "image/jpeg"
+        artworkMimeType: String = "image/jpeg",
+        artworkOnly: Boolean = false
     ): MetadataWriteResult {
-        return runBlocking { writeAsync(track, artworkBytes, artworkMimeType) }
+        return runBlocking { writeAsync(track, artworkBytes, artworkMimeType, artworkOnly) }
     }
 
     private fun resolveUriMimeAndExt(uri: Uri): Pair<String, String> {

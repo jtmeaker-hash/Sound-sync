@@ -318,6 +318,16 @@ data class Track(
     val keyShortDisplay: String
         get() = if (hasValidKey) musicalKey else "—"
 
+    /**
+     * Canonical artwork availability check used by ALL SoundSync features.
+     * Delegates to [com.example.metadata.artwork.ArtworkStatusResolver].
+     */
+    val hasRealArtwork: Boolean
+        get() = com.example.metadata.artwork.ArtworkStatusResolver.hasArtwork(this)
+
+    val artworkStatus: com.example.metadata.artwork.ArtworkStatus
+        get() = com.example.metadata.artwork.ArtworkStatusResolver.getStatus(this)
+
     fun getFieldProvenance(fieldName: String): com.example.metadata.merge.MetadataSourceProvenance {
         return com.example.metadata.merge.TrackFieldProvenance.parse(fieldProvenanceJson)[fieldName.lowercase()]
             ?: com.example.metadata.merge.LocalFirstMetadataMerger.inferFieldProvenance(this, fieldName)

@@ -313,6 +313,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
         if (!artist.isNullOrBlank() && !album.isNullOrBlank()) {
             invalidateAlbum(artist, album)
         }
+        com.example.metadata.artwork.ArtworkStatusResolver.invalidate(trackId)
         _artworkInvalidationFlow.tryEmit(trackId)
         Log.d(TAG, "Invalidated artwork cache for track '$trackId'")
     }
@@ -334,6 +335,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
     override fun clearMemoryCache() {
         memoryCache.evictAll()
         fallbackCache.evictAll()
+        com.example.metadata.artwork.ArtworkStatusResolver.invalidateAll()
     }
 
     fun decodeStreamToBitmap(inputStream: InputStream, targetSize: Int): Bitmap? {

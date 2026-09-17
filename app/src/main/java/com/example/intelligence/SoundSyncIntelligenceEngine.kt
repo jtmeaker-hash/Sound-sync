@@ -246,7 +246,7 @@ object SoundSyncIntelligenceEngine {
             track.artist.equals("Unknown Artist", ignoreCase = true) ||
             track.title.isBlank() ||
             track.title.startsWith("Track ", ignoreCase = true) ||
-            track.artworkCachePath.isNullOrBlank()
+            !track.hasRealArtwork
         }
     }
 
@@ -276,7 +276,7 @@ object SoundSyncIntelligenceEngine {
 
         for (t in library) {
             if (t.artist.isBlank() || t.artist.equals("Unknown Artist", ignoreCase = true)) missingArtist++
-            if (t.artworkCachePath.isNullOrBlank() && t.artworkUrl.isNullOrBlank()) missingArt++
+            if (!t.hasRealArtwork) missingArt++
             if (t.bpm <= 0.0 || (t.musicalKey.isBlank() && t.camelotKey.isBlank())) missingBpmKey++
             if (t.rating == 0) neverPlayed++
             if (t.dateAdded <= oneYearAgo) unplayed1Year++
@@ -398,7 +398,7 @@ object SoundSyncIntelligenceEngine {
         var trust = 0.5f
         if (track.title.isNotBlank() && !track.title.startsWith("Track ")) trust += 0.2f
         if (track.artist.isNotBlank() && !track.artist.equals("Unknown Artist", ignoreCase = true)) trust += 0.2f
-        if (!track.artworkCachePath.isNullOrBlank() || !track.artworkUrl.isNullOrBlank()) trust += 0.1f
+        if (track.hasRealArtwork) trust += 0.1f
 
         val identityConfidence = if (track.contentFingerprint.isNotBlank()) 0.95f else trust
 

@@ -709,7 +709,7 @@ private fun StatsLibraryMetricsTab(
 
     val missingBpm = remember(allTracks) { allTracks.count { !it.hasValidBpm } }
     val missingKey = remember(allTracks) { allTracks.count { !it.hasValidKey } }
-    val missingArtwork = remember(allTracks) { allTracks.count { it.artworkUrl == null } }
+    val missingArtwork = remember(allTracks) { allTracks.count { !it.hasRealArtwork } }
 
     val losslessCount = remember(allTracks) { allTracks.count { it.isLossless } }
     val mp3320Count = remember(allTracks) { allTracks.count { it.bitrateKbps >= 320 && !it.isLossless } }

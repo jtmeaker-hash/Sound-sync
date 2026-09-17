@@ -307,6 +307,7 @@ class MetadataFileWriteQueue private constructor(
         track: Track,
         artworkBytes: ByteArray? = null,
         artworkMimeType: String = "image/jpeg",
+        artworkOnly: Boolean = false,
         onComplete: ((MetadataWriteResult) -> Unit)? = null
     ): Job {
         return scope.launch {
@@ -335,7 +336,7 @@ class MetadataFileWriteQueue private constructor(
                 }
 
                 val result = semaphore.withPermit {
-                    fileWriter.writeAsync(currentTrack, artworkBytes, artworkMimeType)
+                    fileWriter.writeAsync(currentTrack, artworkBytes, artworkMimeType, artworkOnly)
                 }
 
                 onComplete?.invoke(result)
@@ -359,7 +360,8 @@ class MetadataFileWriteQueue private constructor(
     suspend fun writeDirect(
         track: Track,
         artworkBytes: ByteArray? = null,
-        artworkMimeType: String = "image/jpeg"
+        artworkMimeType: String = "image/jpeg",
+        artworkOnly: Boolean = false
     ): MetadataWriteResult {
         val pathKey = track.filePath.ifBlank { track.id }
         var lockAcquired = false
@@ -374,7 +376,7 @@ class MetadataFileWriteQueue private constructor(
             }
 
             var result = semaphore.withPermit {
-                fileWriter.writeAsync(track, artworkBytes, artworkMimeType)
+                fileWriter.writeAsync(track, artworkBytes, artworkMimeType, artworkOnly)
             }
 
             // If permission required and IntentSender provided, prompt user and retry once
@@ -386,7 +388,7 @@ class MetadataFileWriteQueue private constructor(
                     if (granted) {
                         Log.i(TAG, "MEDIASTORE_WRITE_PERMISSION_GRANTED: Permission granted for $targetUri (track ${track.id})")
                         result = semaphore.withPermit {
-                            fileWriter.writeAsync(track, artworkBytes, artworkMimeType)
+                            fileWriter.writeAsync(track, artworkBytes, artworkMimeType, artworkOnly)
                         }
                     } else {
                         Log.w(TAG, "MediaStore write permission denied for $targetUri")
@@ -404,8 +406,8 @@ class MetadataFileWriteQueue private constructor(
                         com.example.util.AlbumArtHelper.invalidateTrack(track.id, track.artist, track.album)
                         com.example.metadata.ArtworkCache(context).evictArtworkForTrack(track.id)
                         Log.i(TAG, "ARTWORK_CACHE_INVALIDATED: Evicted cache for track ${track.id}")
-                        trackDao?.updateMetadataWriteState(track.id, com.example.model.MetadataWriteState.ARTWORK_SAVED.name)
-                        Log.i(TAG, "TRACK_METADATA_REFRESHED: Updated database state to ARTWORK_SAVED for track ${track.id}")
+                        trackDao?.updateMetadataWriteState(track.id, com.example.model.MetadataWriteState.FILE_WRITE_SUCCESS.name)
+                        Log.i(TAG, "TRACK_METADATA_REFRESHED: Updated database state to FILE_WRITE_SUCCESS for track ${track.id}")
                     }
                     if (track.filePath.isNotBlank() && !track.filePath.startsWith("content://")) {
                         try {
@@ -1023,6 +1025,183 @@ class MetadataFileWriteQueue private constructor(
             wasCancelled = isCancelRequested || !coroutineContext.isActive
         )
         _lastPushReport.value = report
+        report
+    }
+
+    /**
+     * Artwork-only bulk push: Embeds cover artwork into physical audio files without
+     * modifying any textual metadata tags. Useful for users who trust their existing tags
+     * but want artwork permanently embedded.
+     */
+    suspend fun pushArtworkToFiles(
+        onProgress: ((PushMetadataProgress) -> Unit)? = null
+    ): PushMetadataReport = withContext(Dispatchers.IO) {
+        pushJob = coroutineContext[Job]
+        isCancelRequested = false
+        _isPushingMetadata.value = true
+
+        val allTracks = trackDao?.getAllTracksList()?.map { it.toTrack() } ?: emptyList()
+        // Only process tracks that have cached artwork available
+        val tracksWithArtwork = allTracks.filter { track ->
+            (!track.artworkCachePath.isNullOrBlank() && java.io.File(track.artworkCachePath).exists()) ||
+            !track.artworkUrl.isNullOrBlank()
+        }
+        val total = tracksWithArtwork.size
+
+        var writtenCount = 0
+        var syncedCount = 0
+        var partialCount = 0
+        var skippedCount = 0
+        var failedCount = 0
+        var permissionRequiredCount = 0
+        val failures = mutableListOf<PushMetadataFailure>()
+        var tracksProcessed = 0
+
+        Log.i(TAG, "[Artwork Push] Starting artwork-only file push for $total tracks with cached artwork...")
+
+        try {
+            ensurePermissionsUpfront(tracksWithArtwork, total, onProgress)
+
+            for ((index, track) in tracksWithArtwork.withIndex()) {
+                if (isCancelRequested || !coroutineContext.isActive) break
+                tracksProcessed = index + 1
+                val current = tracksProcessed
+                val fileName = java.io.File(track.filePath).name.ifBlank { track.filePath }
+
+                val updateProgress = { phase: PushMetadataPhase ->
+                    val p = PushMetadataProgress(
+                        current = current,
+                        total = total,
+                        trackTitle = track.title.ifBlank { fileName },
+                        trackArtist = track.artist.ifBlank { "Unknown Artist" },
+                        fileName = fileName,
+                        phase = phase,
+                        writtenCount = writtenCount,
+                        syncedCount = syncedCount,
+                        failedCount = failedCount,
+                        partialCount = partialCount,
+                        skippedCount = skippedCount,
+                        permissionRequiredCount = permissionRequiredCount
+                    )
+                    _pushProgress.value = p
+                    onProgress?.invoke(p)
+                }
+
+                updateProgress(PushMetadataPhase.READING_PHYSICAL)
+
+                val path = track.filePath
+                if (path.isBlank() || path.startsWith("demo://") || path.startsWith("http")) {
+                    skippedCount++
+                    updateProgress(PushMetadataPhase.SKIPPED)
+                    continue
+                }
+
+                val pathKey = track.filePath.ifBlank { track.id }
+                while (!activeWritingFiles.add(pathKey)) {
+                    delay(50)
+                    if (isCancelRequested || !coroutineContext.isActive) break
+                }
+                if (isCancelRequested || !coroutineContext.isActive) break
+
+                try {
+                    // Load artwork bytes from cache
+                    val artworkBytes = track.artworkCachePath?.let { cachePath ->
+                        try {
+                            val f = java.io.File(cachePath)
+                            if (f.exists() && f.canRead()) f.readBytes() else null
+                        } catch (_: Exception) { null }
+                    } ?: run {
+                        // Try generic artwork cache lookup
+                        try {
+                            com.example.metadata.ArtworkCache(context).getCachedArtworkFile(track.artist, track.album)?.let { f ->
+                                if (f.exists() && f.canRead()) f.readBytes() else null
+                            }
+                        } catch (_: Throwable) { null }
+                    }
+
+                    if (artworkBytes == null || artworkBytes.isEmpty()) {
+                        skippedCount++
+                        updateProgress(PushMetadataPhase.SKIPPED)
+                        continue
+                    }
+
+                    // Check if artwork is already embedded
+                    updateProgress(PushMetadataPhase.COMPARING)
+                    val physical = AudioEmbeddedMetadataReader.read(context, path)
+                    if (physical.hasEmbeddedArtwork && physical.embeddedArtworkSize >= artworkBytes.size / 2) {
+                        Log.d(TAG, "[Artwork Push] Track already has embedded artwork: ${track.title}")
+                        syncedCount++
+                        trackDao?.updateMetadataWriteState(track.id, MetadataWriteState.FILE_WRITE_SUCCESS.name)
+                        updateProgress(PushMetadataPhase.DONE_SYNCED)
+                        continue
+                    }
+
+                    updateProgress(PushMetadataPhase.WRITING_TAGS)
+                    Log.d(TAG, "[Artwork Push] Embedding ${artworkBytes.size} bytes artwork into: ${track.title}")
+
+                    val writeResult = semaphore.withPermit {
+                        fileWriter.writeAsync(track, artworkBytes, artworkOnly = true)
+                    }
+
+                    updateProgress(PushMetadataPhase.VERIFYING)
+
+                    when (writeResult) {
+                        is MetadataWriteResult.Written, is MetadataWriteResult.AlreadyInSync -> {
+                            writtenCount++
+                            Log.i(TAG, "[Artwork Push] SUCCESS: ${track.title} - artwork embedded")
+                            updateProgress(PushMetadataPhase.DONE_WRITTEN)
+                        }
+                        is MetadataWriteResult.Partial -> {
+                            partialCount++
+                            writtenCount++
+                            Log.i(TAG, "[Artwork Push] PARTIAL: ${track.title}")
+                            updateProgress(PushMetadataPhase.DONE_PARTIAL)
+                        }
+                        is MetadataWriteResult.PermissionRequired -> {
+                            permissionRequiredCount++
+                            failures.add(PushMetadataFailure(track.id, track.title, track.artist, path, "Permission required: ${writeResult.reason}", category = "Permission"))
+                            updateProgress(PushMetadataPhase.SKIPPED)
+                        }
+                        is MetadataWriteResult.Failed -> {
+                            failedCount++
+                            failures.add(PushMetadataFailure(track.id, track.title, track.artist, path, writeResult.reason, category = "Failed"))
+                            Log.w(TAG, "[Artwork Push] FAILED: ${track.title} - ${writeResult.reason}")
+                            updateProgress(PushMetadataPhase.FAILED)
+                        }
+                        is MetadataWriteResult.VerificationFailed -> {
+                            failedCount++
+                            failures.add(PushMetadataFailure(track.id, track.title, track.artist, path, "Artwork verification failed", category = "Verification"))
+                            updateProgress(PushMetadataPhase.FAILED)
+                        }
+                        else -> {
+                            skippedCount++
+                            updateProgress(PushMetadataPhase.SKIPPED)
+                        }
+                    }
+                } finally {
+                    activeWritingFiles.remove(pathKey)
+                }
+            }
+        } catch (e: CancellationException) {
+            Log.i(TAG, "[Artwork Push] Cancelled by user.")
+        } finally {
+            _isPushingMetadata.value = false
+        }
+
+        val wasCancelled = isCancelRequested || !coroutineContext.isActive
+        val report = PushMetadataReport(
+            totalExamined = tracksProcessed,
+            successfullyWritten = writtenCount,
+            alreadySynchronized = syncedCount,
+            failed = failedCount,
+            failureReasons = failures,
+            partial = partialCount,
+            skipped = skippedCount,
+            permissionRequired = permissionRequiredCount,
+            wasCancelled = wasCancelled
+        )
+        _lastPushReport.value = report
+        Log.i(TAG, "[Artwork Push] Completed: $report")
         report
     }
 }

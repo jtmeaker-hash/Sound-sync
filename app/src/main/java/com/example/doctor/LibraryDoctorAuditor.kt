@@ -132,7 +132,9 @@ class LibraryDoctorAuditor(
             }
 
             // --- CATEGORY 1: MISSING ARTWORK ---
-            val hasArt = !track.artworkCachePath.isNullOrBlank() || !track.artworkUrl.isNullOrBlank()
+            // Use the canonical hasRealArtwork check as the base, then additionally
+            // verify that a cached file path actually exists on disk (disk-level audit).
+            val hasArt = track.hasRealArtwork
             var artFileMissing = false
             if (!track.artworkCachePath.isNullOrBlank()) {
                 val artFile = File(track.artworkCachePath)

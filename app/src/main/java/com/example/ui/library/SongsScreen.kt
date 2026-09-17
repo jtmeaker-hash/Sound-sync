@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
@@ -125,6 +126,12 @@ enum class SongSortMode(val label: String) {
     }
 }
 
+enum class CoverArtFilterMode(val label: String) {
+    ALL("All Tracks"),
+    NO_COVER("No Cover Art"),
+    HAS_COVER("Has Cover Art")
+}
+
 @Composable
 fun SongsScreen(
     tracks: List<Track>,
@@ -155,17 +162,28 @@ fun SongsScreen(
     var sortMode by remember { mutableStateOf(SongSortMode.TITLE_ASC) }
     var showSortMenu by remember { mutableStateOf(false) }
     var selectedTrackIds by remember { mutableStateOf(setOf<String>()) }
+    var coverArtFilter by remember { mutableStateOf(CoverArtFilterMode.ALL) }
+    var showCoverArtFilterMenu by remember { mutableStateOf(false) }
 
-    val filteredTracks = remember(tracks, searchQuery, sortMode, hideUnavailableTracks) {
+    val allTracksCount = tracks.size
+    val noCoverCount = remember(tracks) { tracks.count { !it.hasRealArtwork } }
+    val hasCoverCount = remember(tracks) { tracks.count { it.hasRealArtwork } }
+
+    val filteredTracks = remember(tracks, searchQuery, sortMode, hideUnavailableTracks, coverArtFilter) {
         val q = searchQuery.trim().lowercase()
         val base = tracks.filter { track ->
             val matchesAvailability = !hideUnavailableTracks || track.isAvailable
+            val matchesArtwork = when (coverArtFilter) {
+                CoverArtFilterMode.ALL -> true
+                CoverArtFilterMode.NO_COVER -> !track.hasRealArtwork
+                CoverArtFilterMode.HAS_COVER -> track.hasRealArtwork
+            }
             val matchesQuery = q.isBlank() ||
                 track.title.lowercase().contains(q) ||
                 track.artist.lowercase().contains(q) ||
                 track.album.lowercase().contains(q) ||
                 track.format.lowercase().contains(q)
-            matchesAvailability && matchesQuery
+            matchesAvailability && matchesArtwork && matchesQuery
         }
 
         sortMode.sort(base)
@@ -322,7 +340,7 @@ fun SongsScreen(
         }
 
         // Action Toolbar (Play All, Shuffle All, Count, Filter)
-        if (filteredTracks.isNotEmpty()) {
+        if (tracks.isNotEmpty()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -375,6 +393,116 @@ fun SongsScreen(
                         shape = RoundedCornerShape(theme.cornerSmall),
                         modifier = Modifier.height(30.dp).testTag("filter_unavailable_tracks_chip")
                     )
+
+                    // Canonical Cover Art Filter Dropdown
+                    Box {
+                        Surface(
+                            modifier = Modifier
+                                .height(30.dp)
+                                .clip(RoundedCornerShape(theme.cornerSmall))
+                                .clickable { showCoverArtFilterMenu = true }
+                                .testTag("cover_art_filter_dropdown"),
+                            shape = RoundedCornerShape(theme.cornerSmall),
+                            color = if (coverArtFilter != CoverArtFilterMode.ALL) theme.accent.copy(alpha = 0.2f) else theme.surfaceRaised,
+                            border = BorderStroke(1.dp, if (coverArtFilter != CoverArtFilterMode.ALL) theme.accent else theme.divider)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Image,
+                                    contentDescription = "Cover Art Filter",
+                                    tint = if (coverArtFilter != CoverArtFilterMode.ALL) theme.accent else theme.textSecondary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    text = when (coverArtFilter) {
+                                        CoverArtFilterMode.ALL -> "Art: All ($allTracksCount)"
+                                        CoverArtFilterMode.NO_COVER -> "No Cover ($noCoverCount)"
+                                        CoverArtFilterMode.HAS_COVER -> "Has Cover ($hasCoverCount)"
+                                    },
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (coverArtFilter != CoverArtFilterMode.ALL) theme.accent else theme.textSecondary
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showCoverArtFilterMenu,
+                            onDismissRequest = { showCoverArtFilterMenu = false },
+                            modifier = Modifier.background(theme.surfaceRaised)
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "All Tracks",
+                                            color = if (coverArtFilter == CoverArtFilterMode.ALL) theme.accent else theme.textPrimary,
+                                            fontWeight = if (coverArtFilter == CoverArtFilterMode.ALL) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Text("$allTracksCount", color = theme.textMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                    }
+                                },
+                                onClick = {
+                                    coverArtFilter = CoverArtFilterMode.ALL
+                                    showCoverArtFilterMenu = false
+                                },
+                                modifier = Modifier.testTag("cover_art_filter_all")
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "No Cover Art",
+                                            color = if (coverArtFilter == CoverArtFilterMode.NO_COVER) theme.accent else theme.textPrimary,
+                                            fontWeight = if (coverArtFilter == CoverArtFilterMode.NO_COVER) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Text("$noCoverCount", color = theme.textMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                    }
+                                },
+                                onClick = {
+                                    coverArtFilter = CoverArtFilterMode.NO_COVER
+                                    showCoverArtFilterMenu = false
+                                },
+                                modifier = Modifier.testTag("cover_art_filter_no_cover")
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "Has Cover Art",
+                                            color = if (coverArtFilter == CoverArtFilterMode.HAS_COVER) theme.accent else theme.textPrimary,
+                                            fontWeight = if (coverArtFilter == CoverArtFilterMode.HAS_COVER) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Text("$hasCoverCount", color = theme.textMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                    }
+                                },
+                                onClick = {
+                                    coverArtFilter = CoverArtFilterMode.HAS_COVER
+                                    showCoverArtFilterMenu = false
+                                },
+                                modifier = Modifier.testTag("cover_art_filter_has_cover")
+                            )
+                        }
+                    }
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -494,12 +622,18 @@ fun SongsScreen(
                         modifier = Modifier.size(64.dp)
                     )
                     Text(
-                        text = if (searchQuery.isNotBlank()) "No songs match '$searchQuery'" else "No local tracks indexed yet",
+                        text = if (searchQuery.isNotBlank()) {
+                            "No songs match '$searchQuery'"
+                        } else if (coverArtFilter != CoverArtFilterMode.ALL) {
+                            "No tracks found matching '${coverArtFilter.label}'"
+                        } else {
+                            "No local tracks indexed yet"
+                        },
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
                         color = theme.textSecondary
                     )
-                    if (searchQuery.isBlank()) {
+                    if (searchQuery.isBlank() && coverArtFilter == CoverArtFilterMode.ALL) {
                         Button(
                             onClick = onStartScan,
                             colors = ButtonDefaults.buttonColors(

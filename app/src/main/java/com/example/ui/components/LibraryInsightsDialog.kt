@@ -62,7 +62,7 @@ fun LibraryInsightsDialog(
     onOpenSmartCrates: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val report = remember(allTracks.size) {
+    val report = remember(allTracks) {
         SoundSyncIntelligenceEngine.getLibraryHealthInsights(allTracks)
     }
 
