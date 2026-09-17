@@ -1484,3 +1484,47 @@ c6a5bfd Merge remote-tracking branch 'origin/Debug' (reconcile history with main
 ```
 
 ---
+
+## CI Run 35211174072 — PASS
+
+- **Date:** 2026-09-17T10:35:09.644378+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`38b9185099`](https://github.com/jtmeaker-hash/Sound-sync/commit/38b91850999bbd6d361436352a303154141c2724)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35211174072)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ✅ PASS |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+No CI build/test failures detected in this run.
+
+### Summary of changes
+
+ci: enable Build Debug APK on main and restrict release publishing to tags
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+38b9185 ci: enable Build Debug APK on main and restrict release publishing to tags
+ .github/workflows/build-apk.yml       | 3 +--
+ .github/workflows/build-debug-apk.yml | 1 +
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+```
+
+---
