@@ -319,6 +319,7 @@ object MediaScannerHelper {
                             recordLabel = embedded.recordLabel,
                             barcode = embedded.barcode,
                             isrc = embedded.isrc,
+                            artworkSource = if (embedded.hasEmbeddedArtwork) "Embedded Tag" else null,
                             storageRelativePath = storageRelPath,
                             contentFingerprint = fingerprint,
                             originalArtist = embedded.artist?.takeIf { !com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(it) }

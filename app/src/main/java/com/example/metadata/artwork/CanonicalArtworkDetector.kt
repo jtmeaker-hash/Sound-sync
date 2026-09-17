@@ -51,6 +51,13 @@ object CanonicalArtworkDetector {
 
         val resolvedStatus = evaluateArtworkStatus(context, track)
         statusCache[cacheKey] = resolvedStatus
+        try {
+            val hasArt = (resolvedStatus == ArtworkStatus.HAS_ARTWORK)
+            Log.d(
+                "ArtworkFilter",
+                "[ArtworkFilter] title=${track.title} id=${track.id} hasRealArtwork=$hasArt source=${track.artworkSource ?: "NONE"} artworkUri=${track.artworkUrl ?: track.artworkCachePath ?: "NONE"} includedInNoArtworkFilter=${!hasArt}"
+            )
+        } catch (_: Throwable) {}
         return resolvedStatus
     }
 
@@ -172,6 +179,13 @@ object CanonicalArtworkDetector {
     private fun evaluateArtworkStatus(context: Context?, track: Track): ArtworkStatus {
         val effectiveContext = context ?: SoundSyncApplication.instance
 
+        // 0. Memory cache check - if AlbumArtHelper has already loaded a real bitmap for this track
+        try {
+            if (com.example.util.AlbumArtHelper.hasRealArtworkInMemory(track)) {
+                return ArtworkStatus.HAS_ARTWORK
+            }
+        } catch (_: Throwable) {}
+
         // 1. Check artworkCachePath
         val cachePath = track.artworkCachePath
         if (!isPlaceholderOrUnusable(cachePath)) {
@@ -269,12 +283,16 @@ object CanonicalArtworkDetector {
         }
 
         // 4. Check explicit metadata flags if the underlying audio file exists
-        if (track.artworkSource in listOf("Embedded Tag", "Embedded", "Local Folder", "Apple iTunes", "TheAudioDB") ||
+        if (track.artworkSource in listOf("Embedded Tag", "Embedded", "Local Folder", "Apple iTunes", "TheAudioDB", "Manual Selection", "User Selected", "Custom") ||
             track.metadataWriteState == MetadataWriteState.ARTWORK_SAVED.name ||
             track.metadataWriteState == MetadataWriteState.ARTWORK_EMBEDDED.name
         ) {
-            if (track.filePath.isNotBlank()) {
-                val audioFile = File(track.filePath)
+            val audioPath = track.filePath.takeIf { it.isNotBlank() } ?: track.resolvedUri
+            if (!audioPath.isNullOrBlank()) {
+                if (audioPath.startsWith("content://", ignoreCase = true)) {
+                    return ArtworkStatus.HAS_ARTWORK
+                }
+                val audioFile = File(audioPath)
                 if (audioFile.exists() && audioFile.isFile && audioFile.length() > 0L) {
                     return ArtworkStatus.HAS_ARTWORK
                 }
@@ -284,22 +302,34 @@ object CanonicalArtworkDetector {
         // 5. Check MediaStore album art
         if (track.mediaStoreId != null && effectiveContext != null) {
             try {
-                val albumArtUri = Uri.parse("content://media/external/audio/media/${track.mediaStoreId}/albumart")
-                val isMediaStoreArtPresent = effectiveContext.contentResolver.openFileDescriptor(albumArtUri, "r")?.use { pfd ->
-                    pfd.statSize > 0L || pfd.statSize == -1L
-                } ?: false
+                val albumArtUri1 = Uri.parse("content://media/external/audio/media/${track.mediaStoreId}/albumart")
+                val albumArtUri2 = Uri.parse("content://media/external/audio/albumart/${track.mediaStoreId}")
+                val isMediaStoreArtPresent = listOf(albumArtUri1, albumArtUri2).any { uri ->
+                    try {
+                        effectiveContext.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                            pfd.statSize > 0L || pfd.statSize == -1L
+                        } ?: false
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }
                 if (isMediaStoreArtPresent) {
                     return ArtworkStatus.HAS_ARTWORK
                 }
             } catch (_: Throwable) {}
         }
 
-        // 6. Check embedded tags inside the audio file
-        if (track.filePath.isNotBlank() && !track.filePath.startsWith("content://", ignoreCase = true)) {
-            val audioFile = File(track.filePath)
-            if (audioFile.exists() && audioFile.isFile && audioFile.length() > 1024L) {
+        // 6. Check embedded tags inside the audio file (supports file paths and content:// URIs)
+        val pathToCheck = track.filePath.takeIf { it.isNotBlank() } ?: track.resolvedUri
+        if (!pathToCheck.isNullOrBlank()) {
+            val isContent = pathToCheck.startsWith("content://", ignoreCase = true)
+            val isValidFile = if (!isContent) {
+                val audioFile = File(pathToCheck)
+                audioFile.exists() && audioFile.isFile && audioFile.length() > 1024L
+            } else true
+            if (isValidFile) {
                 try {
-                    val embedded = AudioEmbeddedMetadataReader.read(effectiveContext, track.filePath, includeArtworkBytes = false)
+                    val embedded = AudioEmbeddedMetadataReader.read(effectiveContext, pathToCheck, includeArtworkBytes = false)
                     if (embedded.hasEmbeddedArtwork) {
                         return ArtworkStatus.HAS_ARTWORK
                     }

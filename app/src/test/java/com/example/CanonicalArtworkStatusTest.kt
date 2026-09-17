@@ -425,4 +425,89 @@ class CanonicalArtworkStatusTest {
         ArtworkStatusResolver.invalidateAll()
         assertEquals(ArtworkStatus.HAS_ARTWORK, ArtworkStatusResolver.getStatus(track))
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Test 16 – Section 10 Regression Suite
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `test 16 - regression suite covering all artwork states for No Cover Art filter`() {
+        val cachedArtFile = tmpFolder.newFile("cached_art.jpg").also { it.writeBytes(ByteArray(512)) }
+        val downloadedArtFile = tmpFolder.newFile("downloaded_art.jpg").also { it.writeBytes(ByteArray(512)) }
+        val embeddedAudioFile = tmpFolder.newFile("song_with_art.mp3").also { it.writeBytes(ByteArray(4096)) }
+
+        val trackEmbedded = Track(id = "reg_emb", title = "Embedded Art", artist = "Artist 1", filePath = embeddedAudioFile.absolutePath, artworkSource = "Embedded Tag")
+        val trackCached = baseTrack(id = "reg_cache", artworkCachePath = cachedArtFile.absolutePath)
+        val trackDownloaded = baseTrack(id = "reg_down", artworkUrl = downloadedArtFile.absolutePath)
+        val trackManual = baseTrack(id = "reg_manual", artworkSource = "Manual Selection", artworkUrl = downloadedArtFile.absolutePath)
+        val trackNoArt = baseTrack(id = "reg_none", artworkCachePath = null, artworkUrl = null)
+        val trackBrokenUri = baseTrack(id = "reg_broken", artworkUrl = "file:///nonexistent/broken.jpg")
+        val trackPlaceholder = baseTrack(id = "reg_ph", artworkUrl = "android.resource://com.example/drawable/placeholder")
+
+        val library = listOf(
+            trackEmbedded,
+            trackCached,
+            trackDownloaded,
+            trackManual,
+            trackNoArt,
+            trackBrokenUri,
+            trackPlaceholder
+        )
+
+        val noCoverArtFiltered = library.filter { !it.hasRealArtwork }
+
+        // Track with embedded artwork -> NOT in No Cover Art
+        assertFalse("Track with embedded artwork must NOT be in No Cover Art", noCoverArtFiltered.contains(trackEmbedded))
+
+        // Track with valid cached/downloaded artwork -> NOT in No Cover Art
+        assertFalse("Track with cached artwork must NOT be in No Cover Art", noCoverArtFiltered.contains(trackCached))
+        assertFalse("Track with downloaded artwork must NOT be in No Cover Art", noCoverArtFiltered.contains(trackDownloaded))
+
+        // Track with manually assigned artwork -> NOT in No Cover Art
+        assertFalse("Track with manual artwork must NOT be in No Cover Art", noCoverArtFiltered.contains(trackManual))
+
+        // Track with no artwork anywhere -> IS in No Cover Art
+        assertTrue("Track with no artwork must BE in No Cover Art", noCoverArtFiltered.contains(trackNoArt))
+
+        // Track with broken artwork URI -> IS in No Cover Art
+        assertTrue("Track with broken artwork URI must BE in No Cover Art", noCoverArtFiltered.contains(trackBrokenUri))
+
+        // Placeholder/default artwork -> still considered No Cover Art
+        assertTrue("Placeholder artwork must BE in No Cover Art", noCoverArtFiltered.contains(trackPlaceholder))
+
+        // Library Insights Missing Artwork count MUST EQUAL number of tracks returned by No Cover Art filter
+        val insights = SoundSyncIntelligenceEngine.getLibraryHealthInsights(library)
+        assertEquals(
+            "Library Insights missing artwork count MUST EQUAL No Cover Art filter size",
+            noCoverArtFiltered.size,
+            insights.tracksMissingArtwork
+        )
+    }
+
+    @Test
+    fun `test 17 - track artwork added dynamically disappears from No Cover Art results`() {
+        var track = baseTrack(id = "dynamic_toggle", artworkCachePath = null, artworkUrl = null)
+        var library = listOf(track)
+
+        var noCoverFiltered = library.filter { !it.hasRealArtwork }
+        assertEquals(1, noCoverFiltered.size)
+        assertTrue(noCoverFiltered.contains(track))
+
+        // Artwork added
+        val newArtFile = tmpFolder.newFile("dyn_added.jpg").also { it.writeBytes(ByteArray(512)) }
+        track = track.copy(artworkCachePath = newArtFile.absolutePath)
+        library = listOf(track)
+
+        noCoverFiltered = library.filter { !it.hasRealArtwork }
+        assertEquals("Track whose artwork was added must disappear from No Cover Art", 0, noCoverFiltered.size)
+        assertFalse(noCoverFiltered.contains(track))
+
+        // Artwork removed
+        track = track.copy(artworkCachePath = null, artworkUrl = null)
+        library = listOf(track)
+
+        noCoverFiltered = library.filter { !it.hasRealArtwork }
+        assertEquals("Track whose artwork was removed must appear in No Cover Art", 1, noCoverFiltered.size)
+        assertTrue(noCoverFiltered.contains(track))
+    }
 }

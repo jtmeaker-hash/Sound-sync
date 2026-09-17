@@ -89,6 +89,32 @@ object AlbumArtHelper : CanonicalArtworkResolver {
         return memoryCache.get(cacheKey) ?: fallbackCache.get("fallback_album_${album.id}_$sizePx")
     }
 
+    /**
+     * Checks if genuine (non-fallback) decoded artwork is resident in memory for this track.
+     */
+    fun hasRealArtworkInMemory(track: Track): Boolean {
+        return try {
+            val cacheKey320 = computeCacheKey(track, 320)
+            val cacheKey512 = computeCacheKey(track, 512)
+            memoryCache.get(cacheKey320) != null || memoryCache.get(cacheKey512) != null
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun cacheDecodedArtwork(track: Track, cacheKey: String, decoded: Bitmap): Bitmap {
+        try {
+            memoryCache.put(cacheKey, decoded)
+        } catch (_: Throwable) {}
+        try {
+            com.example.metadata.artwork.CanonicalArtworkDetector.setTrackArtworkStatus(
+                track.id,
+                com.example.metadata.artwork.ArtworkStatus.HAS_ARTWORK
+            )
+        } catch (_: Throwable) {}
+        return decoded
+    }
+
     override suspend fun getArtworkForTrack(context: Context, track: Track, sizePx: Int): Bitmap = withContext(Dispatchers.IO) {
         val cacheKey = computeCacheKey(track, sizePx)
         memoryCache.get(cacheKey)?.let { return@withContext it }
@@ -102,8 +128,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
                     val file = File(actualPath)
                     if (file.exists() && file.canRead()) {
                         decodeFileToBitmap(file, sizePx)?.let { decoded ->
-                            memoryCache.put(cacheKey, decoded)
-                            return@withContext decoded
+                            return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
                         }
                     }
                 }
@@ -118,8 +143,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
                 val cachedFile = File(actualPath)
                 if (cachedFile.exists() && cachedFile.canRead()) {
                     decodeFileToBitmap(cachedFile, sizePx)?.let { decoded ->
-                        memoryCache.put(cacheKey, decoded)
-                        return@withContext decoded
+                        return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
                     }
                 }
             }
@@ -134,8 +158,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
 
             if (cachedFile != null && cachedFile.exists() && cachedFile.length() > 0) {
                 decodeFileToBitmap(cachedFile, sizePx)?.let { decoded ->
-                    memoryCache.put(cacheKey, decoded)
-                    return@withContext decoded
+                    return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
                 }
             }
         } catch (_: Exception) {}
@@ -146,8 +169,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
             try {
                 context.contentResolver.openInputStream(Uri.parse(artUrl))?.use { stream ->
                     decodeStreamToBitmap(stream, sizePx)?.let { decoded ->
-                        memoryCache.put(cacheKey, decoded)
-                        return@withContext decoded
+                        return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
                     }
                 }
             } catch (_: Exception) {}
@@ -157,8 +179,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
                 val albumArtUri = Uri.parse("content://media/external/audio/media/${track.mediaStoreId}/albumart")
                 context.contentResolver.openInputStream(albumArtUri)?.use { stream ->
                     decodeStreamToBitmap(stream, sizePx)?.let { decoded ->
-                        memoryCache.put(cacheKey, decoded)
-                        return@withContext decoded
+                        return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
                     }
                 }
             } catch (_: Exception) {}
@@ -168,8 +189,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
         val embeddedBitmap = extractEmbeddedPicture(context, track.filePath, sizePx)
             ?: (if (!track.resolvedUri.isNullOrBlank() && track.resolvedUri != track.filePath) extractEmbeddedPicture(context, track.resolvedUri, sizePx) else null)
         if (embeddedBitmap != null) {
-            memoryCache.put(cacheKey, embeddedBitmap)
-            return@withContext embeddedBitmap
+            return@withContext cacheDecodedArtwork(track, cacheKey, embeddedBitmap)
         }
 
         // Fallback embedded audio metadata reader for specialized tags/formats
@@ -177,8 +197,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
             val embeddedMeta = AudioEmbeddedMetadataReader.read(context, track.filePath, includeArtworkBytes = true)
             if (embeddedMeta.hasEmbeddedArtwork && embeddedMeta.embeddedArtworkBytes != null) {
                 decodeByteArrayToBitmap(embeddedMeta.embeddedArtworkBytes, sizePx)?.let { decoded ->
-                    memoryCache.put(cacheKey, decoded)
-                    return@withContext decoded
+                    return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
                 }
             }
         } catch (_: Exception) {}
@@ -189,8 +208,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
             val localResult = localFinder.findLocalArtwork(track)
             if (localResult != null && localResult.file.exists() && localResult.file.length() > 0) {
                 decodeFileToBitmap(localResult.file, sizePx)?.let { decoded ->
-                    memoryCache.put(cacheKey, decoded)
-                    return@withContext decoded
+                    return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
                 }
             }
         } catch (_: Exception) {}

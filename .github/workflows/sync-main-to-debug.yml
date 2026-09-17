@@ -1,0 +1,79 @@
+name: Sync Main to Debug
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: soundsync-sync-debug-with-main
+  cancel-in-progress: false
+
+jobs:
+  sync-to-debug:
+    name: Safe Fast-Forward Sync to Debug
+    # Prevent bot loops
+    if: github.actor != 'github-actions[bot]' && !contains(github.event.head_commit.message || '', '[skip ci]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check and Sync Main to Debug Branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Determine target debug branch (handle Debug and/or debug)
+          TARGETS=()
+          if git ls-remote --exit-code --heads origin Debug >/dev/null 2>&1; then
+            TARGETS+=("Debug")
+          fi
+          if git ls-remote --exit-code --heads origin debug >/dev/null 2>&1; then
+            TARGETS+=("debug")
+          fi
+          if [ ${#TARGETS[@]} -eq 0 ]; then
+            TARGETS+=("debug")
+          fi
+
+          echo "Target branches to sync: ${TARGETS[*]}"
+
+          for TARGET in "${TARGETS[@]}"; do
+            echo "========================================================"
+            echo "Checking target branch: $TARGET"
+            echo "========================================================"
+
+            # Fetch target branch if it exists remotely
+            if git ls-remote --exit-code --heads origin "$TARGET" >/dev/null 2>&1; then
+              git fetch origin "$TARGET":refs/remotes/origin/"$TARGET"
+
+              # Safe ancestry check: is origin/$TARGET an ancestor of origin/main (or HEAD)?
+              if git merge-base --is-ancestor origin/"$TARGET" HEAD; then
+                echo "Safety check PASSED: '$TARGET' is an ancestor of 'main'."
+                echo "Fast-forwarding '$TARGET' to 'main' (commit $(git rev-parse --short HEAD))..."
+                git push origin HEAD:refs/heads/"$TARGET"
+                echo "Successfully synced '$TARGET' to 'main'."
+              else
+                echo "::error::Safety check FAILED: '$TARGET' contains commits that have not been merged into 'main'!"
+                echo "Ancestry check failed: origin/$TARGET is NOT an ancestor of main."
+                echo "Unmerged commits on $TARGET:"
+                git log --oneline HEAD..origin/"$TARGET"
+                echo "Aborting sync to prevent overwriting unmerged work."
+                echo "Please merge or cherry-pick the above commits into 'main' first."
+                exit 1
+              fi
+            else
+              echo "Branch '$TARGET' does not exist remotely. Creating '$TARGET' from 'main'..."
+              git push origin HEAD:refs/heads/"$TARGET"
+              echo "Successfully created '$TARGET' from 'main'."
+            fi
+          done

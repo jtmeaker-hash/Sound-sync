@@ -153,9 +153,10 @@ object AudioEmbeddedMetadataReader {
             val mBpm = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toDoubleOrNull()
                 ?.takeIf { it in 30.0..300.0 }
 
-            val embeddedPic = if (includeArtworkBytes) retriever.embeddedPicture else null
+            val embeddedPic = retriever.embeddedPicture
             val hasArt = embeddedPic != null && embeddedPic.isNotEmpty()
             val artSize = embeddedPic?.size ?: 0
+            val artworkBytes = if (includeArtworkBytes) embeddedPic else null
 
             EmbeddedAudioMetadata(
                 title = mTitle?.takeIf(String::isNotBlank),
@@ -174,7 +175,7 @@ object AudioEmbeddedMetadataReader {
                 bpm = mBpm,
                 hasEmbeddedArtwork = hasArt,
                 embeddedArtworkSize = artSize,
-                embeddedArtworkBytes = embeddedPic
+                embeddedArtworkBytes = artworkBytes
             )
         } catch (e: Exception) {
             Log.v(TAG, "MediaMetadataRetriever skipped for $filePathOrUri: ${e.message}")
