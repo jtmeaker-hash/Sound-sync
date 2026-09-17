@@ -859,3 +859,75 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 35196944275 — FAIL
+
+- **Date:** 2026-09-17T08:01:32.026265+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `Debug`
+- **Commit:** [`4d53b14111`](https://github.com/jtmeaker-hash/Sound-sync/commit/4d53b141114cee83ecb46ef922bb52c4ff34160f)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35196944275)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `AudioMetadataWriteIntegrationTest > wav with large artwork safely skips massive artwork embedding and marks partial FAILED`
+- `java.lang.AssertionError at AudioMetadataWriteIntegrationTest.kt:1424`
+- `ExampleRobolectricTest > ScanStateManager correctly recovers from interrupted scan FAILED`
+- `java.lang.AssertionError at ExampleRobolectricTest.kt:215`
+- `StorageDiagnosticsAndScanLifecycleTest > testAppKilledReopenedDuringScan FAILED`
+- `java.lang.AssertionError at StorageDiagnosticsAndScanLifecycleTest.kt:266`
+- `514 tests completed, 3 failed, 3 skipped`
+- `> Task :app:testDebugUnitTest FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+
+### Summary of changes
+
+fix(artwork): canonical artwork detection system and local library filter consistency
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+4d53b14 fix(artwork): canonical artwork detection system and local library filter consistency
+ .../com/example/command/CommandPaletteEngine.kt    |   2 +-
+ .../com/example/doctor/LibraryDoctorAuditor.kt     |   4 +-
+ .../intelligence/SoundSyncIntelligenceEngine.kt    |   6 +-
+ .../com/example/metadata/MetadataFileWriteQueue.kt | 191 ++++++++-
+ .../com/example/metadata/MetadataFileWriter.kt     |  48 ++-
+ .../java/com/example/metadata/MetadataSettings.kt  |   8 +
+ .../metadata/artwork/ArtworkStatusResolver.kt      | 216 +++++++++++
+ app/src/main/java/com/example/model/Models.kt      |  10 +
+ .../com/example/smartcrate/SmartCrateEngine.kt     |   2 +-
+ .../java/com/example/storage/AudioTagWriter.kt     | 129 +++++--
+ .../example/ui/components/LibraryInsightsDialog.kt |   2 +-
+ .../components/MetadataEnrichmentSettingsCard.kt   |   3 +
+ .../com/example/ui/library/LibraryHealthScreen.kt  |   2 +-
+ .../java/com/example/ui/library/SongsScreen.kt     | 144 ++++++-
+ .../example/ui/settings/MetadataSettingsScreen.kt  |   6 +
+ .../example/ui/stats/ListeningStatisticsScreen.kt  |   2 +-
+ .../main/java/com/example/util/AlbumArtHelper.kt   |   2 +
+ .../java/com/example/CanonicalArtworkStatusTest.kt | 430 +++++++++++++++++++++
+ 18 files changed, 1120 insertions(+), 87 deletions(-)
+```
+
+---
