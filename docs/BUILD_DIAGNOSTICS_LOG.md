@@ -1528,3 +1528,56 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 35217130927 — PASS
+
+- **Date:** 2026-09-17T11:48:24.560573+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`ee4c3f756d`](https://github.com/jtmeaker-hash/Sound-sync/commit/ee4c3f756df67f0a780dd6a4ba2b5d0692ef56bf)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35217130927)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ✅ PASS |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+No CI build/test failures detected in this run.
+
+### Summary of changes
+
+fix(backup): resolve restore freeze, ANR, and crash regressions
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+ee4c3f7 fix(backup): resolve restore freeze, ANR, and crash regressions
+ .../com/example/analysis/TrackAnalysisManager.kt   |   8 +-
+ .../com/example/backup/RestoreDiagnosticLogger.kt  |  76 ++++
+ .../com/example/backup/SoundSyncBackupManager.kt   | 391 +++++++++++++++------
+ .../com/example/backup/SoundSyncBackupModels.kt    |  50 ++-
+ .../main/java/com/example/backup/TrackMatcher.kt   | 166 ++++++++-
+ .../main/java/com/example/brain/LibraryBrain.kt    |  22 +-
+ .../java/com/example/model/PlayabilityModels.kt    |   3 +-
+ .../main/java/com/example/ui/MainDjViewModel.kt    |  16 +-
+ .../com/example/ui/components/LocalMusicView.kt    |  13 +-
+ .../example/ui/settings/BackupSettingsScreen.kt    | 150 +++++++-
+ .../java/com/example/BackupRestorePipelineTest.kt  | 254 +++++++++++++
+ 11 files changed, 1020 insertions(+), 129 deletions(-)
+```
+
+---
