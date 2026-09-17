@@ -1396,3 +1396,50 @@ ad02cb8 feat: centralize artwork detection logic
 ```
 
 ---
+
+## CI Run 35200800085 — PASS
+
+- **Date:** 2026-09-17T08:44:23.921583+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`1b82b32835`](https://github.com/jtmeaker-hash/Sound-sync/commit/1b82b32835d33c60c2b274d5228695a36e17adab)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35200800085)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ✅ PASS |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+No CI build/test failures detected in this run.
+
+### Summary of changes
+
+fix(artwork): unify canonical artwork detection and cover-art filter consistency
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+1b82b32 fix(artwork): unify canonical artwork detection and cover-art filter consistency
+ .../metadata/artwork/ArtworkStatusResolver.kt      |  33 ++
+ .../metadata/artwork/CanonicalArtworkDetector.kt   |  40 +-
+ app/src/main/java/com/example/model/Models.kt      |  16 +-
+ .../java/com/example/CanonicalArtworkStatusTest.kt | 428 +++++++++++++++++++++
+ gradlew                                            |   0
+ 5 files changed, 497 insertions(+), 20 deletions(-)
+```
+
+---
