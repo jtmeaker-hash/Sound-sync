@@ -1218,7 +1218,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val duplicateMatches: StateFlow<List<DuplicateMatch>> = allTracks
         .debounce(1000)
         .map { tracks ->
-            DuplicateDetector.findDuplicates(tracks)
+            if (com.example.backup.SoundSyncBackupManager.isRestoring()) {
+                emptyList()
+            } else {
+                DuplicateDetector.findDuplicates(tracks)
+            }
         }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // SoundSync In-App Update System State
@@ -1311,6 +1315,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             var initialTracksEmitted = false
             trackDao.getAllTracks().collect { tracks ->
+                if (com.example.backup.SoundSyncBackupManager.isRestoring()) {
+                    return@collect
+                }
                 try {
                     com.example.metadata.artist.ArtistIndexManager.getInstance(getApplication()).rebuildIndex(tracks)
                 } catch (_: Exception) {}
@@ -1324,6 +1331,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             var initialFindsEmitted = false
             songFindRepository.allSongFinds.collect {
+                if (com.example.backup.SoundSyncBackupManager.isRestoring()) {
+                    return@collect
+                }
                 if (!initialFindsEmitted) {
                     initialFindsEmitted = true
                 } else {
@@ -1822,6 +1832,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun scanDeviceMediaStore() {
+        if (com.example.backup.SoundSyncBackupManager.isRestoring()) {
+            Log.d("MainDjViewModel", "Backup restore in progress, skipping MediaStore scan.")
+            return
+        }
         if (currentScanJob?.isActive == true || _isScanning.value) {
             Log.d("MainDjViewModel", "MediaStore scan already active, skipping duplicate request.")
             return

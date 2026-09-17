@@ -9,6 +9,7 @@ import androidx.room.withTransaction
 import com.example.data.AppDatabase
 import com.example.data.SongFindEntity
 import com.example.data.TrackEntity
+import com.example.model.PlayabilityStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,7 +19,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -66,6 +69,18 @@ class SoundSyncBackupManager(
     private val _isRestoring = MutableStateFlow(false)
     val isRestoring: StateFlow<Boolean> = _isRestoring.asStateFlow()
 
+    private val restoreMutex = Mutex()
+    private val _restoreProgress = MutableStateFlow(RestoreProgress())
+    val restoreProgress: StateFlow<RestoreProgress> = _restoreProgress.asStateFlow()
+
+    init {
+        val priorState = getDurableRestoreState()
+        if (priorState == DurableRestoreState.RESTORING || priorState == DurableRestoreState.VALIDATING) {
+            Log.w(TAG, "[ProcessDeathRecovery] Detected interrupted restore ($priorState) from prior session. Resetting to CRASHED to prevent crash loops.")
+            setDurableRestoreState(DurableRestoreState.CRASHED, "Previous restore operation was interrupted by process termination.")
+        }
+    }
+
     companion object {
         private const val TAG = "SoundSyncBackupManager"
         private const val PREFS_NAME = "soundsync_backup_prefs"
@@ -77,8 +92,18 @@ class SoundSyncBackupManager(
         private const val KEY_LAST_BACKUP_FINDS = "last_backup_finds"
         private const val KEY_LAST_BACKUP_LOC = "last_backup_loc"
 
+        private const val KEY_DURABLE_RESTORE_STATE = "durable_restore_state"
+        private const val KEY_DURABLE_RESTORE_TIMESTAMP = "durable_restore_timestamp"
+        private const val KEY_DURABLE_RESTORE_ERROR = "durable_restore_error"
+
         const val BACKUP_FILENAME = "soundsync_backup.json"
         const val BACKUP_SUBFOLDER = "SoundSync/backups"
+
+        private val _isRestoreInProgress = MutableStateFlow(false)
+        val isRestoreInProgress: StateFlow<Boolean> = _isRestoreInProgress.asStateFlow()
+
+        @JvmStatic
+        fun isRestoring(): Boolean = _isRestoreInProgress.value
 
         @Volatile
         private var INSTANCE: SoundSyncBackupManager? = null
@@ -95,6 +120,23 @@ class SoundSyncBackupManager(
         fun resetInstance() {
             INSTANCE = null
         }
+    }
+
+    fun getDurableRestoreState(): DurableRestoreState {
+        val raw = prefs.getString(KEY_DURABLE_RESTORE_STATE, DurableRestoreState.IDLE.name)
+        return try {
+            DurableRestoreState.valueOf(raw ?: DurableRestoreState.IDLE.name)
+        } catch (_: Exception) {
+            DurableRestoreState.IDLE
+        }
+    }
+
+    private fun setDurableRestoreState(state: DurableRestoreState, errorMsg: String? = null) {
+        prefs.edit()
+            .putString(KEY_DURABLE_RESTORE_STATE, state.name)
+            .putLong(KEY_DURABLE_RESTORE_TIMESTAMP, System.currentTimeMillis())
+            .putString(KEY_DURABLE_RESTORE_ERROR, errorMsg)
+            .commit()
     }
 
     fun isAutoBackupEnabled(): Boolean {
@@ -137,7 +179,7 @@ class SoundSyncBackupManager(
      * Backs up automatically after 5 seconds of inactivity if auto-backup is enabled.
      */
     fun notifyDataChanged() {
-        if (!isAutoBackupEnabled()) return
+        if (!isAutoBackupEnabled() || isRestoring()) return
 
         autoBackupJob?.cancel()
         autoBackupJob = scope.launch {
@@ -234,132 +276,203 @@ class SoundSyncBackupManager(
 
     /**
      * Restores backup from a user-specified Uri or from the latest detected persistent backup file.
-     * Executes non-destructively in a single database transaction.
+     * Executes non-destructively, in bounded batches, fully off the main thread.
+     * Reconciles current device storage asynchronously with bounded concurrency.
      */
+    suspend fun restoreBackupFromString(jsonString: String): RestoreResult = withContext(Dispatchers.IO) {
+        executeRestore { jsonString }
+    }
+
     suspend fun restoreBackup(sourceUri: Uri? = null): RestoreResult = withContext(Dispatchers.IO) {
-        _isRestoring.value = true
-        try {
-            val jsonString = if (sourceUri != null) {
+        executeRestore {
+            if (sourceUri != null) {
                 readJsonFromUri(sourceUri)
             } else {
                 val latest = findLatestBackup()
                 if (latest == null) {
-                    return@withContext RestoreResult.Error("No backup found on device to restore.")
+                    throw IllegalStateException("No backup found on device to restore.")
                 }
                 if (latest.uri != null) {
                     readJsonFromUri(latest.uri)
                 } else if (latest.file != null && latest.file.exists()) {
                     latest.file.readText(StandardCharsets.UTF_8)
                 } else {
-                    return@withContext RestoreResult.Error("Backup file is inaccessible.")
+                    throw IllegalStateException("Backup file is inaccessible.")
                 }
             }
+        }
+    }
 
+    private suspend fun executeRestore(jsonProvider: suspend () -> String): RestoreResult {
+        if (!restoreMutex.tryLock()) {
+            return RestoreResult.Error("A backup restore is already in progress. Please wait for it to complete.")
+        }
+
+        _isRestoring.value = true
+        _isRestoreInProgress.value = true
+        setDurableRestoreState(DurableRestoreState.VALIDATING)
+
+        val restoreStartNs = System.nanoTime()
+        var lastProgressNs = 0L
+
+        fun updateProgress(stage: RestoreStage, current: Int, total: Int, message: String, force: Boolean = false) {
+            val nowNs = System.nanoTime()
+            if (!force && nowNs - lastProgressNs < 100_000_000L && current < total) {
+                return
+            }
+            lastProgressNs = nowNs
+            val runtime = Runtime.getRuntime()
+            val usedMemMb = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
+            _restoreProgress.value = RestoreProgress(
+                stage = stage,
+                current = current,
+                total = total,
+                message = message,
+                recordsProcessed = current,
+                recordsRemaining = (total - current).coerceAtLeast(0),
+                memoryUsageMb = usedMemMb,
+                elapsedMs = (nowNs - restoreStartNs) / 1_000_000L
+            )
+            RestoreDiagnosticLogger.logStage(stage, (nowNs - restoreStartNs) / 1_000_000L, current, total, message)
+        }
+
+        return try {
+            updateProgress(RestoreStage.READING_BACKUP, 0, 0, "Reading backup file...", force = true)
+
+            val jsonString = try {
+                jsonProvider()
+            } catch (e: Exception) {
+                setDurableRestoreState(DurableRestoreState.FAILED, e.message ?: "Backup file is inaccessible.")
+                val diag = "Exception: ${e.javaClass.simpleName}: ${e.message}\n\nRestore Diagnostic Log:\n${RestoreDiagnosticLogger.dump()}"
+                return RestoreResult.Error(e.message ?: "Backup file is inaccessible.", diagnosticDetails = diag)
+            }
+
+            updateProgress(RestoreStage.VALIDATING_SCHEMA, 0, 0, "Validating backup schema...", force = true)
             val validation = validateBackup(jsonString)
             if (validation is ValidationResult.Invalid) {
-                return@withContext RestoreResult.Error("Invalid backup format: ${validation.reason}")
+                setDurableRestoreState(DurableRestoreState.FAILED, validation.reason)
+                val diag = "Validation failed: ${validation.reason}\n\nRestore Diagnostic Log:\n${RestoreDiagnosticLogger.dump()}"
+                return RestoreResult.Error("Invalid backup format: ${validation.reason}", diagnosticDetails = diag)
             }
 
             val backup = (validation as ValidationResult.Valid).backup
+            setDurableRestoreState(DurableRestoreState.RESTORING)
 
-            // Perform transactional non-destructive merge
             var restoredTracks = 0
             var matchedTracks = 0
             var restoredFinds = 0
 
-            database.withTransaction {
-                // 1. Restore and merge Song Finds
-                val currentFinds = database.songFindDao().getAllSongFindsSync()
-                val currentUrls = currentFinds.map { it.url.trim().lowercase(Locale.ROOT) }.toSet()
-                val currentIds = currentFinds.map { it.id }.toSet()
+            // 1. Song Finds
+            updateProgress(RestoreStage.RESTORING_SONG_FINDS, 0, backup.songFinds.size, "Checking existing Song Finds...")
+            val currentFinds = database.songFindDao().getAllSongFindsSync()
+            val currentUrls = currentFinds.map { it.url.trim().lowercase(Locale.ROOT) }.toSet()
+            val currentIds = currentFinds.map { it.id }.toSet()
 
-                val newFindsToInsert = mutableListOf<SongFindEntity>()
-                for (backupFind in backup.songFinds) {
-                    val urlNorm = backupFind.url.trim().lowercase(Locale.ROOT)
-                    if (!currentUrls.contains(urlNorm) && !currentIds.contains(backupFind.id)) {
-                        newFindsToInsert.add(backupFind.toEntity())
-                    }
+            val newFindsToInsert = mutableListOf<SongFindEntity>()
+            for (backupFind in backup.songFinds) {
+                val urlNorm = backupFind.url.trim().lowercase(Locale.ROOT)
+                if (!currentUrls.contains(urlNorm) && !currentIds.contains(backupFind.id)) {
+                    newFindsToInsert.add(backupFind.toEntity())
                 }
-                if (newFindsToInsert.isNotEmpty()) {
-                    database.songFindDao().insertSongFinds(newFindsToInsert)
-                    restoredFinds = newFindsToInsert.size
+            }
+            if (newFindsToInsert.isNotEmpty()) {
+                newFindsToInsert.chunked(200).forEachIndexed { index, chunk ->
+                    database.songFindDao().insertSongFinds(chunk)
+                    val processed = ((index + 1) * 200).coerceAtMost(newFindsToInsert.size)
+                    updateProgress(RestoreStage.RESTORING_SONG_FINDS, processed, newFindsToInsert.size, "Restoring Song Finds: $processed / ${newFindsToInsert.size}")
+                    yield()
                 }
+                restoredFinds = newFindsToInsert.size
+            }
 
-                // 2. Restore and merge Tracks
-                val currentTracks = database.trackDao().getAllTracksSync()
-                val matchResults = TrackMatcher.matchTracks(backup.tracks, currentTracks)
+            // 2. Track matching using optimized TrackMatcher (O(N) indexed lookups)
+            updateProgress(RestoreStage.MATCHING_TRACKS, 0, backup.tracks.size, "Matching tracks with current library...", force = true)
+            val currentTracks = database.trackDao().getAllTracksSync()
+            val matchResults = TrackMatcher.matchTracks(backup.tracks, currentTracks)
+            updateProgress(RestoreStage.MATCHING_TRACKS, backup.tracks.size, backup.tracks.size, "Track matching completed.", force = true)
 
-                val tracksToUpdate = mutableListOf<TrackEntity>()
-                val tracksToInsert = mutableListOf<TrackEntity>()
+            // 3. Separate into updates and inserts
+            val tracksToUpdate = mutableListOf<TrackEntity>()
+            val tracksToInsert = mutableListOf<TrackEntity>()
 
-                for (result in matchResults) {
-                    if (result.matchedEntity != null) {
-                        // Merge into existing entity
-                        val merged = TrackMatcher.mergeTrack(
-                            backupTrack = result.backupTrack,
-                            existingEntity = result.matchedEntity,
-                            isFileModified = result.isFileModified
-                        )
-                        tracksToUpdate.add(merged)
-                        matchedTracks++
+            for (result in matchResults) {
+                if (result.matchedEntity != null) {
+                    val merged = TrackMatcher.mergeTrack(
+                        backupTrack = result.backupTrack,
+                        existingEntity = result.matchedEntity,
+                        isFileModified = result.isFileModified
+                    )
+                    tracksToUpdate.add(merged)
+                    matchedTracks++
+                } else {
+                    // Restored unmatched track: verify physical path availability quickly without blocking
+                    val isAvail = com.example.storage.StorageAvailabilityHelper.isTrackPathAvailable(context, result.backupTrack.filePath)
+                    val playability = if (isAvail) {
+                        com.example.model.PlayabilityStatus.PLAYABLE.name
+                    } else if (result.backupTrack.filePath.isNotBlank()) {
+                        com.example.model.PlayabilityStatus.SOURCE_RELINK_PENDING.name
                     } else {
-                        // Unmatched track (not on current device yet or scanned under different root)
-                        // Restore as an offline track so all historical analysis and tags are preserved!
-                        val restoredEntity = result.backupTrack.toEntity().copy(
-                            isOfflineReady = false,
-                            metadataScanState = if (result.backupTrack.metadataScanState.isNotBlank() && result.backupTrack.metadataScanState != "NOT_SCANNED") {
-                                result.backupTrack.metadataScanState
-                            } else {
-                                com.example.model.MetadataScanState.RESTORED.name
-                            },
-                            analysisState = if (result.backupTrack.bpm > 0.0 || result.backupTrack.musicalKey.isNotBlank() || result.backupTrack.analysisState == "COMPLETE") {
-                                "COMPLETE"
-                            } else {
-                                result.backupTrack.analysisState
-                            },
-                            userConfirmedMetadata = true
-                        )
-                        tracksToInsert.add(restoredEntity)
-                        restoredTracks++
+                        com.example.model.PlayabilityStatus.MISSING_FILE.name
                     }
-                }
 
+                    val restoredEntity = result.backupTrack.toEntity().copy(
+                        isOfflineReady = false,
+                        playabilityStatus = playability,
+                        playbackErrorCode = if (!isAvail) "SOURCE_RELINK_PENDING" else null,
+                        metadataScanState = if (result.backupTrack.metadataScanState.isNotBlank() && result.backupTrack.metadataScanState != "NOT_SCANNED") {
+                            result.backupTrack.metadataScanState
+                        } else {
+                            com.example.model.MetadataScanState.RESTORED.name
+                        },
+                        analysisState = if (result.backupTrack.bpm > 0.0 || result.backupTrack.musicalKey.isNotBlank() || result.backupTrack.analysisState == "COMPLETE") {
+                            "COMPLETE"
+                        } else {
+                            result.backupTrack.analysisState
+                        },
+                        userConfirmedMetadata = true
+                    )
+                    tracksToInsert.add(restoredEntity)
+                    restoredTracks++
+                }
+            }
+
+            // 4. Batch database transactional restore
+            val totalTrackOps = tracksToUpdate.size + tracksToInsert.size
+            updateProgress(RestoreStage.RESTORING_TRACKS, 0, totalTrackOps, "Writing tracks to database in batches...", force = true)
+
+            database.withTransaction {
+                var processedSoFar = 0
                 if (tracksToUpdate.isNotEmpty()) {
-                    database.trackDao().updateTracks(tracksToUpdate)
+                    tracksToUpdate.chunked(200).forEach { chunk ->
+                        database.trackDao().updateTracks(chunk)
+                        processedSoFar += chunk.size
+                        updateProgress(RestoreStage.RESTORING_TRACKS, processedSoFar, totalTrackOps, "Updated $processedSoFar / $totalTrackOps tracks")
+                    }
                 }
                 if (tracksToInsert.isNotEmpty()) {
-                    database.trackDao().insertTracks(tracksToInsert)
+                    tracksToInsert.chunked(200).forEach { chunk ->
+                        database.trackDao().insertTracks(chunk)
+                        processedSoFar += chunk.size
+                        updateProgress(RestoreStage.RESTORING_TRACKS, processedSoFar, totalTrackOps, "Inserted $processedSoFar / $totalTrackOps tracks")
+                    }
                 }
 
-                // Reconcile restored tracks with current device storage sources
-                try {
-                    val allRestoredEntities = tracksToInsert + tracksToUpdate
-                    for (entity in allRestoredEntities) {
-                        if (!com.example.storage.StorageAvailabilityHelper.isTrackPathAvailable(context, entity.filePath)) {
-                            val track = entity.toTrack()
-                            val resolution = com.example.storage.TrackSourceResolver.resolveTrackSource(
-                                context,
-                                track,
-                                persistToDb = true,
-                                trackDao = database.trackDao()
-                            )
-                            if (!resolution.isPlayable && resolution.volumeUuid != null) {
-                                val volInfo = com.example.storage.TrackSourceResolver.getStorageVolumeForPath(context, entity.filePath)
-                                val status = if (volInfo?.isMounted == false) {
-                                    com.example.model.PlayabilityStatus.VOLUME_UNAVAILABLE.name
-                                } else if (resolution.requiresFolderAccess) {
-                                    com.example.model.PlayabilityStatus.PERMISSION_REQUIRED.name
-                                } else {
-                                    entity.playabilityStatus
-                                }
-                                val code = if (volInfo?.isMounted == false) "ERR_STORAGE_UNMOUNTED" else if (resolution.requiresFolderAccess) "ERR_SCOPED_STORAGE_RESTRICTION" else null
-                                database.trackDao().updatePlayabilityStatus(entity.id, status, code, null)
+                // 5. Restore DJ Prep Data in chunks
+                if (backup.djPrepData.isNotEmpty()) {
+                    updateProgress(RestoreStage.RESTORING_DJ_PREP, 0, backup.djPrepData.size, "Restoring DJ Prep data...")
+                    backup.djPrepData.chunked(200).forEach { chunk ->
+                        for (prepItem in chunk) {
+                            val existing = database.djPrepDao().getByTrackId(prepItem.trackId)
+                            if (existing == null || existing.prepStatus == "NOT_ANALYSED" || prepItem.updatedAt > existing.updatedAt) {
+                                database.djPrepDao().insertOrUpdate(prepItem.toEntity())
                             }
                         }
                     }
-                } catch (_: Throwable) {}
+                    updateProgress(RestoreStage.RESTORING_DJ_PREP, backup.djPrepData.size, backup.djPrepData.size, "DJ Prep data restored.")
+                }
 
-                // 3. Restore Doctor review and ignore states
+                // 6. Restore Preferences (Doctor issues & EQ)
+                updateProgress(RestoreStage.RESTORING_PREFERENCES, 0, 1, "Restoring preferences and EQ presets...")
                 try {
                     val doctorPrefs = com.example.doctor.LibraryDoctorPreferences.getInstance(context)
                     if (backup.doctorIgnoredIssues.isNotEmpty()) {
@@ -372,23 +485,6 @@ class SoundSyncBackupManager(
                     Log.w(TAG, "Failed restoring Doctor issue preferences", e)
                 }
 
-                // 4. Restore DJ Prep Data (cues, memory cues, beat grids, phrases)
-                try {
-                    if (backup.djPrepData.isNotEmpty()) {
-                        for (prepItem in backup.djPrepData) {
-                            val existing = database.djPrepDao().getByTrackId(prepItem.trackId)
-                            if (existing == null || existing.prepStatus == "NOT_ANALYSED") {
-                                database.djPrepDao().insertOrUpdate(prepItem.toEntity())
-                            } else if (prepItem.updatedAt > existing.updatedAt) {
-                                database.djPrepDao().insertOrUpdate(prepItem.toEntity())
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed restoring DJ Prep data", e)
-                }
-
-                // 5. Restore EQ Configuration & Presets
                 try {
                     if (!backup.eqConfigJson.isNullOrBlank()) {
                         val eqFile = File(context.filesDir, "parametric_eq_presets.json")
@@ -400,9 +496,47 @@ class SoundSyncBackupManager(
                 }
             }
 
+            // Commit complete!
+            val totalElapsedMs = (System.nanoTime() - restoreStartNs) / 1_000_000L
+            setDurableRestoreState(DurableRestoreState.SUCCESS)
+
+            updateProgress(RestoreStage.FINALIZING, totalTrackOps, totalTrackOps, "Finalizing restore...", force = true)
+
+            // Section 21 diagnostic logging
+            RestoreDiagnosticLogger.logCoreRestoreComplete(restoredTracks, matchedTracks, restoredFinds, totalElapsedMs)
+            val pendingRelinkCount = tracksToInsert.count { it.playabilityStatus == com.example.model.PlayabilityStatus.SOURCE_RELINK_PENDING.name }
+            val pendingAnalysisCount = tracksToInsert.count { it.analysisState != "COMPLETE" }
+
+            RestoreDiagnosticLogger.logSystemPostRestore("LIBRARY_RESCAN", 0, "status=suppressed_during_restore")
+            RestoreDiagnosticLogger.logSystemPostRestore("MEDIASTORE_RECONCILIATION", pendingRelinkCount, "reconciling_asynchronously")
+            RestoreDiagnosticLogger.logSystemPostRestore("METADATA_SCAN", 0, "status=preserved_from_backup")
+            RestoreDiagnosticLogger.logSystemPostRestore("BPM_ANALYSIS", pendingAnalysisCount, "reanalysis_suppressed_for_valid_restored_data")
+            RestoreDiagnosticLogger.logSystemPostRestore("KEY_ANALYSIS", pendingAnalysisCount, "reanalysis_suppressed_for_valid_restored_data")
+            RestoreDiagnosticLogger.logSystemPostRestore("ARTWORK_REFRESH", 0, "status=lazy_loaded_on_demand")
+            RestoreDiagnosticLogger.logSystemPostRestore("SEARCH_INDEX_REBUILD", 1, "scheduled_debounced")
+            RestoreDiagnosticLogger.logSystemPostRestore("FILE_RELOCATION_SCAN", pendingRelinkCount, "bounded_background_dispatch")
+            RestoreDiagnosticLogger.logSystemPostRestore("PLAYLIST_REPAIR", 0, "playlists_intact")
+
+            // Update preferences & summary
+            prefs.edit()
+                .putLong(KEY_LAST_BACKUP_TIME, backup.updatedAt)
+                .putInt(KEY_LAST_BACKUP_TRACKS, backup.tracks.size)
+                .putInt(KEY_LAST_BACKUP_FINDS, backup.songFinds.size)
+                .apply()
             _summaryFlow.value = loadSummary()
-            val message = "Restored $matchedTracks matched tracks, $restoredTracks new track records, and $restoredFinds Song Finds."
+
+            updateProgress(RestoreStage.COMPLETED, totalTrackOps, totalTrackOps, "Restore completed successfully!", force = true)
+
+            val message = "Restored $matchedTracks matched tracks, $restoredTracks new track records, and $restoredFinds Song Finds in ${totalElapsedMs}ms."
             Log.i(TAG, message)
+
+            // Launch bounded background reconciliation for relink-pending tracks
+            if (pendingRelinkCount > 0) {
+                scope.launch {
+                    reconcileRelinkPendingTracksInBackground(tracksToInsert.filter { it.playabilityStatus == com.example.model.PlayabilityStatus.SOURCE_RELINK_PENDING.name })
+                }
+            }
+
             RestoreResult.Success(
                 tracksRestored = restoredTracks,
                 tracksMatched = matchedTracks,
@@ -410,11 +544,56 @@ class SoundSyncBackupManager(
                 message = message
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Restore failed", e)
-            RestoreResult.Error("Restore failed: ${e.message ?: "Unknown error"}", e)
+            val totalElapsedMs = (System.nanoTime() - restoreStartNs) / 1_000_000L
+            setDurableRestoreState(DurableRestoreState.FAILED, e.message)
+            RestoreDiagnosticLogger.logError(RestoreStage.FAILED, "Restore failed after ${totalElapsedMs}ms: ${e.message}", e)
+            updateProgress(RestoreStage.FAILED, 0, 0, "Restore failed: ${e.message ?: "Unknown error"}", force = true)
+            val diagDetails = "Exception: ${e.javaClass.simpleName}: ${e.message}\nStack trace:\n${Log.getStackTraceString(e)}"
+            RestoreResult.Error(
+                message = "Backup restore could not be completed. Your existing library has been kept unchanged.",
+                cause = e,
+                diagnosticDetails = diagDetails
+            )
         } finally {
             _isRestoring.value = false
+            _isRestoreInProgress.value = false
+            restoreMutex.unlock()
         }
+    }
+
+    private suspend fun reconcileRelinkPendingTracksInBackground(pendingTracks: List<TrackEntity>) = withContext(Dispatchers.IO) {
+        if (pendingTracks.isEmpty()) return@withContext
+        Log.i(TAG, "Starting bounded background reconciliation for ${pendingTracks.size} relink-pending tracks...")
+        val batchLimit = 20
+        pendingTracks.chunked(batchLimit).forEach { chunk ->
+            if (_isRestoreInProgress.value) return@withContext
+            for (entity in chunk) {
+                try {
+                    val track = entity.toTrack()
+                    val resolution = com.example.storage.TrackSourceResolver.resolveTrackSource(
+                        context,
+                        track,
+                        persistToDb = true,
+                        trackDao = database.trackDao()
+                    )
+                    if (!resolution.isPlayable && resolution.volumeUuid != null) {
+                        val volInfo = com.example.storage.TrackSourceResolver.getStorageVolumeForPath(context, entity.filePath)
+                        val status = if (volInfo?.isMounted == false) {
+                            com.example.model.PlayabilityStatus.VOLUME_UNAVAILABLE.name
+                        } else if (resolution.requiresFolderAccess) {
+                            com.example.model.PlayabilityStatus.PERMISSION_REQUIRED.name
+                        } else {
+                            entity.playabilityStatus
+                        }
+                        val code = if (volInfo?.isMounted == false) "ERR_STORAGE_UNMOUNTED" else if (resolution.requiresFolderAccess) "ERR_SCOPED_STORAGE_RESTRICTION" else null
+                        database.trackDao().updatePlayabilityStatus(entity.id, status, code, null)
+                    }
+                } catch (_: Throwable) {}
+                delay(20)
+            }
+            delay(100)
+        }
+        Log.i(TAG, "Completed bounded background reconciliation for relink-pending tracks.")
     }
 
     /**

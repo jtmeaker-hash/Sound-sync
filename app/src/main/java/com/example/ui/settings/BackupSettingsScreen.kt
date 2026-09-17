@@ -1,5 +1,7 @@
 package com.example.ui.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
@@ -43,6 +45,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
@@ -95,11 +98,13 @@ fun BackupSettingsScreen(
     val summary by backupManager.summaryFlow.collectAsState()
     val isBackingUp by backupManager.isBackingUp.collectAsState()
     val isRestoring by backupManager.isRestoring.collectAsState()
+    val restoreProgress by backupManager.restoreProgress.collectAsState()
 
     var availableBackups by remember { mutableStateOf<List<BackupFileInfo>>(emptyList()) }
     var showRestoreConfirmDialog by remember { mutableStateOf(false) }
     var selectedRestoreUri by remember { mutableStateOf<Uri?>(null) }
     var restoreResultMessage by remember { mutableStateOf<String?>(null) }
+    var restoreErrorDetails by remember { mutableStateOf<String?>(null) }
 
     fun refreshBackups() {
         availableBackups = backupManager.findAvailableBackups()
@@ -526,10 +531,12 @@ fun BackupSettingsScreen(
                             when (result) {
                                 is RestoreResult.Success -> {
                                     restoreResultMessage = result.message
+                                    restoreErrorDetails = null
                                     Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                                 }
                                 is RestoreResult.Error -> {
-                                    restoreResultMessage = "Error: ${result.message}"
+                                    restoreResultMessage = result.message
+                                    restoreErrorDetails = result.diagnosticDetails
                                     Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                                 }
                             }
@@ -553,8 +560,145 @@ fun BackupSettingsScreen(
         )
     }
 
-    // Result notification dialog
-    if (restoreResultMessage != null) {
+    // Live restore progress dialog
+    if (isRestoring) {
+        AlertDialog(
+            onDismissRequest = {}, // Cannot be dismissed while restoring is active
+            title = {
+                Text(
+                    "Restoring SoundSync Backup",
+                    color = theme.textPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = restoreProgress.stage.displayName,
+                        color = theme.textPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = restoreProgress.message,
+                        color = theme.textSecondary,
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LinearProgressIndicator(
+                        progress = { restoreProgress.progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = if (SoundSyncTheme.isPro) Color.White else DeckACyan,
+                        trackColor = theme.surfaceRaised
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "${(restoreProgress.progress * 100).toInt()}%",
+                            color = theme.textSecondary,
+                            fontSize = 10.sp
+                        )
+                        if (restoreProgress.totalItems > 0) {
+                            Text(
+                                text = "${restoreProgress.itemsProcessed} / ${restoreProgress.totalItems}",
+                                color = theme.textSecondary,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Background analysis and scanning are paused safely.",
+                        color = theme.textSecondary.copy(alpha = 0.7f),
+                        fontSize = 10.sp
+                    )
+                }
+            },
+            confirmButton = {},
+            containerColor = theme.surface,
+            shape = RoundedCornerShape(theme.cornerMedium)
+        )
+    }
+
+    // Failure / Error diagnostic dialog
+    if (restoreErrorDetails != null) {
+        AlertDialog(
+            onDismissRequest = {
+                restoreErrorDetails = null
+                restoreResultMessage = null
+            },
+            title = {
+                Text("Restore Encountered an Error", color = BloodRedPrimary, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = restoreResultMessage ?: "Failed to restore backup.",
+                        color = theme.textPrimary,
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Diagnostic Log:",
+                        color = theme.textSecondary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp)
+                            .background(theme.surfaceRaised, RoundedCornerShape(6.dp))
+                            .padding(8.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            text = restoreErrorDetails ?: "",
+                            color = theme.textSecondary,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("SoundSync Restore Diagnostic", restoreErrorDetails ?: "")
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "Diagnostic log copied to clipboard", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (SoundSyncTheme.isPro) Color.White else DeckACyan,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text("Copy Diagnostic Log")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        restoreErrorDetails = null
+                        restoreResultMessage = null
+                    }
+                ) {
+                    Text("Close", color = theme.textSecondary)
+                }
+            },
+            containerColor = theme.surface,
+            shape = RoundedCornerShape(theme.cornerMedium)
+        )
+    } else if (restoreResultMessage != null) {
         AlertDialog(
             onDismissRequest = { restoreResultMessage = null },
             title = {

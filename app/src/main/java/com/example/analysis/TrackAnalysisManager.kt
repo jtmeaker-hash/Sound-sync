@@ -215,7 +215,7 @@ class TrackAnalysisManager private constructor(
      * Triggers the queue worker if background analysis is enabled.
      */
     fun triggerQueueProcessing() {
-        if (!isBackgroundAnalysisEnabled) return
+        if (!isBackgroundAnalysisEnabled || com.example.backup.SoundSyncBackupManager.isRestoring()) return
 
         scope.launch {
             jobMutex.withLock {
@@ -317,6 +317,12 @@ class TrackAnalysisManager private constructor(
 
         try {
             while (isActive) {
+                if (com.example.backup.SoundSyncBackupManager.isRestoring()) {
+                    Log.d(TAG, "[$runId] Backup restore in progress. Pausing background analysis.")
+                    delay(2000)
+                    continue
+                }
+
                 if (!isBackgroundAnalysisEnabled) {
                     Log.d(TAG, "[$runId] Background analysis disabled in settings. Pausing worker.")
                     terminalState = ScanLifecycleState.PAUSED

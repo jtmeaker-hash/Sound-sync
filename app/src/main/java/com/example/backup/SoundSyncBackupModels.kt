@@ -443,6 +443,50 @@ data class BackupSummary(
     val isAutoBackupEnabled: Boolean
 )
 
+enum class RestoreStage(val displayName: String) {
+    IDLE("Idle"),
+    READING_BACKUP("Reading Backup File"),
+    VALIDATING_SCHEMA("Validating Schema"),
+    MATCHING_TRACKS("Matching Library Tracks"),
+    RESTORING_SONG_FINDS("Restoring Song Finds"),
+    RESTORING_TRACKS("Restoring Library Metadata"),
+    RESTORING_DJ_PREP("Restoring DJ Preparation"),
+    RESTORING_PREFERENCES("Restoring Settings"),
+    FINALIZING("Finalizing Library"),
+    COMPLETED("Completed"),
+    FAILED("Failed")
+}
+
+data class RestoreProgress(
+    val stage: RestoreStage = RestoreStage.IDLE,
+    val current: Int = 0,
+    val total: Int = 0,
+    val message: String = "",
+    val recordsProcessed: Int = 0,
+    val recordsRemaining: Int = 0,
+    val memoryUsageMb: Long = 0L,
+    val elapsedMs: Long = 0L
+) {
+    val progress: Float
+        get() = if (total > 0) (current.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+
+    val itemsProcessed: Int
+        get() = recordsProcessed
+
+    val totalItems: Int
+        get() = total
+}
+
+enum class DurableRestoreState {
+    IDLE,
+    VALIDATING,
+    RESTORING,
+    FINALISING,
+    SUCCESS,
+    FAILED,
+    CRASHED
+}
+
 sealed class RestoreResult {
     data class Success(
         val tracksRestored: Int,
@@ -451,7 +495,11 @@ sealed class RestoreResult {
         val message: String
     ) : RestoreResult()
 
-    data class Error(val message: String, val cause: Throwable? = null) : RestoreResult()
+    data class Error(
+        val message: String,
+        val cause: Throwable? = null,
+        val diagnosticDetails: String = ""
+    ) : RestoreResult()
 }
 
 sealed class ValidationResult {

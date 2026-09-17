@@ -121,6 +121,10 @@ class LibraryBrain private constructor(
      * Inserts records for any newly discovered tracks and removes orphans.
      */
     suspend fun syncWithLibraryTracks() = withContext(Dispatchers.IO) {
+        if (com.example.backup.SoundSyncBackupManager.isRestoring()) {
+            Log.d(TAG, "Suppressed syncWithLibraryTracks: Backup restore in progress.")
+            return@withContext
+        }
         try {
             val allTracks = trackDao.getAllTracksList()
             if (allTracks.isEmpty()) {
@@ -139,12 +143,15 @@ class LibraryBrain private constructor(
                         t.playabilityStatus == PlayabilityStatus.MISSING_FILE.name -> BrainProcessingState.MISSING_FILE.name
                         else -> BrainProcessingState.PENDING.name
                     }
+                    val hasArt = (!t.artworkSource.isNullOrBlank() && t.artworkSource != "NONE") ||
+                            !t.artworkUrl.isNullOrBlank() ||
+                            !t.artworkCachePath.isNullOrBlank()
                     newEntities.add(
                         TrackBrainStatusEntity(
                             trackId = t.id,
                             overallStatus = overall,
                             metadataStatus = if (t.artist != "Unknown Artist" && t.title != "Unknown Title") BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
-                            artworkStatus = if (com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(context, t.toTrack())) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
+                            artworkStatus = if (hasArt) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
                             bpmStatus = if (t.bpm > 0.0) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
                             keyStatus = if (t.musicalKey.isNotBlank()) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
                             waveformStatus = if (t.analysisState == AnalysisState.COMPLETE.name) BrainSubStatus.COMPLETE.name else BrainSubStatus.NOT_STARTED.name,
@@ -483,8 +490,8 @@ class LibraryBrain private constructor(
      * Starts or continues the background analysis loop.
      */
     fun triggerProcessing() {
-        if (isUserPaused) {
-            Log.d(TAG, "triggerProcessing ignored because analysis is paused by user.")
+        if (isUserPaused || com.example.backup.SoundSyncBackupManager.isRestoring()) {
+            Log.d(TAG, "triggerProcessing ignored because analysis is paused or backup restore is in progress.")
             return
         }
 
@@ -507,6 +514,15 @@ class LibraryBrain private constructor(
 
         try {
             while (isActive) {
+                if (com.example.backup.SoundSyncBackupManager.isRestoring()) {
+                    _brainSummary.value = _brainSummary.value.copy(
+                        isRunning = false,
+                        currentJobDescription = "Paused during backup restore"
+                    )
+                    delay(2000)
+                    continue
+                }
+
                 if (isUserPaused) {
                     _brainSummary.value = _brainSummary.value.copy(
                         isRunning = false,

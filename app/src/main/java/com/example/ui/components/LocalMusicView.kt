@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -345,7 +346,8 @@ fun LocalMusicView(
                         val scope = rememberCoroutineScope()
                         val backupManager = remember { com.example.backup.SoundSyncBackupManager.getInstance(context) }
                         var hasBackup by remember { mutableStateOf(false) }
-                        var isRestoring by remember { mutableStateOf(false) }
+                        val isRestoreActive by backupManager.isRestoring.collectAsState()
+                        val restoreProgress by backupManager.restoreProgress.collectAsState()
 
                         LaunchedEffect(Unit) {
                             hasBackup = backupManager.hasExistingBackup()
@@ -379,9 +381,7 @@ fun LocalMusicView(
                                     Button(
                                         onClick = {
                                             scope.launch {
-                                                isRestoring = true
                                                 val res = backupManager.restoreBackup()
-                                                isRestoring = false
                                                 when (res) {
                                                     is com.example.backup.RestoreResult.Success -> {
                                                         Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
@@ -392,14 +392,15 @@ fun LocalMusicView(
                                                 }
                                             }
                                         },
-                                        enabled = !isRestoring,
+                                        enabled = !isRestoreActive,
                                         colors = ButtonDefaults.buttonColors(containerColor = DeckACyan, contentColor = DjObsidian),
                                         shape = RoundedCornerShape(6.dp)
                                     ) {
-                                        if (isRestoring) {
+                                        if (isRestoreActive) {
                                             CircularProgressIndicator(color = DjObsidian, modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Restoring...", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                            val label = if (restoreProgress.message.isNotBlank()) restoreProgress.message else "Restoring..."
+                                            Text(label, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                         } else {
                                             Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(14.dp))
                                             Spacer(modifier = Modifier.width(6.dp))

@@ -32,7 +32,8 @@ enum class PlayabilityStatus(
     SOURCE_STALE("Stale Media Source", "Source Stale", false, true),
     RELOCATED("Track Relocated", "Relocated", false, true),
     EXTRACTOR_ERROR("Extractor Initialization Error", "Extractor Error", false, true),
-    FORMAT_UNRECOGNIZED("Unrecognized Audio Format", "Unrecognized", false, true)
+    FORMAT_UNRECOGNIZED("Unrecognized Audio Format", "Unrecognized", false, true),
+    SOURCE_RELINK_PENDING("Relink Pending", "Relink Pending", false, true)
 }
 
 /**

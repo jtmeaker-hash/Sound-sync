@@ -2,6 +2,7 @@ package com.example.backup
 
 import com.example.data.TrackEntity
 import com.example.metadata.repair.StringNormalizer
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -165,21 +166,172 @@ object TrackMatcher {
 
     /**
      * Efficiently matches all backup tracks against current library entities.
+     * Uses multi-tier hash indexing (fingerprint, Apple ID, relative path, file path, normalized metadata)
+     * and duration-bucketed candidate pruning for fuzzy matching.
+     * Operates in O(N) time, eliminating O(N^2) fuzzy comparison freezes.
      * Prevents multiple backup tracks from binding to the same local entity.
      */
     fun matchTracks(
         backupTracks: List<TrackBackupItem>,
         currentEntities: List<TrackEntity>
     ): List<TrackMatchResult> {
-        val remainingEntities = currentEntities.toMutableList()
-        val results = mutableListOf<TrackMatchResult>()
+        if (backupTracks.isEmpty()) return emptyList()
+        if (currentEntities.isEmpty()) {
+            return backupTracks.map {
+                TrackMatchResult(
+                    backupTrack = it,
+                    matchedEntity = null,
+                    confidenceLevel = MatchConfidenceLevel.NONE
+                )
+            }
+        }
+
+        // 1. Build fast lookup indexes over currentEntities
+        val fingerprintMap = HashMap<String, MutableList<TrackEntity>>()
+        val appleIdMap = HashMap<Long, MutableList<TrackEntity>>()
+        val relPathMap = HashMap<String, MutableList<TrackEntity>>()
+        val absPathMap = HashMap<String, MutableList<TrackEntity>>()
+        val exactMetadataMap = HashMap<String, MutableList<TrackEntity>>() // "normTitle|normArtist"
+        val durationBuckets = HashMap<Int, MutableList<TrackEntity>>() // bucket = duration / 4
+
+        for (e in currentEntities) {
+            if (e.contentFingerprint.isNotBlank()) {
+                fingerprintMap.getOrPut(e.contentFingerprint) { mutableListOf() }.add(e)
+            }
+            if (e.appleTrackId != null && e.appleTrackId > 0L) {
+                appleIdMap.getOrPut(e.appleTrackId) { mutableListOf() }.add(e)
+            }
+            if (e.storageRelativePath.isNotBlank()) {
+                relPathMap.getOrPut(e.storageRelativePath.lowercase(Locale.ROOT)) { mutableListOf() }.add(e)
+            }
+            if (e.filePath.isNotBlank()) {
+                absPathMap.getOrPut(e.filePath.lowercase(Locale.ROOT)) { mutableListOf() }.add(e)
+            }
+            val normT = StringNormalizer.foldUnicodeAndCase(e.title)
+            val normA = StringNormalizer.foldUnicodeAndCase(e.artist)
+            if (normT.isNotBlank()) {
+                exactMetadataMap.getOrPut("$normT|$normA") { mutableListOf() }.add(e)
+            }
+            if (e.durationSeconds > 0) {
+                val bucket = e.durationSeconds / 4
+                durationBuckets.getOrPut(bucket) { mutableListOf() }.add(e)
+            }
+        }
+
+        val matchedEntityIds = HashSet<String>()
+        val results = ArrayList<TrackMatchResult>(backupTracks.size)
 
         for (backupTrack in backupTracks) {
-            val match = matchTrack(backupTrack, remainingEntities)
-            results.add(match)
-            if (match.matchedEntity != null) {
-                // Avoid assigning the same track twice
-                remainingEntities.removeAll { it.id == match.matchedEntity.id }
+            var matched: TrackEntity? = null
+            var confidence = MatchConfidenceLevel.NONE
+
+            // 1. Acoustic Fingerprint match
+            if (backupTrack.contentFingerprint.isNotBlank()) {
+                matched = fingerprintMap[backupTrack.contentFingerprint]?.firstOrNull { it.id !in matchedEntityIds }
+                if (matched != null) confidence = MatchConfidenceLevel.FINGERPRINT
+            }
+
+            // 2. Apple Track ID match
+            if (matched == null && backupTrack.appleTrackId != null && backupTrack.appleTrackId > 0L) {
+                matched = appleIdMap[backupTrack.appleTrackId]?.firstOrNull { it.id !in matchedEntityIds }
+                if (matched != null) confidence = MatchConfidenceLevel.RECORDING_ID
+            }
+
+            // 3. Storage Relative Path match
+            if (matched == null && backupTrack.storageRelativePath.isNotBlank()) {
+                matched = relPathMap[backupTrack.storageRelativePath.lowercase(Locale.ROOT)]?.firstOrNull { it.id !in matchedEntityIds }
+                if (matched != null) confidence = MatchConfidenceLevel.RELATIVE_PATH_EXACT
+            }
+
+            // 4. Absolute Path match
+            if (matched == null && backupTrack.filePath.isNotBlank()) {
+                matched = absPathMap[backupTrack.filePath.lowercase(Locale.ROOT)]?.firstOrNull { it.id !in matchedEntityIds }
+                if (matched != null) confidence = MatchConfidenceLevel.FILE_PATH_EXACT
+            }
+
+            // 5. Exact Normalized Metadata match
+            if (matched == null) {
+                val normT = StringNormalizer.foldUnicodeAndCase(backupTrack.title)
+                val normA = StringNormalizer.foldUnicodeAndCase(backupTrack.resolvedArtist ?: backupTrack.artist)
+                if (normT.isNotBlank()) {
+                    matched = exactMetadataMap["$normT|$normA"]?.firstOrNull { it.id !in matchedEntityIds }
+                    if (matched != null) confidence = MatchConfidenceLevel.METADATA_HIGH
+                }
+            }
+
+            // 6. Fuzzy Scored Fallback (pruned by duration bucket)
+            if (matched == null) {
+                // If duration is known, search adjacent duration buckets (-1, 0, +1), covering within 4-8 seconds
+                val candidateList: Collection<TrackEntity> = if (backupTrack.durationSeconds > 0) {
+                    val bucket = backupTrack.durationSeconds / 4
+                    val candidates = mutableListOf<TrackEntity>()
+                    durationBuckets[bucket - 1]?.let { candidates.addAll(it) }
+                    durationBuckets[bucket]?.let { candidates.addAll(it) }
+                    durationBuckets[bucket + 1]?.let { candidates.addAll(it) }
+                    candidates
+                } else {
+                    // If no duration, evaluate remaining unmatched entities with a cap to prevent unbounded latency
+                    currentEntities.filter { it.id !in matchedEntityIds }.take(500)
+                }
+
+                var bestCandidate: TrackEntity? = null
+                var bestScore = 0.0
+
+                for (candidate in candidateList) {
+                    if (candidate.id in matchedEntityIds) continue
+
+                    // Duration gating: must be within 4 seconds if duration is known for both
+                    if (backupTrack.durationSeconds > 0 && candidate.durationSeconds > 0) {
+                        if (abs(backupTrack.durationSeconds - candidate.durationSeconds) > 4) {
+                            continue
+                        }
+                    }
+
+                    val titleSim = StringNormalizer.calculateTitleSimilarity(backupTrack.title, candidate.title)
+                    if (titleSim < 0.5) continue // fast reject
+
+                    val artistA = backupTrack.resolvedArtist ?: backupTrack.artist
+                    val artistB = candidate.resolvedArtist ?: candidate.artist
+                    val artistSim = StringNormalizer.calculateArtistSimilarity(artistA, artistB)
+
+                    val combinedScore = (titleSim * 0.55) + (artistSim * 0.45)
+                    if (combinedScore > bestScore) {
+                        bestScore = combinedScore
+                        bestCandidate = candidate
+                    }
+                }
+
+                if (bestCandidate != null) {
+                    if (bestScore >= 0.85) {
+                        matched = bestCandidate
+                        confidence = MatchConfidenceLevel.METADATA_HIGH
+                    } else if (bestScore >= 0.72) {
+                        matched = bestCandidate
+                        confidence = MatchConfidenceLevel.METADATA_MEDIUM
+                    }
+                }
+            }
+
+            if (matched != null) {
+                matchedEntityIds.add(matched.id)
+                val (modified, reason) = checkFileModification(backupTrack, matched)
+                results.add(
+                    TrackMatchResult(
+                        backupTrack = backupTrack,
+                        matchedEntity = matched,
+                        confidenceLevel = confidence,
+                        isFileModified = modified,
+                        modificationReason = reason
+                    )
+                )
+            } else {
+                results.add(
+                    TrackMatchResult(
+                        backupTrack = backupTrack,
+                        matchedEntity = null,
+                        confidenceLevel = MatchConfidenceLevel.NONE
+                    )
+                )
             }
         }
 
