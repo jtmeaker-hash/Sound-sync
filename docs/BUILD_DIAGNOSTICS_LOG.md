@@ -1581,3 +1581,53 @@ ee4c3f7 fix(backup): resolve restore freeze, ANR, and crash regressions
 ```
 
 ---
+
+## CI Run 35222717790 — PASS
+
+- **Date:** 2026-09-17T12:49:34.648802+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`d171449b41`](https://github.com/jtmeaker-hash/Sound-sync/commit/d171449b41780d07d83ac8bd92e7fb5ae1f16c46)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35222717790)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ✅ PASS |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+No CI build/test failures detected in this run.
+
+### Summary of changes
+
+Fix metadata re-analysis loop and startup ANR freeze
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+d171449 Fix metadata re-analysis loop and startup ANR freeze
+ .../com/example/analysis/TrackAnalysisManager.kt   |  82 ++++++-
+ .../metadata/LocalMetadataCompletenessChecker.kt   | 200 +++++++++++++++++
+ .../com/example/storage/LocalFileSystemScanner.kt  |  43 +++-
+ .../java/com/example/storage/MediaScannerHelper.kt |  51 ++++-
+ .../main/java/com/example/ui/MainDjViewModel.kt    |  50 +++--
+ .../com/example/ui/library/LocalLibraryScreen.kt   |   6 +-
+ .../java/com/example/ui/library/SongsScreen.kt     | 131 +++++++-----
+ .../com/example/LocalMetadataCompletenessTest.kt   | 238 +++++++++++++++++++++
+ 8 files changed, 720 insertions(+), 81 deletions(-)
+```
+
+---
