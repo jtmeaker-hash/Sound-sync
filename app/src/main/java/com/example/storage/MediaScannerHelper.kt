@@ -285,6 +285,48 @@ object MediaScannerHelper {
                             volume = mediaVol
                         )
 
+                        val completeness = com.example.metadata.LocalMetadataCompletenessChecker.evaluate(
+                            title = effectiveTitle,
+                            artist = effectiveArtist,
+                            album = effectiveAlbum,
+                            genre = effectiveGenre,
+                            releaseYear = effectiveYear,
+                            releaseDate = effectiveDate,
+                            trackNumber = effectiveTrackNum,
+                            discNumber = effectiveDiscNum,
+                            bpm = effectiveBpm,
+                            musicalKey = effectiveKey,
+                            hasEmbeddedArtwork = embedded.hasEmbeddedArtwork,
+                            artworkSource = if (embedded.hasEmbeddedArtwork) "Embedded Tag" else null,
+                            context = context
+                        )
+
+                        val trackAnalysisState = if (completeness.isComplete) {
+                            com.example.model.AnalysisState.COMPLETE
+                        } else {
+                            com.example.model.AnalysisState.NOT_ANALYSED
+                        }
+
+                        val trackScanState = if (completeness.isComplete) {
+                            "COMPLETE"
+                        } else {
+                            "NOT_SCANNED"
+                        }
+
+                        val metaSource = if (completeness.isComplete) {
+                            "EMBEDDED"
+                        } else if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(effectiveArtist)) {
+                            "EMBEDDED"
+                        } else null
+
+                        val metaConfidence = if (completeness.isComplete) {
+                            100.0
+                        } else if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(effectiveArtist)) {
+                            100.0
+                        } else 0.0
+
+                        Log.d(TAG, "METADATA_PRECHECK: '$effectiveTitle' by '$effectiveArtist' -> Complete: ${completeness.isComplete} (missing: ${completeness.missingFields.joinToString()})")
+
                         val track = Track(
                             id = "media_$id",
                             title = effectiveTitle,
@@ -325,8 +367,13 @@ object MediaScannerHelper {
                             originalArtist = embedded.artist?.takeIf { !com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(it) }
                                 ?: rawArtist?.takeIf { !com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(it) },
                             resolvedArtist = null,
-                            metadataSource = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(effectiveArtist)) "EMBEDDED" else null,
-                            metadataConfidence = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(effectiveArtist)) 100.0 else 0.0,
+                            metadataSource = metaSource,
+                            metadataConfidence = metaConfidence,
+                            metadataScanState = trackScanState,
+                            analysisState = trackAnalysisState,
+                            analysisVersion = if (completeness.isComplete) com.example.analysis.TrackAnalysisManager.CURRENT_ANALYSIS_VERSION else 1,
+                            lastAnalysedAt = if (completeness.isComplete) System.currentTimeMillis() else null,
+                            fileModifiedTimestamp = if (dateModifiedSec > 0) dateModifiedSec * 1000L else dateAddedSec * 1000L,
                             physicalMediaKey = physicalKey,
                             mediaStoreId = id,
                             mediaStoreVolume = mediaVol

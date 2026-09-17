@@ -374,6 +374,36 @@ object LocalFileSystemScanner {
         val isPlayable = isRawReadable || (mediaStoreUri != null) || (safUri != null)
         val physicalKey = PhysicalMediaIdentifier.computePhysicalMediaKey(context, effectivePath, trackId)
 
+        val trackNum = embedded.trackNumber ?: 0
+        val discNum = embedded.discNumber ?: 1
+        val completeness = com.example.metadata.LocalMetadataCompletenessChecker.evaluate(
+            title = title,
+            artist = artist,
+            album = album,
+            genre = genre,
+            releaseYear = embedded.releaseYear,
+            releaseDate = embedded.releaseDate,
+            trackNumber = trackNum,
+            discNumber = discNum,
+            bpm = bpm,
+            musicalKey = musicalKey,
+            hasEmbeddedArtwork = embedded.hasEmbeddedArtwork,
+            artworkSource = if (embedded.hasEmbeddedArtwork) "Embedded Tag" else null,
+            context = context
+        )
+
+        val trackAnalysisState = if (completeness.isComplete) {
+            com.example.model.AnalysisState.COMPLETE
+        } else {
+            com.example.model.AnalysisState.NOT_ANALYSED
+        }
+
+        val trackScanState = if (completeness.isComplete) {
+            "COMPLETE"
+        } else {
+            "NOT_SCANNED"
+        }
+
         return Track(
             id = trackId,
             title = title,
@@ -413,19 +443,24 @@ object LocalFileSystemScanner {
             dateAdded = System.currentTimeMillis(),
             crateId = "crate_all",
             sourceId = sourceId,
-            trackNumber = 0,
-            discNumber = 1,
+            trackNumber = trackNum,
+            discNumber = discNum,
             releaseDate = embedded.releaseDate,
             releaseYear = embedded.releaseYear,
             recordLabel = embedded.recordLabel,
             barcode = embedded.barcode,
             isrc = embedded.isrc,
+            artworkSource = if (embedded.hasEmbeddedArtwork) "Embedded Tag" else null,
             storageRelativePath = CanonicalStorageHelper.toStorageRelativePath(file.absolutePath).ifBlank { file.name },
             contentFingerprint = AudioFingerprintUtil.generateFingerprint(context, file.absolutePath, file.length(), durationSec),
             originalArtist = embedded.artist?.takeIf { !com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(it) },
             resolvedArtist = null,
-            metadataSource = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(embedded.artist)) "EMBEDDED" else null,
-            metadataConfidence = if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(embedded.artist)) 100.0 else 0.0,
+            metadataSource = if (completeness.isComplete) "EMBEDDED" else if (!com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(embedded.artist)) "EMBEDDED" else null,
+            metadataConfidence = if (completeness.isComplete || !com.example.metadata.repair.ArtistStructureAnalyzer.isArtistMissingOrInvalid(embedded.artist)) 100.0 else 0.0,
+            metadataScanState = trackScanState,
+            analysisState = trackAnalysisState,
+            analysisVersion = if (completeness.isComplete) com.example.analysis.TrackAnalysisManager.CURRENT_ANALYSIS_VERSION else 1,
+            lastAnalysedAt = if (completeness.isComplete) System.currentTimeMillis() else null,
             physicalMediaKey = physicalKey
         )
     }

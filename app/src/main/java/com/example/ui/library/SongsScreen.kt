@@ -169,7 +169,8 @@ fun SongsScreen(
     onOpenTrackIntelligence: ((Track) -> Unit)? = null,
     onOpenPlaybackIssueSheet: ((Track) -> Unit)? = null,
     onOpenPlaybackIssuesManager: (() -> Unit)? = null,
-    playbackIssuesCount: Int = 0
+    playbackIssuesCount: Int = 0,
+    isLibraryLoading: Boolean = false
 ) {
     val context = LocalContext.current
     val theme = SoundSyncTheme.current
@@ -764,60 +765,80 @@ fun SongsScreen(
                     .padding(32.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Icon(
-                        imageVector = if (activeCoverArtFilter == CoverArtFilter.NO_COVER_ART) Icons.Default.CheckCircle else Icons.Default.MusicNote,
-                        contentDescription = null,
-                        tint = if (activeCoverArtFilter == CoverArtFilter.NO_COVER_ART) Color(0xFF00E676) else theme.textMuted,
-                        modifier = Modifier.size(64.dp)
-                    )
-                    Text(
-                        text = when {
-                            activeCoverArtFilter == CoverArtFilter.NO_COVER_ART && searchQuery.isNotBlank() ->
-                                "No tracks missing cover art match '$searchQuery'"
-                            activeCoverArtFilter == CoverArtFilter.NO_COVER_ART ->
-                                "All indexed tracks have usable cover artwork!"
-                            activeCoverArtFilter == CoverArtFilter.HAS_COVER_ART ->
-                                "No tracks with cover art found"
-                            searchQuery.isNotBlank() ->
-                                "No songs match '$searchQuery'"
-                            else ->
-                                "No local tracks indexed yet"
-                        },
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = theme.textSecondary,
-                        textAlign = TextAlign.Center
-                    )
-                    if (activeCoverArtFilter != CoverArtFilter.ALL) {
-                        Button(
-                            onClick = { updateCoverArtFilter(CoverArtFilter.ALL) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = theme.surfaceRaised,
-                                contentColor = theme.accent
-                            ),
-                            border = BorderStroke(1.dp, theme.divider),
-                            shape = RoundedCornerShape(theme.cornerSmall),
-                            modifier = Modifier.testTag("clear_cover_art_filter_button")
-                        ) {
-                            Text("Show All Tracks", fontWeight = FontWeight.Bold)
-                        }
-                    } else if (searchQuery.isBlank()) {
-                        Button(
-                            onClick = onStartScan,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = theme.accent,
-                                contentColor = theme.onAccent
-                            ),
-                            shape = RoundedCornerShape(theme.cornerSmall),
-                            modifier = Modifier.testTag("empty_scan_button")
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Scan Device Storage", fontWeight = FontWeight.Bold)
+                if (isLibraryLoading) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            color = theme.accent,
+                            modifier = Modifier.size(40.dp),
+                            strokeWidth = 3.dp
+                        )
+                        Text(
+                            text = "Loading your music...",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = theme.textSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (activeCoverArtFilter == CoverArtFilter.NO_COVER_ART) Icons.Default.CheckCircle else Icons.Default.MusicNote,
+                            contentDescription = null,
+                            tint = if (activeCoverArtFilter == CoverArtFilter.NO_COVER_ART) Color(0xFF00E676) else theme.textMuted,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Text(
+                            text = when {
+                                activeCoverArtFilter == CoverArtFilter.NO_COVER_ART && searchQuery.isNotBlank() ->
+                                    "No tracks missing cover art match '$searchQuery'"
+                                activeCoverArtFilter == CoverArtFilter.NO_COVER_ART ->
+                                    "All indexed tracks have usable cover artwork!"
+                                activeCoverArtFilter == CoverArtFilter.HAS_COVER_ART ->
+                                    "No tracks with cover art found"
+                                searchQuery.isNotBlank() ->
+                                    "No songs match '$searchQuery'"
+                                else ->
+                                    "No local tracks indexed yet"
+                            },
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = theme.textSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                        if (activeCoverArtFilter != CoverArtFilter.ALL) {
+                            Button(
+                                onClick = { updateCoverArtFilter(CoverArtFilter.ALL) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = theme.surfaceRaised,
+                                    contentColor = theme.accent
+                                ),
+                                border = BorderStroke(1.dp, theme.divider),
+                                shape = RoundedCornerShape(theme.cornerSmall),
+                                modifier = Modifier.testTag("clear_cover_art_filter_button")
+                            ) {
+                                Text("Show All Tracks", fontWeight = FontWeight.Bold)
+                            }
+                        } else if (searchQuery.isBlank()) {
+                            Button(
+                                onClick = onStartScan,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = theme.accent,
+                                    contentColor = theme.onAccent
+                                ),
+                                shape = RoundedCornerShape(theme.cornerSmall),
+                                modifier = Modifier.testTag("empty_scan_button")
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Scan Device Storage", fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }

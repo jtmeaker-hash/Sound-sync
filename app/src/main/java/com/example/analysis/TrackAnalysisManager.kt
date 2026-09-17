@@ -161,7 +161,7 @@ class TrackAnalysisManager private constructor(
 
     /**
      * Enqueues newly discovered tracks for background analysis.
-     * Skips tracks that have already completed analysis and metadata scanning.
+     * Skips tracks that have already completed analysis or have complete embedded metadata.
      */
     fun enqueueDiscoveredTracks(trackIds: List<String>) {
         if (trackIds.isEmpty()) return
@@ -171,6 +171,8 @@ class TrackAnalysisManager private constructor(
                 val needingAnalysis = tracks.filter { entity ->
                     entity.analysisState != AnalysisState.COMPLETE.name &&
                     (entity.analysisState in listOf(AnalysisState.NOT_ANALYSED.name, AnalysisState.QUEUED.name, AnalysisState.PARTIAL.name))
+                }.filter { entity ->
+                    !com.example.metadata.LocalMetadataCompletenessChecker.evaluateTrack(context, entity.toTrack()).isComplete
                 }.map { it.id }
 
                 if (needingAnalysis.isNotEmpty()) {
@@ -180,6 +182,42 @@ class TrackAnalysisManager private constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Error queueing tracks for analysis: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * Reconciles tracks in database that already have complete metadata.
+     * Ensures they are marked as COMPLETE and excluded from analysis queue.
+     */
+    suspend fun reconcileCompleteTracksInDatabase(): Int = withContext(Dispatchers.IO) {
+        try {
+            var reconciled = 0
+            val seenIds = mutableSetOf<String>()
+            while (true) {
+                val batch = trackDao.getTracksNeedingAnalysis(limit = 200)
+                val unhandled = batch.filter { it.id !in seenIds }
+                if (unhandled.isEmpty()) break
+                for (entity in unhandled) {
+                    seenIds.add(entity.id)
+                    val track = entity.toTrack()
+                    val eval = com.example.metadata.LocalMetadataCompletenessChecker.evaluateTrack(context, track)
+                    if (eval.isComplete) {
+                        trackDao.updateTrackAnalysisStatus(
+                            id = track.id,
+                            state = AnalysisState.COMPLETE.name,
+                            lastAnalysedAt = System.currentTimeMillis(),
+                            reason = null,
+                            retryCount = 0
+                        )
+                        reconciled++
+                        Log.d(TAG, "METADATA_RECONCILE: Track '${track.title}' reconciled as COMPLETE from tags (was ${entity.analysisState})")
+                    }
+                }
+            }
+            reconciled
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reconciling complete tracks: ${e.message}")
+            0
         }
     }
 
@@ -229,6 +267,7 @@ class TrackAnalysisManager private constructor(
 
     suspend fun getPendingCount(): Int = withContext(Dispatchers.IO) {
         try {
+            reconcileCompleteTracksInDatabase()
             trackDao.getPendingAnalysisCount()
         } catch (_: Exception) {
             0
@@ -255,6 +294,9 @@ class TrackAnalysisManager private constructor(
     ): Job = scope.launch {
         val runId = "scan_${System.currentTimeMillis()}"
         Log.d(TAG, "[$runId] Background library analysis loop started.")
+
+        // Reconcile any tracks with already-complete metadata before determining queue size
+        reconcileCompleteTracksInDatabase()
 
         var totalEligible = 0
         try {
@@ -645,6 +687,22 @@ class TrackAnalysisManager private constructor(
                         t = t.copy(isrc = embedded.isrc)
                         modified = true
                     }
+                    if ((t.releaseYear == null || t.releaseYear == 0) && (embedded.releaseYear != null && embedded.releaseYear > 0)) {
+                        t = t.copy(releaseYear = embedded.releaseYear)
+                        modified = true
+                    }
+                    if (t.releaseDate.isNullOrBlank() && !embedded.releaseDate.isNullOrBlank()) {
+                        t = t.copy(releaseDate = embedded.releaseDate)
+                        modified = true
+                    }
+                    if ((t.genre.isBlank() || t.genre == "DJ Library") && !embedded.genre.isNullOrBlank()) {
+                        t = t.copy(genre = embedded.genre)
+                        modified = true
+                    }
+                    if (embedded.hasEmbeddedArtwork && t.artworkSource.isNullOrBlank()) {
+                        t = t.copy(artworkSource = "Embedded Tag")
+                        modified = true
+                    }
                     if (t.durationSeconds <= 1 && embedded.durationSeconds > 1) {
                         t = t.copy(durationSeconds = embedded.durationSeconds)
                         modified = true
@@ -655,6 +713,28 @@ class TrackAnalysisManager private constructor(
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Embedded tag read non-fatal error for '${track.title}': ${e.message}")
+            }
+
+            // Check if track is already complete from audio file metadata
+            val completeness = com.example.metadata.LocalMetadataCompletenessChecker.evaluateTrack(context, updatedTrack)
+            if (completeness.isComplete) {
+                Log.d(TAG, "Track '${updatedTrack.title}' metadata is already complete from audio file tags. Skipping DSP & network.")
+                val preservedDurationSec = when {
+                    updatedTrack.durationSeconds > 1 -> updatedTrack.durationSeconds
+                    track.durationSeconds > 1 -> track.durationSeconds
+                    else -> updatedTrack.durationSeconds
+                }
+                val finalTrack = updatedTrack.copy(
+                    durationSeconds = preservedDurationSec,
+                    analysisState = AnalysisState.COMPLETE,
+                    analysisVersion = CURRENT_ANALYSIS_VERSION,
+                    lastAnalysedAt = System.currentTimeMillis(),
+                    analysisFailureReason = null,
+                    metadataScanState = "COMPLETE",
+                    fileModifiedTimestamp = fileModTime
+                )
+                trackDao.updateTrack(TrackEntity.fromTrack(finalTrack))
+                return@withContext ProcessOutcome.SKIPPED
             }
 
             // 2. Perform DSP detection for BPM and Key if still missing

@@ -854,6 +854,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _storageRootAvailability = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val storageRootAvailability: StateFlow<Map<String, Boolean>> = _storageRootAvailability.asStateFlow()
 
+    private val _isLibraryLoading = MutableStateFlow(true)
+    val isLibraryLoading: StateFlow<Boolean> = _isLibraryLoading.asStateFlow()
+
     // Real database tracks flow with cached storage availability mapping
     val allTracks: StateFlow<List<Track>> = kotlinx.coroutines.flow.combine(
         trackDao.getAllTracks().conflate(),
@@ -867,9 +870,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
         val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
         Log.d("SoundSyncPerf", "database tracks emitted: ${entities.size}, converted in ${elapsedMs}ms")
+        _isLibraryLoading.value = false
         tracks
     }.flowOn(Dispatchers.Default)
-    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     // Dynamically grouped Albums from Real indexed tracks with robust fault tolerance and unique key guarantees
     val allAlbums: StateFlow<List<com.example.model.Album>> = allTracks.map { rawTracks ->
@@ -907,8 +911,12 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 val totalSec = albumTracks.sumOf { it.durationSeconds.coerceAtLeast(0) }
 
                 // Deterministic representative artwork selection:
-                // Find member track with valid canonical artwork
+                // Fast path: find member track with valid cached or explicit artwork reference without blocking on file I/O
                 val trackWithArt = albumTracks.firstOrNull {
+                    !it.artworkCachePath.isNullOrBlank() ||
+                    !it.artworkUrl.isNullOrBlank() ||
+                    it.artworkSource in listOf("Embedded Tag", "Embedded", "Local Folder", "Apple iTunes", "TheAudioDB", "Manual Selection", "User Selected", "Custom")
+                } ?: albumTracks.firstOrNull {
                     com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(getApplication(), it)
                 }
 
@@ -1239,7 +1247,10 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         observeGoogleDriveState()
         audioEngine.setCrossfadeSeconds(_crossfadeSeconds.value)
         registerMediaReceiver()
-        trackAnalysisManager.triggerQueueProcessing()
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(3000L)
+            trackAnalysisManager.triggerQueueProcessing()
+        }
         setupAutoBackupObserver()
         observeTrackMetadataUpdates()
         viewModelScope.launch {
@@ -1751,16 +1762,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             val app = getApplication<Application>()
 
-            // Startup library deduplication migration to eliminate any ghost/duplicate tracks
-            try {
-                val db = AppDatabase.getDatabase(app)
-                val report = com.example.storage.TrackDeduplicationEngine.deduplicateLibrary(app, db)
-                if (report.duplicateRowsRemoved > 0) {
-                    Log.i("MainDjViewModel", "Startup library deduplication complete: removed ${report.duplicateRowsRemoved} ghost/duplicate tracks across ${report.duplicateGroupsFound} groups.")
-                }
-            } catch (e: Exception) {
-                Log.w("MainDjViewModel", "Deduplication check on startup skipped/failed: ${e.message}")
-            }
+            // Refresh storage availability and sources immediately
+            refreshStorageAvailabilityInternal()
+            refreshStorageSourcesList()
 
             // Check for interrupted scan from a previous app crash or killed process
             val wasInterrupted = scanStateManager.checkAndRecoverInterruptedScan()
@@ -1770,9 +1774,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     showSnackbar("Previous library scan was paused/interrupted. Resuming remaining work.")
                 }
             }
-
-            refreshStorageAvailabilityInternal()
-            refreshStorageSourcesList()
 
             val existingCount = trackDao.getTrackCount()
             if (existingCount > 0) {
@@ -1799,8 +1800,23 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
             } else {
-                // MD and library scanning is a manual process initiated via Settings. Do not auto-scan on open.
+                // Database is genuinely empty on startup
+                _isLibraryLoading.value = false
                 Log.d("MainDjViewModel", "Library empty on startup; awaiting manual scan or import from Settings.")
+            }
+
+            // Deferred background library deduplication migration so it never blocks UI or initial startup frames
+            viewModelScope.launch(Dispatchers.IO) {
+                delay(5000L)
+                try {
+                    val db = AppDatabase.getDatabase(app)
+                    val report = com.example.storage.TrackDeduplicationEngine.deduplicateLibrary(app, db)
+                    if (report.duplicateRowsRemoved > 0) {
+                        Log.i("MainDjViewModel", "Deferred library deduplication complete: removed ${report.duplicateRowsRemoved} ghost/duplicate tracks across ${report.duplicateGroupsFound} groups.")
+                    }
+                } catch (e: Exception) {
+                    Log.w("MainDjViewModel", "Deduplication check on startup skipped/failed: ${e.message}")
+                }
             }
         }
     }
