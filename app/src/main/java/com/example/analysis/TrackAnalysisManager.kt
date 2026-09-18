@@ -676,7 +676,7 @@ class TrackAnalysisManager private constructor(
                 trackDao.updatePlayabilityStatus(track.id, status, code, avail.details.ifBlank { "Storage file inaccessible during analysis" })
                 val newRetry = (track.analysisRetryCount + 1).coerceAtMost(3)
                 val isTerminal = newRetry >= 3 || avail.state == com.example.storage.StorageAvailabilityState.VOLUME_UNMOUNTED || avail.state == com.example.storage.StorageAvailabilityState.SOURCE_MISSING
-                val stateName = if (isTerminal) AnalysisState.FAILED_PERMANENT.name else AnalysisState.FAILED_RETRYABLE.name
+                val stateName = if (isTerminal) AnalysisState.FAILED.name else AnalysisState.FAILED_RETRYABLE.name
                 trackDao.updateTrackAnalysisStatus(
                     id = track.id,
                     state = stateName,
@@ -884,7 +884,7 @@ class TrackAnalysisManager private constructor(
         } catch (e: Exception) {
             val retryCount = track.analysisRetryCount + 1
             val isTerminal = retryCount >= 3
-            val newState = if (isTerminal) AnalysisState.FAILED_PERMANENT else AnalysisState.FAILED_RETRYABLE
+            val newState = if (isTerminal) AnalysisState.FAILED else AnalysisState.FAILED_RETRYABLE
             Log.e(TAG, "Analysis failed for track '${track.title}' (attempt $retryCount): ${e.message}")
 
             trackDao.updateTrackAnalysisStatus(
