@@ -147,6 +147,21 @@ object MediaScannerHelper {
                         val sizeMb = sizeBytes.toDouble() / (1024.0 * 1024.0)
                         val format = resolveFormat(dataPath, mimeType)
                         val dirPath = resolveDirectory(dataPath)
+                        // Fast-path: Check if track is already known in existing library before doing expensive file I/O
+                        if (reconcilerIndexes != null) {
+                            val existingById = reconcilerIndexes.byMediaId[id]
+                            val existingByPath = reconcilerIndexes.byRawPath[targetPath] ?: (if (dataPath.isNotBlank()) reconcilerIndexes.byRawPath[dataPath] else null)
+                            val fastMatch = existingById ?: existingByPath
+                            if (fastMatch != null && (fastMatch.durationSeconds > 1 || rawDurationSec > 1)) {
+                                totalSkipped++
+                                continue
+                            }
+                        } else {
+                            if (seenPaths.contains(targetPath) || (dataPath.isNotBlank() && seenPaths.contains(dataPath))) {
+                                totalSkipped++
+                                continue
+                            }
+                        }
 
                         // Priority 1: Extract embedded metadata (ID3 / Vorbis / MP4 / RIFF chunks) if present
                         val embedded = com.example.metadata.AudioEmbeddedMetadataReader.read(context, targetPath)

@@ -51,13 +51,6 @@ object CanonicalArtworkDetector {
 
         val resolvedStatus = evaluateArtworkStatus(context, track)
         statusCache[cacheKey] = resolvedStatus
-        try {
-            val hasArt = (resolvedStatus == ArtworkStatus.HAS_ARTWORK)
-            Log.d(
-                "ArtworkFilter",
-                "[ArtworkFilter] title=${track.title} id=${track.id} hasRealArtwork=$hasArt source=${track.artworkSource ?: "NONE"} artworkUri=${track.artworkUrl ?: track.artworkCachePath ?: "NONE"} includedInNoArtworkFilter=${!hasArt}"
-            )
-        } catch (_: Throwable) {}
         return resolvedStatus
     }
 

@@ -860,19 +860,16 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _isLibraryLoading = MutableStateFlow(true)
     val isLibraryLoading: StateFlow<Boolean> = _isLibraryLoading.asStateFlow()
 
-    // Real database tracks flow with cached storage availability mapping
+    // Real database tracks flow with cached storage availability mapping and throttled burst updates
     val allTracks: StateFlow<List<Track>> = kotlinx.coroutines.flow.combine(
-        trackDao.getAllTracks().conflate(),
+        trackDao.getAllTracks().throttleLatest(350L),
         _storageRootAvailability
     ) { entities, rootAvailability ->
-        val startNs = System.nanoTime()
         val tracks = entities.map { entity ->
             val track = entity.toTrack()
             val isAvail = com.example.storage.StorageAvailabilityHelper.isTrackRootAvailable(track.filePath, rootAvailability)
             if (track.isAvailable == isAvail) track else track.copy(isAvailable = isAvail)
         }
-        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
-        Log.d("SoundSyncPerf", "database tracks emitted: ${entities.size}, converted in ${elapsedMs}ms")
         _isLibraryLoading.value = false
         tracks
     }.flowOn(Dispatchers.Default)
@@ -952,8 +949,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }.sortedBy { it.title.lowercase() }
 
-            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
-            Log.d("SoundSyncPerf", "album grouping in ${elapsedMs}ms (${albums.size} albums)")
             albums
         } catch (t: Throwable) {
             Log.e("MainDjViewModel", "Error in album grouping: ${t.message}", t)
@@ -964,7 +959,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     // Dynamically grouped Artists splitting collaborations into individual artist entities
     val allArtists: StateFlow<List<com.example.model.Artist>> = combine(allTracks, allAlbums) { tracks, albums ->
-        val startNs = System.nanoTime()
         try {
             val artists = com.example.metadata.artist.ArtistIndexManager.buildArtistsFromTracks(tracks, albums)
             val seenIds = mutableSetOf<String>()
@@ -976,8 +970,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 if (uniqueId != artist.id) artist.copy(id = uniqueId) else artist
             }
-            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
-            Log.d("SoundSyncPerf", "individual artist grouping in ${elapsedMs}ms (${uniqueArtists.size} individual artists)")
             uniqueArtists
         } catch (t: Throwable) {
             Log.e("MainDjViewModel", "Error building artists: ${t.message}", t)
@@ -1325,10 +1317,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
     private fun setupAutoBackupObserver() {
         viewModelScope.launch(Dispatchers.IO) {
             var initialTracksEmitted = false
-            trackDao.getAllTracks().collect { tracks ->
+            trackDao.getAllTracks().debounce(1000L).collect { tracks ->
                 if (com.example.backup.SoundSyncBackupManager.isRestoring()) {
                     return@collect
                 }
@@ -1344,7 +1337,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch(Dispatchers.IO) {
             var initialFindsEmitted = false
-            songFindRepository.allSongFinds.collect {
+            songFindRepository.allSongFinds.debounce(1000L).collect {
                 if (com.example.backup.SoundSyncBackupManager.isRestoring()) {
                     return@collect
                 }
@@ -1366,7 +1359,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     suspend fun refreshStorageAvailabilityInternal() = withContext(Dispatchers.IO) {
-        val startNs = System.nanoTime()
         val distinctRoots = mutableSetOf<String>()
         val app = getApplication<Application>()
 
@@ -1387,8 +1379,6 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
         val updatedMap = com.example.storage.StorageAvailabilityHelper.refreshRoots(distinctRoots)
         _storageRootAvailability.value = updatedMap
-        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
-        Log.d("SoundSyncPerf", "storage availability refresh in ${elapsedMs}ms (${distinctRoots.size} roots checked)")
     }
 
     private var mediaReceiver: android.content.BroadcastReceiver? = null
@@ -4242,3 +4232,43 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         audioEngine.release()
     }
 }
+
+/**
+ * Throttles flow emissions: first item emits immediately with 0ms delay,
+ * subsequent burst updates are throttled to at most once per [windowDurationMs],
+ * ensuring the latest state is always emitted.
+ */
+private fun <T> kotlinx.coroutines.flow.Flow<T>.throttleLatest(windowDurationMs: Long): kotlinx.coroutines.flow.Flow<T> =
+    kotlinx.coroutines.flow.channelFlow {
+        var lastEmitTime = 0L
+        var pendingValue: T? = null
+        var hasPending = false
+        var emitJob: kotlinx.coroutines.Job? = null
+
+        collect { value ->
+            val now = System.currentTimeMillis()
+            val elapsed = now - lastEmitTime
+            if (elapsed >= windowDurationMs) {
+                emitJob?.cancel()
+                emitJob = null
+                hasPending = false
+                lastEmitTime = now
+                send(value)
+            } else {
+                pendingValue = value
+                hasPending = true
+                if (emitJob == null || !emitJob!!.isActive) {
+                    emitJob = launch {
+                        kotlinx.coroutines.delay(windowDurationMs - elapsed)
+                        if (hasPending) {
+                            hasPending = false
+                            lastEmitTime = System.currentTimeMillis()
+                            @Suppress("UNCHECKED_CAST")
+                            send(pendingValue as T)
+                        }
+                    }
+                }
+            }
+        }
+    }
+

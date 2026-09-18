@@ -116,15 +116,6 @@ fun DjMiniPlayer(
     }
 
     val safeDurationMs = if (durationMs > 0) durationMs else (track.durationSeconds.coerceAtLeast(1) * 1000L)
-    val progressFrac = if (safeDurationMs > 0) (currentPositionMs.toFloat() / safeDurationMs.toFloat()).coerceIn(0f, 1f) else 0f
-
-    val curSec = (currentPositionMs / 1000).toInt()
-    val totalSec = (safeDurationMs / 1000).toInt()
-    val curM = curSec / 60
-    val curS = curSec % 60
-    val durM = totalSec / 60
-    val durS = totalSec % 60
-
     val theme = SoundSyncTheme.current
 
     Card(
@@ -227,13 +218,10 @@ fun DjMiniPlayer(
                             modifier = Modifier.weight(1f, fill = false)
                         )
                         Text("•", color = TextMuted, fontSize = 9.sp)
-                        Text(
-                            text = String.format(Locale.US, "%d:%02d / %d:%02d", curM, curS, durM, durS),
-                            color = DeckACyan,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
+                        MiniPlayerTimeDisplay(
+                            currentPositionMs = currentPositionMs,
+                            durationMs = safeDurationMs,
+                            color = DeckACyan
                         )
                         if (track.hasValidKey) {
                             Surface(
@@ -419,12 +407,6 @@ private fun ProDjMiniPlayer(
 ) {
     val theme = SoundSyncTheme.current
     val safeDurationMs = if (durationMs > 0) durationMs else (track.durationSeconds.coerceAtLeast(1) * 1000L)
-    val curSec = (currentPositionMs / 1000).toInt()
-    val totalSec = (safeDurationMs / 1000).toInt()
-    val curM = curSec / 60
-    val curS = curSec % 60
-    val durM = totalSec / 60
-    val durS = totalSec % 60
 
     Surface(
         modifier = modifier
@@ -525,13 +507,10 @@ private fun ProDjMiniPlayer(
                             modifier = Modifier.weight(1f, fill = false)
                         )
                         Text("•", color = theme.textMuted, fontSize = 9.sp)
-                        Text(
-                            text = String.format(Locale.US, "%d:%02d / %d:%02d", curM, curS, durM, durS),
-                            color = theme.accent,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
+                        MiniPlayerTimeDisplay(
+                            currentPositionMs = currentPositionMs,
+                            durationMs = safeDurationMs,
+                            color = theme.accent
                         )
                         if (track.hasValidKey) {
                             Surface(
@@ -612,4 +591,35 @@ private fun ProDjMiniPlayer(
         }
     }
 }
+
+/**
+ * Isolated time display leaf composable.
+ * Recomposes only when the second digit increments, without triggering
+ * recomposition of the parent mini-player card or transport controls.
+ */
+@Composable
+fun MiniPlayerTimeDisplay(
+    currentPositionMs: Long,
+    durationMs: Long,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val curSec = (currentPositionMs / 1000).toInt()
+    val totalSec = (durationMs / 1000).toInt()
+    val curM = curSec / 60
+    val curS = curSec % 60
+    val durM = totalSec / 60
+    val durS = totalSec % 60
+
+    Text(
+        text = String.format(Locale.US, "%d:%02d / %d:%02d", curM, curS, durM, durS),
+        color = color,
+        fontSize = 10.sp,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        modifier = modifier
+    )
+}
+
 

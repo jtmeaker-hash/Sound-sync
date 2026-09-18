@@ -58,6 +58,25 @@ object TrackSelfHealingResolver {
 
     private const val TAG = "TrackSelfHealing"
 
+    private data class CachedResolution(
+        val resolvedPath: String?,
+        val timestamp: Long
+    ) {
+        val isExpired: Boolean
+            get() = (System.currentTimeMillis() - timestamp) > 30_000L
+    }
+
+    // Negative and positive lookup cache with 30-second TTL to avoid repeated disk searches
+    private val resolutionCache = java.util.concurrent.ConcurrentHashMap<String, CachedResolution>()
+
+    fun invalidateCache(trackId: String? = null) {
+        if (trackId != null) {
+            resolutionCache.remove(trackId)
+        } else {
+            resolutionCache.clear()
+        }
+    }
+
     /**
      * Resolves and heals an inaccessible or stale track reference, persisting the valid path
      * to the database when [trackDao] is provided.
@@ -71,8 +90,20 @@ object TrackSelfHealingResolver {
     ): Track? = withContext(Dispatchers.IO) {
         val originalPath = track.filePath
 
+        // Fast check negative/positive resolution cache
+        val cached = resolutionCache[track.id]
+        if (cached != null && !cached.isExpired) {
+            if (cached.resolvedPath == null) {
+                // Negative cache: track was recently confirmed missing, don't repeat full filesystem search
+                return@withContext null
+            } else if (StorageAvailabilityHelper.isTrackPathAvailable(context, cached.resolvedPath)) {
+                return@withContext applyHealedPath(context, track, cached.resolvedPath, trackDao)
+            }
+        }
+
         // Quick check: if already accessible, return immediately
         if (StorageAvailabilityHelper.isTrackPathAvailable(context, originalPath)) {
+            resolutionCache[track.id] = CachedResolution(originalPath, System.currentTimeMillis())
             Log.d(TAG, "[TrackSelfHealing] Track '${track.title}' (id=${track.id}) is already accessible at $originalPath")
             return@withContext track
         }
@@ -128,6 +159,7 @@ object TrackSelfHealingResolver {
             return@withContext applyHealedPath(context, track, fromFilesystem, trackDao)
         }
 
+        resolutionCache[track.id] = CachedResolution(null, System.currentTimeMillis())
         Log.w(TAG, "[TrackSelfHealing] FAILED to heal reference for '${track.title}' (id=${track.id}). Path remains inaccessible: '$originalPath'")
         null
     }
@@ -516,6 +548,7 @@ object TrackSelfHealingResolver {
                 Log.w(TAG, "[TrackSelfHealing] Failed persisting healed path to database: ${e.message}")
             }
         }
+        resolutionCache[track.id] = CachedResolution(newPath, System.currentTimeMillis())
         return healed
     }
 

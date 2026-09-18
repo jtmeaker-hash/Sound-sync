@@ -292,6 +292,10 @@ class TrackAnalysisManager private constructor(
     private fun launchAnalysisLoop(
         onProgressUpdate: ((processed: Int, total: Int, currentTrackTitle: String) -> Unit)? = null
     ): Job = scope.launch {
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+        } catch (_: Throwable) {}
+
         val runId = "scan_${System.currentTimeMillis()}"
         Log.d(TAG, "[$runId] Background library analysis loop started.")
 
@@ -485,26 +489,28 @@ class TrackAnalysisManager private constructor(
                     failedCount = failedTerminal
                 )
 
-                scanStateManager.saveCheckpoint(newProcessed, totalEligible, track.id, track.filePath)
-                try {
-                    com.example.state.PersistentSessionManager.getInstance(context).saveScannerCheckpoint(
-                        com.example.state.PersistentScannerCheckpoint(
-                            scanType = "METADATA_ANALYSIS",
-                            status = com.example.storage.ScanStatus.RUNNING,
-                            isRunning = true,
-                            isPaused = false,
-                            lastProcessedTrackId = track.id,
-                            lastProcessedFilePath = track.filePath,
-                            processedCount = newProcessed,
-                            totalDiscoveredCount = totalEligible,
-                            completedSuccess = completedSuccess,
-                            completedSkipped = completedSkipped,
-                            failedCount = failedTerminal,
-                            timestamp = System.currentTimeMillis()
-                        ),
-                        immediate = false
-                    )
-                } catch (_: Exception) {}
+                if (newProcessed % 10 == 0 || newProcessed >= totalEligible) {
+                    scanStateManager.saveCheckpoint(newProcessed, totalEligible, track.id, track.filePath)
+                    try {
+                        com.example.state.PersistentSessionManager.getInstance(context).saveScannerCheckpoint(
+                            com.example.state.PersistentScannerCheckpoint(
+                                scanType = "METADATA_ANALYSIS",
+                                status = com.example.storage.ScanStatus.RUNNING,
+                                isRunning = true,
+                                isPaused = false,
+                                lastProcessedTrackId = track.id,
+                                lastProcessedFilePath = track.filePath,
+                                processedCount = newProcessed,
+                                totalDiscoveredCount = totalEligible,
+                                completedSuccess = completedSuccess,
+                                completedSkipped = completedSkipped,
+                                failedCount = failedTerminal,
+                                timestamp = System.currentTimeMillis()
+                            ),
+                            immediate = false
+                        )
+                    } catch (_: Exception) {}
+                }
 
                 onProgressUpdate?.invoke(newProcessed, totalEligible, track.title)
                 delay(if (isPlaying) 200 else 60)

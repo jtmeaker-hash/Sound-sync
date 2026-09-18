@@ -85,6 +85,10 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
+// Pre-allocated paths reused across 60fps/120fps render frames for zero heap allocation
+private val reusableTopPlayheadPath = Path()
+private val reusableBotPlayheadPath = Path()
+
 /**
  * SoundSync DJ Live Scrolling Waveform Display.
  * Supports two distinct display modes:
@@ -975,20 +979,22 @@ private fun CenterPlayheadOverlay(
                 end = Offset(centerX, height),
                 strokeWidth = 1.2f
             )
-            val topTri = Path().apply {
+            reusableTopPlayheadPath.apply {
+                rewind()
                 moveTo(centerX - 4.5f, 0f)
                 lineTo(centerX + 4.5f, 0f)
                 lineTo(centerX, 6f)
                 close()
             }
-            drawPath(topTri, playheadColor)
-            val botTri = Path().apply {
+            drawPath(reusableTopPlayheadPath, playheadColor)
+            reusableBotPlayheadPath.apply {
+                rewind()
                 moveTo(centerX - 4.5f, height)
                 lineTo(centerX + 4.5f, height)
                 lineTo(centerX, height - 6f)
                 close()
             }
-            drawPath(botTri, playheadColor)
+            drawPath(reusableBotPlayheadPath, playheadColor)
         } else {
             // Glowing center line
             drawLine(
@@ -1005,22 +1011,24 @@ private fun CenterPlayheadOverlay(
             )
 
             // Top pointer triangle
-            val topTri = Path().apply {
+            reusableTopPlayheadPath.apply {
+                rewind()
                 moveTo(centerX - 6f, 0f)
                 lineTo(centerX + 6f, 0f)
                 lineTo(centerX, 8f)
                 close()
             }
-            drawPath(topTri, Color(0xFFFF0055))
+            drawPath(reusableTopPlayheadPath, Color(0xFFFF0055))
 
             // Bottom pointer triangle
-            val botTri = Path().apply {
+            reusableBotPlayheadPath.apply {
+                rewind()
                 moveTo(centerX - 6f, height)
                 lineTo(centerX + 6f, height)
                 lineTo(centerX, height - 8f)
                 close()
             }
-            drawPath(botTri, Color(0xFFFF0055))
+            drawPath(reusableBotPlayheadPath, Color(0xFFFF0055))
         }
     }
 }

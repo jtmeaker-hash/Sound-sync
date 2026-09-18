@@ -139,7 +139,7 @@ fun SmartCratesScreen(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(evaluatedTracks) { track ->
+                    items(evaluatedTracks, key = { it.id }) { track ->
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -226,7 +226,7 @@ fun SmartCratesScreen(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(crates) { crate ->
+                items(crates, key = { it.id }) { crate ->
                     val matchCount = SmartCrateEngine.evaluate(crate, allTracks).size
                     Surface(
                         modifier = Modifier

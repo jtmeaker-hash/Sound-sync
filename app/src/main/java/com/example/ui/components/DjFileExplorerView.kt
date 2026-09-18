@@ -241,7 +241,7 @@ fun DjFileExplorerView(
                     )
                 }
 
-                items(subFolders) { folder ->
+                items(subFolders, key = { it.path }) { folder ->
                     FolderRowItem(
                         folder = folder,
                         onClick = { onNavigateToDir(folder.path) }
@@ -313,7 +313,7 @@ private fun StorageSourceSelectorBar(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            items(sources) { source ->
+            items(sources, key = { it.id }) { source ->
                 val isSelected = source.id == currentSourceId
                 val icon = when (source.type) {
                     StorageSourceType.INTERNAL -> Icons.Default.Folder

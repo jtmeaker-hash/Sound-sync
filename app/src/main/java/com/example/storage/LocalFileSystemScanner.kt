@@ -274,34 +274,39 @@ object LocalFileSystemScanner {
         if (embedded.durationSeconds > 0) durationSec = embedded.durationSeconds
         if (embedded.bitrateKbps > 0) bitrateKbps = embedded.bitrateKbps
 
-        try {
-            val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(path)
-            val mTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
-            val mArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
-                ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
-            val mAlbum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
-            val mGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
-            val mDuration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            val mBitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+        // Only instantiate expensive MediaMetadataRetriever if primary embedded parser missed title/artist/duration
+        if (title == fallbackTitle || artist == "Unknown Artist" || durationSec <= 1 || album == "Single") {
+            var retriever: MediaMetadataRetriever? = null
+            try {
+                retriever = MediaMetadataRetriever()
+                retriever.setDataSource(path)
+                val mTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+                val mArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                    ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+                val mAlbum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                val mGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
+                val mDuration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                val mBitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
 
-            if (title == fallbackTitle && !mTitle.isNullOrBlank()) title = mTitle
-            if (artist == "Unknown Artist" && !mArtist.isNullOrBlank()) artist = mArtist
-            // Validate retriever album: MediaStore often returns the parent folder name — reject those.
-            if (album == "Single" && !mAlbum.isNullOrBlank() &&
-                !com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(mAlbum) &&
-                com.example.metadata.AlbumValidator.isValidAlbum(mAlbum, path)) {
-                album = mAlbum
+                if (title == fallbackTitle && !mTitle.isNullOrBlank()) title = mTitle
+                if (artist == "Unknown Artist" && !mArtist.isNullOrBlank()) artist = mArtist
+                // Validate retriever album: MediaStore often returns the parent folder name — reject those.
+                if (album == "Single" && !mAlbum.isNullOrBlank() &&
+                    !com.example.metadata.parser.TrackIdentityParser.isGenericAlbumName(mAlbum) &&
+                    com.example.metadata.AlbumValidator.isValidAlbum(mAlbum, path)) {
+                    album = mAlbum
+                }
+                if (genre == "DJ Library" && !mGenre.isNullOrBlank()) genre = mGenre
+
+                val durMs = mDuration?.toLongOrNull() ?: 0L
+                if (durMs > 1000L && durationSec <= 1) durationSec = (durMs / 1000L).toInt()
+                val br = mBitrate?.toIntOrNull() ?: 0
+                if (br > 0 && (bitrateKbps <= 0 || bitrateKbps == 320)) bitrateKbps = br / 1000
+            } catch (_: Exception) {
+            } finally {
+                try { retriever?.release() } catch (_: Exception) {}
             }
-            if (genre == "DJ Library" && !mGenre.isNullOrBlank()) genre = mGenre
-
-            val durMs = mDuration?.toLongOrNull() ?: 0L
-            if (durMs > 1000L && durationSec <= 1) durationSec = (durMs / 1000L).toInt()
-            val br = mBitrate?.toIntOrNull() ?: 0
-            if (br > 0 && (bitrateKbps <= 0 || bitrateKbps == 320)) bitrateKbps = br / 1000
-
-            retriever.release()
-        } catch (_: Exception) {}
+        }
 
         durationSec = when {
             embedded.durationSeconds > 1 -> embedded.durationSeconds

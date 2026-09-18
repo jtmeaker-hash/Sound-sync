@@ -24,7 +24,9 @@ import com.example.model.Track
         Index(value = ["album"]),
         Index(value = ["bpm"]),
         Index(value = ["camelotKey"]),
-        Index(value = ["musicalKey"])
+        Index(value = ["musicalKey"]),
+        Index(value = ["genre"]),
+        Index(value = ["metadataWriteState"])
     ]
 )
 data class TrackEntity(

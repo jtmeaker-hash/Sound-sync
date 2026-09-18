@@ -143,7 +143,7 @@ fun DuplicateFinderSheet(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(duplicateMatches) { match ->
+                items(duplicateMatches, key = { "${it.trackA.id}_${it.trackB.id}" }) { match ->
                     DuplicatePairCard(
                         match = match,
                         onResolveKeepBest = { onResolveKeepBest(match) },

@@ -151,7 +151,7 @@ fun SpectrogramAnalyzerView(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 2.dp)
                 ) {
-                    items(allTracks) { track ->
+                    items(allTracks, key = { it.id }) { track ->
                         val isSelected = track.id == analyzedTrack?.id
                         Surface(
                             modifier = Modifier
