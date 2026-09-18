@@ -20,6 +20,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
@@ -67,6 +68,22 @@ class DjAudioEngine(val context: Context) {
         private const val TAG = "DjAudioEngine"
         private const val TIMEOUT_US: Long = 10_000L
         private const val POSITION_PUBLISH_INTERVAL_MS = 50L
+
+        val EQ_6_FREQUENCIES = listOf(60f, 150f, 400f, 1000f, 2400f, 8000f)
+        val EQ_6_LABELS = listOf("60 Hz", "150 Hz", "400 Hz", "1 kHz", "2.4 kHz", "8 kHz")
+        const val MIN_EQ_GAIN_DB = -12f
+        const val MAX_EQ_GAIN_DB = 12f
+
+        val EQ_6_PRESETS = mapOf(
+            "Flat" to listOf(0f, 0f, 0f, 0f, 0f, 0f),
+            "Bass Boost" to listOf(5.0f, 4.0f, 1.5f, 0.0f, 1.0f, 2.0f),
+            "Bass Reduction" to listOf(-5.0f, -4.0f, -2.0f, 0.0f, 0.0f, 0.0f),
+            "Vocal Clarity" to listOf(-2.0f, -1.0f, 1.0f, 3.5f, 2.5f, 1.0f),
+            "Electronic" to listOf(4.5f, 3.0f, -1.0f, 1.5f, 3.0f, 4.0f),
+            "Rock" to listOf(4.0f, 2.5f, -1.5f, 1.0f, 3.0f, 4.0f),
+            "Acoustic" to listOf(2.0f, 1.5f, 0.0f, 1.5f, 2.0f, 3.0f),
+            "Treble Boost" to listOf(0.0f, 0.0f, 0.0f, 1.0f, 3.5f, 5.0f)
+        )
 
         @Volatile
         private var instance: DjAudioEngine? = null
@@ -349,6 +366,15 @@ class DjAudioEngine(val context: Context) {
 
     private val _eqHigh = MutableStateFlow(eqPrefs.getFloat("eq_high", 1.0f).coerceIn(0f, 2f))
     val eqHigh = _eqHigh.asStateFlow()
+
+    private fun loadEq6Bands(): List<Float> {
+        return (0..5).map { idx ->
+            eqPrefs.getFloat("eq_band_$idx", 0f).coerceIn(MIN_EQ_GAIN_DB, MAX_EQ_GAIN_DB)
+        }
+    }
+
+    private val _eq6Bands = MutableStateFlow(loadEq6Bands())
+    val eq6Bands: StateFlow<List<Float>> = _eq6Bands.asStateFlow()
 
     private val _filterKnob = MutableStateFlow(0.5f)
     val filterKnob = _filterKnob.asStateFlow()
@@ -692,9 +718,72 @@ class DjAudioEngine(val context: Context) {
         }
     }
 
+    private fun applyDspEqSettings(
+        dspEq: ParametricEq,
+        curLow: Float,
+        curMid: Float,
+        curHigh: Float,
+        cur6Bands: List<Float>
+    ) {
+        dspEq.lowGain = curLow
+        dspEq.midGain = curMid
+        dspEq.highGain = curHigh
+        dspEq.set6BandGains(cur6Bands)
+        dspEq.preampDb = parametricEqManager.preampDb.value
+        dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
+        val mgrBands = parametricEqManager.currentBands.value
+        if (mgrBands.size == 6) {
+            dspEq.setBands(mgrBands)
+        } else {
+            dspEq.setBands(ParametricEq.DEFAULT_6_BANDS)
+        }
+        dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
+    }
+
     fun setEqEnabled(enabled: Boolean) {
         _eqEnabled.value = enabled
         eqPrefs.edit().putBoolean("eq_enabled", enabled).apply()
+    }
+
+    fun setEqBandGain(bandIndex: Int, gainDb: Float) {
+        if (bandIndex !in 0..5) return
+        val clamped = gainDb.coerceIn(MIN_EQ_GAIN_DB, MAX_EQ_GAIN_DB)
+        val current = _eq6Bands.value.toMutableList()
+        current[bandIndex] = clamped
+        _eq6Bands.value = current
+        eqPrefs.edit().putFloat("eq_band_$bandIndex", clamped).apply()
+        syncLegacyEqGains(current)
+    }
+
+    fun setAllEqBands(gainsDb: List<Float>) {
+        val clamped = (0..5).map { idx ->
+            (gainsDb.getOrNull(idx) ?: 0f).coerceIn(MIN_EQ_GAIN_DB, MAX_EQ_GAIN_DB)
+        }
+        _eq6Bands.value = clamped
+        val editor = eqPrefs.edit()
+        clamped.forEachIndexed { idx, gain ->
+            editor.putFloat("eq_band_$idx", gain)
+        }
+        editor.apply()
+        syncLegacyEqGains(clamped)
+    }
+
+    fun resetEqBands() {
+        setAllEqBands(listOf(0f, 0f, 0f, 0f, 0f, 0f))
+    }
+
+    fun applyEqPreset(presetName: String) {
+        val preset = EQ_6_PRESETS[presetName] ?: return
+        setAllEqBands(preset)
+    }
+
+    private fun syncLegacyEqGains(bands: List<Float>) {
+        val lowLin = Math.pow(10.0, (bands[1] / 20.0).toDouble()).toFloat().coerceIn(0f, 2f)
+        val midLin = Math.pow(10.0, (bands[3] / 20.0).toDouble()).toFloat().coerceIn(0f, 2f)
+        val highLin = Math.pow(10.0, (bands[5] / 20.0).toDouble()).toFloat().coerceIn(0f, 2f)
+        _eqLow.value = lowLin
+        _eqMid.value = midLin
+        _eqHigh.value = highLin
     }
 
     fun setEq(low: Float, mid: Float, high: Float) {
@@ -705,6 +794,20 @@ class DjAudioEngine(val context: Context) {
             .putFloat("eq_low", _eqLow.value)
             .putFloat("eq_mid", _eqMid.value)
             .putFloat("eq_high", _eqHigh.value)
+            .apply()
+
+        val lowDb = if (low <= 0.001f) -12f else (20f * kotlin.math.log10(low)).coerceIn(-12f, 12f)
+        val midDb = if (mid <= 0.001f) -12f else (20f * kotlin.math.log10(mid)).coerceIn(-12f, 12f)
+        val highDb = if (high <= 0.001f) -12f else (20f * kotlin.math.log10(high)).coerceIn(-12f, 12f)
+        val current = _eq6Bands.value.toMutableList()
+        current[1] = lowDb
+        current[3] = midDb
+        current[5] = highDb
+        _eq6Bands.value = current
+        eqPrefs.edit()
+            .putFloat("eq_band_1", lowDb)
+            .putFloat("eq_band_3", midDb)
+            .putFloat("eq_band_5", highDb)
             .apply()
     }
 
@@ -968,6 +1071,7 @@ class DjAudioEngine(val context: Context) {
             var lastAppliedLow = Float.NaN
             var lastAppliedMid = Float.NaN
             var lastAppliedHigh = Float.NaN
+            var lastApplied6Bands: List<Float> = emptyList()
             val bufferInfo = MediaCodec.BufferInfo()
             var inputEos = false
             var outputEos = false
@@ -1144,18 +1248,14 @@ class DjAudioEngine(val context: Context) {
                                     val curLow = _eqLow.value
                                     val curMid = _eqMid.value
                                     val curHigh = _eqHigh.value
-                                    if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh) {
+                                    val cur6Bands = _eq6Bands.value
+                                    if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh || cur6Bands != lastApplied6Bands) {
                                         lastAppliedEqVer = eqVer
                                         lastAppliedLow = curLow
                                         lastAppliedMid = curMid
                                         lastAppliedHigh = curHigh
-                                        dspEq.lowGain = curLow
-                                        dspEq.midGain = curMid
-                                        dspEq.highGain = curHigh
-                                        dspEq.preampDb = parametricEqManager.preampDb.value
-                                        dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
-                                        dspEq.setBands(parametricEqManager.currentBands.value)
-                                        dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
+                                        lastApplied6Bands = cur6Bands
+                                        applyDspEqSettings(dspEq, curLow, curMid, curHigh, cur6Bands)
                                     }
                                     dspEq.processStereo(pcmStereo, 0, filled)
                                 }
@@ -1245,18 +1345,14 @@ class DjAudioEngine(val context: Context) {
                             val curLow = _eqLow.value
                             val curMid = _eqMid.value
                             val curHigh = _eqHigh.value
-                            if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh) {
+                            val cur6Bands = _eq6Bands.value
+                            if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh || cur6Bands != lastApplied6Bands) {
                                 lastAppliedEqVer = eqVer
                                 lastAppliedLow = curLow
                                 lastAppliedMid = curMid
                                 lastAppliedHigh = curHigh
-                                dspEq.lowGain = curLow
-                                dspEq.midGain = curMid
-                                dspEq.highGain = curHigh
-                                dspEq.preampDb = parametricEqManager.preampDb.value
-                                dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
-                                dspEq.setBands(parametricEqManager.currentBands.value)
-                                dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
+                                lastApplied6Bands = cur6Bands
+                                applyDspEqSettings(dspEq, curLow, curMid, curHigh, cur6Bands)
                             }
                             dspEq.processStereo(pcmStereo, 0, nextFrames)
                         }
@@ -1439,6 +1535,7 @@ class DjAudioEngine(val context: Context) {
             var lastAppliedLow = Float.NaN
             var lastAppliedMid = Float.NaN
             var lastAppliedHigh = Float.NaN
+            var lastApplied6Bands: List<Float> = emptyList()
             var iterations = 0L
 
             while (!isEngineReleased && generationGate.isCurrent(session)) {
@@ -1556,18 +1653,14 @@ class DjAudioEngine(val context: Context) {
                         val curLow = _eqLow.value
                         val curMid = _eqMid.value
                         val curHigh = _eqHigh.value
-                        if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh) {
+                        val cur6Bands = _eq6Bands.value
+                        if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh || cur6Bands != lastApplied6Bands) {
                             lastAppliedEqVer = eqVer
                             lastAppliedLow = curLow
                             lastAppliedMid = curMid
                             lastAppliedHigh = curHigh
-                            dspEq.lowGain = curLow
-                            dspEq.midGain = curMid
-                            dspEq.highGain = curHigh
-                            dspEq.preampDb = parametricEqManager.preampDb.value
-                            dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
-                            dspEq.setBands(parametricEqManager.currentBands.value)
-                            dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
+                            lastApplied6Bands = cur6Bands
+                            applyDspEqSettings(dspEq, curLow, curMid, curHigh, cur6Bands)
                         }
                         dspEq.processStereo(pcmStereo, 0, filled)
                     }
@@ -1642,18 +1735,14 @@ class DjAudioEngine(val context: Context) {
                             val curLow = _eqLow.value
                             val curMid = _eqMid.value
                             val curHigh = _eqHigh.value
-                            if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh) {
+                            val cur6Bands = _eq6Bands.value
+                            if (eqVer != lastAppliedEqVer || curLow != lastAppliedLow || curMid != lastAppliedMid || curHigh != lastAppliedHigh || cur6Bands != lastApplied6Bands) {
                                 lastAppliedEqVer = eqVer
                                 lastAppliedLow = curLow
                                 lastAppliedMid = curMid
                                 lastAppliedHigh = curHigh
-                                dspEq.lowGain = curLow
-                                dspEq.midGain = curMid
-                                dspEq.highGain = curHigh
-                                dspEq.preampDb = parametricEqManager.preampDb.value
-                                dspEq.autoHeadroomEnabled = parametricEqManager.autoHeadroomEnabled.value
-                                dspEq.setBands(parametricEqManager.currentBands.value)
-                                dspEq.soloBandIndex = parametricEqManager.soloBandIndex.value
+                                lastApplied6Bands = cur6Bands
+                                applyDspEqSettings(dspEq, curLow, curMid, curHigh, cur6Bands)
                             }
                             dspEq.processStereo(pcmStereo, 0, nextFrames)
                         }

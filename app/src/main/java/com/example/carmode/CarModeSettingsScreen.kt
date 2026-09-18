@@ -4,8 +4,12 @@ import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -55,6 +59,14 @@ fun CarModeSettingsScreen(
     val configuredNames by carModeManager.configuredCarNames.collectAsState()
     val currentProfile by carModeManager.currentProfile.collectAsState()
     val pastSessions by carModeManager.pastSessions.collectAsState()
+
+    val hasBtPermission = remember(context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
 
     var showPairCarDialog by remember { mutableStateOf(false) }
     var showDiagnosticsDialog by remember { mutableStateOf(false) }
@@ -165,6 +177,45 @@ fun CarModeSettingsScreen(
             // Section 2: Bluetooth Vehicle Detection
             item {
                 SectionHeader("BLUETOOTH VEHICLE DETECTION")
+            }
+
+            if (!hasBtPermission) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = theme.surfaceRaised),
+                        border = BorderStroke(1.dp, theme.accent.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.BluetoothDisabled, contentDescription = null, tint = theme.accent, modifier = Modifier.size(20.dp))
+                                Text("Bluetooth Permission Required", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
+                            Text(
+                                "SoundSync needs Bluetooth Connect permission to detect when your car connects and automatically start Car Mode.",
+                                color = theme.textSecondary,
+                                fontSize = 12.sp
+                            )
+                            Button(
+                                onClick = {
+                                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = Uri.fromParts("package", context.packageName, null)
+                                    }
+                                    context.startActivity(intent)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = theme.accent),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Grant Bluetooth Permission", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
             }
 
             item {
@@ -384,13 +435,15 @@ private fun AddCarDeviceDialog(
     var customAddress by remember { mutableStateOf("") }
     var customName by remember { mutableStateOf("") }
 
+    val hasPermission = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        } else true
+    }
+
     val pairedDevices = remember {
         val list = mutableListOf<Pair<String, String>>()
         try {
-            val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-            } else true
-
             if (hasPermission) {
                 val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
                 val adapter = bluetoothManager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
@@ -409,6 +462,34 @@ private fun AddCarDeviceDialog(
         title = { Text("Add Car Bluetooth Device", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!hasPermission) {
+                    Surface(
+                        color = Color(0xFF22262F),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(0.5.dp, Color(0xFFFFB74D))
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Bluetooth permission is required to list paired devices automatically.",
+                                color = Color(0xFFFFB74D),
+                                fontSize = 11.sp
+                            )
+                            Button(
+                                onClick = {
+                                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = Uri.fromParts("package", context.packageName, null)
+                                    }
+                                    context.startActivity(intent)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = theme.accent),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text("Open App Settings", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
                 if (pairedDevices.isNotEmpty()) {
                     Text("Select from paired Bluetooth devices:", color = Color(0xFF8E95A2), fontSize = 12.sp)
                     pairedDevices.forEach { (addr, name) ->

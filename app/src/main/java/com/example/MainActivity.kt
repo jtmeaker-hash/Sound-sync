@@ -90,18 +90,61 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Handle incoming OAuth callback URIs or shared song links
-                LaunchedEffect(Unit) {
-                    processIncomingIntent(intent, viewModel)
-                }
-
                 // Permission Launcher
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
                 ) { permissions ->
-                    val isGranted = permissions.values.any { it }
-                    Log.d(TAG, "Storage permission result: isGranted=$isGranted")
-                    viewModel.onPermissionResult(isGranted)
+                    val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        permissions[Manifest.permission.READ_MEDIA_AUDIO] == true
+                    } else {
+                        permissions[Manifest.permission.READ_EXTERNAL_STORAGE] == true || permissions[Manifest.permission.WRITE_EXTERNAL_STORAGE] == true
+                    }
+                    Log.d(TAG, "Storage permission result: storageGranted=$storageGranted")
+                    viewModel.onPermissionResult(storageGranted)
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        permissions[Manifest.permission.BLUETOOTH_CONNECT]?.let { btGranted ->
+                            Log.d(TAG, "Bluetooth permission result: btGranted=$btGranted")
+                            viewModel.onBluetoothPermissionResult(btGranted)
+                        }
+                    }
+                    viewModel.markStartupPermissionsRequested()
+                }
+
+                // Handle incoming OAuth callback URIs or shared song links, and check startup permissions
+                LaunchedEffect(Unit) {
+                    processIncomingIntent(intent, viewModel)
+
+                    if (!viewModel.isStartupPermissionsRequested()) {
+                        val neededPermissions = mutableListOf<String>()
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                neededPermissions.add(Manifest.permission.READ_MEDIA_AUDIO)
+                            }
+                            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                neededPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        } else {
+                            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                                neededPermissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                            }
+                            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                                ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                                neededPermissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            }
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                                neededPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+                            }
+                        }
+                        if (neededPermissions.isNotEmpty()) {
+                            Log.d(TAG, "Requesting initial startup permissions: $neededPermissions")
+                            permissionLauncher.launch(neededPermissions.toTypedArray())
+                        } else {
+                            viewModel.markStartupPermissionsRequested()
+                        }
+                    }
                 }
 
                 // Scoped Storage MediaStore Write Permission Launcher (Android 10+ / 11+)
@@ -193,18 +236,22 @@ class MainActivity : ComponentActivity() {
                 MainDjScreen(
                     viewModel = viewModel,
                     onRequestStoragePermission = {
-                        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            arrayOf(
-                                Manifest.permission.READ_MEDIA_AUDIO,
-                                Manifest.permission.POST_NOTIFICATIONS
-                            )
+                        val perms = mutableListOf<String>()
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            perms.add(Manifest.permission.READ_MEDIA_AUDIO)
+                            perms.add(Manifest.permission.POST_NOTIFICATIONS)
                         } else {
-                            arrayOf(
-                                Manifest.permission.READ_EXTERNAL_STORAGE,
-                                Manifest.permission.WRITE_EXTERNAL_STORAGE
-                            )
+                            perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                                perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            }
                         }
-                        permissionLauncher.launch(perms)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                                perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+                            }
+                        }
+                        permissionLauncher.launch(perms.toTypedArray())
                     },
                     onPickSafFolder = {
                         safFolderLauncher.launch(null)
@@ -267,6 +314,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "onResume: Activity in foreground.")
+        activeViewModel?.refreshPermissions()
     }
 
     override fun onPause() {

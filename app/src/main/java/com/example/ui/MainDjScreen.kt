@@ -215,6 +215,7 @@ fun MainDjScreen(
     val haasAmount by viewModel.audioEngine.haasAmount.collectAsState()
     val haasDelayMs by viewModel.audioEngine.haasDelayMs.collectAsState()
     val haasBassProtect by viewModel.audioEngine.haasBassProtect.collectAsState()
+    val eq6Bands by viewModel.audioEngine.eq6Bands.collectAsState()
 
     // SoundSync In-App Update States
     val repeatMode by viewModel.repeatMode.collectAsState()
@@ -464,6 +465,7 @@ fun MainDjScreen(
                         eqLow = eqLow,
                         eqMid = eqMid,
                         eqHigh = eqHigh,
+                        eq6Bands = eq6Bands,
                         haasEnabled = haasEnabled,
                         haasAmount = haasAmount,
                         haasDelayMs = haasDelayMs,
@@ -817,12 +819,18 @@ fun MainDjScreen(
                     onSetEqLow = { viewModel.audioEngine.setEq(it, eqMid, eqHigh) },
                     onSetEqMid = { viewModel.audioEngine.setEq(eqLow, it, eqHigh) },
                     onSetEqHigh = { viewModel.audioEngine.setEq(eqLow, eqMid, it) },
+                    eq6Bands = eq6Bands,
+                    onSetEqBandGain = { index, gain -> viewModel.audioEngine.setEqBandGain(index, gain) },
+                    onResetEqBands = { viewModel.audioEngine.resetEqBands() },
+                    onApplyEqPreset = { preset -> viewModel.audioEngine.applyEqPreset(preset) },
                     haasEnabled = haasEnabled,
                     haasAmount = haasAmount,
                     haasDelayMs = haasDelayMs,
+                    haasBassProtect = haasBassProtect,
                     onSetHaasEnabled = { viewModel.audioEngine.setHaasEnabled(it) },
                     onSetHaasAmount = { viewModel.audioEngine.setHaasAmount(it) },
                     onSetHaasDelayMs = { viewModel.audioEngine.setHaasDelayMs(it) },
+                    onSetHaasBassProtect = { viewModel.audioEngine.setHaasBassProtect(it) },
                     onDismiss = { showNowPlayingSettings = false }
                 )
             }
@@ -1297,6 +1305,7 @@ private fun SideDestinationScreen(
     eqLow: Float,
     eqMid: Float,
     eqHigh: Float,
+    eq6Bands: List<Float> = emptyList(),
     haasEnabled: Boolean,
     haasAmount: Float,
     haasDelayMs: Float,
@@ -1418,6 +1427,10 @@ private fun SideDestinationScreen(
                             onSetEqLow = { viewModel.audioEngine.setEq(it, eqMid, eqHigh) },
                             onSetEqMid = { viewModel.audioEngine.setEq(eqLow, it, eqHigh) },
                             onSetEqHigh = { viewModel.audioEngine.setEq(eqLow, eqMid, it) },
+                            eq6Bands = eq6Bands,
+                            onSetEqBandGain = { index, gain -> viewModel.audioEngine.setEqBandGain(index, gain) },
+                            onResetEqBands = { viewModel.audioEngine.resetEqBands() },
+                            onApplyEqPreset = { preset -> viewModel.audioEngine.applyEqPreset(preset) },
                             haasEnabled = haasEnabled,
                             haasAmount = haasAmount,
                             haasDelayMs = haasDelayMs,

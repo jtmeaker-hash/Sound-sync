@@ -638,6 +638,9 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     private val _hasStoragePermission = MutableStateFlow(checkInitialStoragePermission())
     val hasStoragePermission = _hasStoragePermission.asStateFlow()
 
+    private val _hasBluetoothPermission = MutableStateFlow(checkInitialBluetoothPermission())
+    val hasBluetoothPermission = _hasBluetoothPermission.asStateFlow()
+
     private val _isScanning = MutableStateFlow(false)
     val isScanning = _isScanning.asStateFlow()
 
@@ -1747,6 +1750,41 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
+    }
+
+    fun checkInitialBluetoothPermission(): Boolean {
+        val app = getApplication<Application>()
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(app, android.Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+
+    private val permissionPrefs by lazy {
+        getApplication<Application>().getSharedPreferences("soundsync_permissions_prefs", Context.MODE_PRIVATE)
+    }
+
+    fun isStartupPermissionsRequested(): Boolean {
+        return permissionPrefs.getBoolean("startup_permissions_requested", false)
+    }
+
+    fun markStartupPermissionsRequested() {
+        permissionPrefs.edit().putBoolean("startup_permissions_requested", true).apply()
+    }
+
+    fun onBluetoothPermissionResult(isGranted: Boolean) {
+        _hasBluetoothPermission.value = isGranted
+        if (isGranted) {
+            Log.d("MainDjViewModel", "Bluetooth permission granted")
+        } else {
+            Log.d("MainDjViewModel", "Bluetooth permission denied")
+        }
+    }
+
+    fun refreshPermissions() {
+        _hasStoragePermission.value = checkInitialStoragePermission()
+        _hasBluetoothPermission.value = checkInitialBluetoothPermission()
     }
 
     fun onPermissionResult(isGranted: Boolean) {

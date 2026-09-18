@@ -155,7 +155,7 @@ class CarModeManager private constructor(
      */
     fun onBluetoothDeviceConnected(device: BluetoothDevice, deviceName: String?) {
         val address = device.address ?: return
-        val name = deviceName ?: device.name ?: "Bluetooth Device"
+        val name = deviceName ?: runCatching { device.name }.getOrNull() ?: "Bluetooth Device"
 
         if (_configuredCarAddresses.value.contains(address)) {
             Log.d(TAG, "Connected to configured Car Bluetooth: $name ($address)")

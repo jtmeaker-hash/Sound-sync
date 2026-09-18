@@ -10,10 +10,10 @@ import kotlin.math.tanh
 /**
  * High-Quality Haas & Mid/Side Stereo Spatial Width DSP Processor.
  *
- * Upgrades the raw delayed duplicate approach into a professional spatial widener:
+ * Implements genuine Haas precedence spatial widening via inter-channel delay:
  * 1. Mid/Side decomposition ensures center elements (vocals, kick, snare) stay solid.
  * 2. Mono-Bass protection keeps low frequencies (<160 Hz) centered and punchy with zero phase cancellation.
- * 3. Band-limited Haas micro-delay (1.0–6.0 ms sweet spot) applies high-passed and tone-damped
+ * 3. Band-limited Haas micro-delay (0.0–30.0 ms) applies tone-damped
  *    decorrelation to the side channel, creating spacious ambient width without slapback echo.
  * 4. 100% mono compatibility: spatial components cancel out cleanly when summed to mono,
  *    completely eliminating hollow comb filtering.
@@ -25,18 +25,24 @@ class HaasSurroundEffect {
     companion object {
         private const val TAG = "HaasSurroundEffect"
 
-        // Safe musical Haas delay range: 0.5–8.0 ms (sweet spot 2.0–3.5 ms; max 12 ms)
-        const val MIN_DELAY_MS = 0.5f
-        const val MAX_DELAY_MS = 12.0f
+        // Genuine Haas delay range: 0.0–30.0 ms (sweet spot 8–25 ms)
+        const val MIN_DELAY_MS = 0.0f
+        const val MAX_DELAY_MS = 30.0f
         const val DEFAULT_DELAY_MS = 2.5f
 
-        // Amount (width & spatial mix): 0.0 = bypass, 1.0 = full safe spatial width
+        // Amount (wet/dry width mix): 0.0 = pure dry, 1.0 = full spatial width
         const val MIN_AMOUNT = 0f
         const val MAX_AMOUNT = 1f
-        const val DEFAULT_AMOUNT = 0.45f
+        const val DEFAULT_AMOUNT = 0.70f
 
-        // Power-of-two circular buffer size (4096 samples >= 42ms at 96kHz)
-        private const val BUFFER_SIZE = 4096
+        // Presets
+        const val PRESET_OFF_MS = 0.0f
+        const val PRESET_SUBTLE_MS = 8.0f
+        const val PRESET_WIDE_MS = 16.0f
+        const val PRESET_VERY_WIDE_MS = 25.0f
+
+        // Power-of-two circular buffer size (8192 samples >= 42ms at 192kHz, >= 170ms at 48kHz)
+        private const val BUFFER_SIZE = 8192
         private const val BUFFER_MASK = BUFFER_SIZE - 1
 
         private const val PREFS_NAME = "soundsync_haas_prefs"
@@ -77,16 +83,17 @@ class HaasSurroundEffect {
         val bassProtect: Boolean = true
     )
 
-    // Circular delay buffer for spatial decorrelation
-    private val spatialDelayBuffer = FloatArray(BUFFER_SIZE)
+    // Circular delay buffer for Haas precedence inter-channel delay
+    private val delayBuffer = FloatArray(BUFFER_SIZE)
     private var writePos = 0
 
-    // Biquad filters for spatial band-limiting and mono-bass protection
-    private val spatialHpFilter = BiquadFilter()
-    private val spatialLpFilter = BiquadFilter()
-    private val spatialHpFilterR = BiquadFilter()
-    private val spatialLpFilterR = BiquadFilter()
+    // Filters:
+    // sideHpFilter: protects low frequencies on the existing side channel (<160 Hz)
+    // haasHpFilter: protects low frequencies on the Haas decorrelation signal (<160 Hz)
+    // toneDampFilter: tone damps high frequencies on delayed Haas path (~7500 Hz) to avoid comb filtering harshness
     private val sideHpFilter = BiquadFilter()
+    private val haasHpFilter = BiquadFilter()
+    private val toneDampFilter = BiquadFilter()
     private var lastSampleRate = -1
 
     // Smoothed parameters for click-free transitions
@@ -137,23 +144,21 @@ class HaasSurroundEffect {
     }
 
     /**
-     * Applies high-quality stereo spatial width enhancement to 16-bit interleaved stereo PCM.
-     * Preserves center image, kick punch, and provides 100% mono downmix compatibility.
+     * Applies genuine Haas precedence inter-channel delay DSP to 16-bit interleaved stereo PCM.
+     * Combines fractional delay precedence widening (0–30 ms) with Mid/Side decomposition,
+     * mono-bass protection (<160 Hz centered), and gentle high-frequency tone damping.
      */
     fun process(buffer: ShortArray, offset: Int, frameCount: Int, sampleRate: Int = 48000) {
         if (!isEnabled && currentAmount < 0.0005f) return
+        if (targetDelayMs <= 0.0001f && currentDelayMs <= 0.0001f) return
+        if (targetAmount <= 0.0001f && currentAmount <= 0.0001f) return
 
         val safeSampleRate = sampleRate.coerceIn(8000, 192000)
         if (safeSampleRate != lastSampleRate) {
             val srFloat = safeSampleRate.toFloat()
-            // 2nd-order Butterworth HP filter for spatial delay lines (cutoff ~220 Hz)
-            spatialHpFilter.configureHighPass(220f, srFloat)
-            spatialHpFilterR.configureHighPass(220f, srFloat)
-            // 2nd-order Butterworth LP filter for tone damping (cutoff ~7500 Hz)
-            spatialLpFilter.configureLowPass(7500f, srFloat)
-            spatialLpFilterR.configureLowPass(7500f, srFloat)
-            // 2nd-order Butterworth HP crossover for side channel mono-bass protection (cutoff ~160 Hz)
             sideHpFilter.configureHighPass(160f, srFloat)
+            haasHpFilter.configureHighPass(160f, srFloat)
+            toneDampFilter.configureLowPass(7500f, srFloat)
             lastSampleRate = safeSampleRate
         }
 
@@ -163,12 +168,12 @@ class HaasSurroundEffect {
             val idx = offset + i * 2
             if (idx + 1 >= buffer.size) break
 
-            // Smooth live parameters to ensure zero clicks/pops
+            // Smooth live parameters to ensure zero clicks/pops during adjustments
             currentAmount += (targetAmount - currentAmount) * smoothingRate
             currentDelayMs += (targetDelayMs - currentDelayMs) * smoothingRate
 
-            if (currentAmount < 0.0005f) {
-                // Bypass fast path
+            if (currentAmount < 0.0005f || currentDelayMs < 0.01f) {
+                // Bypass fast path when neutral
                 continue
             }
 
@@ -180,56 +185,50 @@ class HaasSurroundEffect {
             val side = (leftIn - rightIn) * 0.5f
 
             // 2. Write mid signal into circular spatial delay buffer
-            spatialDelayBuffer[writePos] = mid
+            delayBuffer[writePos] = mid
 
-            // 3. Dual-tap decorrelation: primary tap + complementary offset tap for balanced soundstage
-            val delaySamplesL = (currentDelayMs / 1000f * srFloat).coerceIn(1f, (BUFFER_SIZE - 4).toFloat())
-            val intDelayL = delaySamplesL.toInt()
-            val fracL = delaySamplesL - intDelayL
-            val readIdxL0 = (writePos - intDelayL + BUFFER_SIZE) and BUFFER_MASK
-            val readIdxL1 = (readIdxL0 - 1 + BUFFER_SIZE) and BUFFER_MASK
-            val rawDelayedL = spatialDelayBuffer[readIdxL0] * (1f - fracL) + spatialDelayBuffer[readIdxL1] * fracL
+            // 3. Fractional delay reading for true Haas precedence effect
+            val delaySamples = (currentDelayMs / 1000f * srFloat).coerceIn(1f, (BUFFER_SIZE - 4).toFloat())
+            val intDelay = delaySamples.toInt()
+            val frac = delaySamples - intDelay
 
-            val delaySamplesR = (currentDelayMs * 1.25f / 1000f * srFloat).coerceIn(1f, (BUFFER_SIZE - 4).toFloat())
-            val intDelayR = delaySamplesR.toInt()
-            val fracR = delaySamplesR - intDelayR
-            val readIdxR0 = (writePos - intDelayR + BUFFER_SIZE) and BUFFER_MASK
-            val readIdxR1 = (readIdxR0 - 1 + BUFFER_SIZE) and BUFFER_MASK
-            val rawDelayedR = spatialDelayBuffer[readIdxR0] * (1f - fracR) + spatialDelayBuffer[readIdxR1] * fracR
+            val readIdx0 = (writePos - intDelay + BUFFER_SIZE) and BUFFER_MASK
+            val readIdx1 = (readIdx0 - 1 + BUFFER_SIZE) and BUFFER_MASK
+            val rawDelayedSample = delayBuffer[readIdx0] * (1f - frac) + delayBuffer[readIdx1] * frac
 
             writePos = (writePos + 1) and BUFFER_MASK
 
-            // 4. Band-limit the spatial delay lines:
-            // High-Pass removes sub-bass comb filtering, Low-Pass tone-damps brittle highs
-            val hpOutL = spatialHpFilter.process(rawDelayedL)
-            val filteredSpatialL = spatialLpFilter.process(hpOutL)
+            // 4. Tone damping on delayed path
+            val filteredDelayed = toneDampFilter.process(rawDelayedSample)
 
-            val hpOutR = spatialHpFilterR.process(rawDelayedR)
-            val filteredSpatialR = spatialLpFilterR.process(hpOutR)
+            // 5. Haas spatial decorrelation: difference between instantaneous and delayed mid
+            val haasDiff = (mid - filteredDelayed) * 0.5f
 
-            val spatialDifference = (filteredSpatialL - filteredSpatialR) * 0.5f
-
-            // 5. Progressive widening curve:
-            // Gentle and subtle in lower range (0.0..0.3), dramatically expansive and immersive in upper range (0.5..1.0)
-            val progressiveAmount = currentAmount * (0.35f + 0.65f * currentAmount)
-            val widthScale = 1.0f + progressiveAmount * 1.35f // 1.0x (neutral) up to 2.35x at max
-            val spatialMix = progressiveAmount * 0.70f // 0.0 to 0.70 spatial decorrelation
-
-            val sideProcessed = if (bassProtect) {
-                // High-pass the side channel so bass (<160 Hz) remains 100% centered mono
-                val sideHp = sideHpFilter.process(side)
-                sideHp * widthScale + spatialDifference * spatialMix
+            // 6. Bass protection: filter low frequencies so punch (<160 Hz) remains 100% centered in-phase
+            val haasDiffProcessed = if (bassProtect) {
+                haasHpFilter.process(haasDiff)
             } else {
-                side * widthScale + spatialDifference * spatialMix
+                haasDiff
             }
 
-            // 6. Stereo reconstruction: L = Mid + Side, R = Mid - Side
-            // Note: In mono collapse (L + R) / 2 = Mid. sideProcessed cancels completely!
+            val progressiveAmount = currentAmount * (0.35f + 0.65f * currentAmount)
+            val widthScale = 1.0f + progressiveAmount * 1.35f
+            val spatialMix = progressiveAmount * 0.85f
+
+            val sideProcessed = if (bassProtect) {
+                val sideHp = sideHpFilter.process(side)
+                sideHp * widthScale + haasDiffProcessed * spatialMix
+            } else {
+                side * widthScale + haasDiffProcessed * spatialMix
+            }
+
+            // 7. Stereo reconstruction: L = Mid + Side, R = Mid - Side
+            // In mono collapse (L + R) / 2 = Mid, sideProcessed cancels completely with 0 comb filtering
             val leftOut = mid + sideProcessed
             val rightOut = mid - sideProcessed
 
-            // 7. Equal-energy gain normalization: prevents loudness jump and maintains clean headroom
-            val gainComp = 1.0f / sqrt(1.0f + 0.55f * currentAmount * currentAmount)
+            // 8. Equal-energy gain normalization
+            val gainComp = 1.0f / sqrt(1.0f + 0.35f * currentAmount * currentAmount)
             val leftNormalized = leftOut * gainComp
             val rightNormalized = rightOut * gainComp
 
@@ -248,27 +247,25 @@ class HaasSurroundEffect {
         val headroom = maxVal - threshold
         val excess = absVal - threshold
         val compressed = threshold + headroom * tanh(excess.toDouble() / headroom).toFloat()
-        return (if (sample < 0f) -compressed else compressed).toInt().toShort()
+        return if (sample < 0f) (-compressed).toInt().toShort() else compressed.toInt().toShort()
     }
 
     /**
      * Resets delay buffers and filter histories (e.g. when seeking or changing tracks).
      */
     fun reset() {
-        spatialDelayBuffer.fill(0f)
+        delayBuffer.fill(0f)
         writePos = 0
-        spatialHpFilter.reset()
-        spatialLpFilter.reset()
-        spatialHpFilterR.reset()
-        spatialLpFilterR.reset()
         sideHpFilter.reset()
+        haasHpFilter.reset()
+        toneDampFilter.reset()
         currentAmount = 0f
         targetAmount = if (isEnabled) configuredAmount else 0f
         currentDelayMs = targetDelayMs
     }
 
     val isActive: Boolean
-        get() = isEnabled && (targetAmount > 0.001f || currentAmount > 0.001f)
+        get() = isEnabled && (targetAmount > 0.001f || currentAmount > 0.001f) && (targetDelayMs > 0.01f || currentDelayMs > 0.01f)
 
     /**
      * Transposed Direct Form II Biquad Filter for precision audio filtering.

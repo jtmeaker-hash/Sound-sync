@@ -31,6 +31,7 @@ class MetadataReviewManager(
 ) {
     private val inboxDao = database.metadataReviewInboxDao()
     private val trackDao = database.trackDao()
+    private val writeQueue by lazy { runCatching { com.example.metadata.MetadataFileWriteQueue.getInstance(context) }.getOrNull() }
 
     companion object {
         private const val TAG = "MetadataReviewManager"
@@ -209,6 +210,13 @@ class MetadataReviewManager(
     }
 
     suspend fun writeAndApproveAll(itemsWithFields: Map<String, Set<String>>): Int = withContext(Dispatchers.IO) {
+        val targetTracks = itemsWithFields.keys.mapNotNull { id ->
+            val item = inboxDao.getItemById(id)
+            if (item != null) trackDao.getTrackById(item.trackId)?.toTrack() else null
+        }
+        if (targetTracks.isNotEmpty()) {
+            writeQueue?.ensurePermissionsUpfront(targetTracks)
+        }
         var count = 0
         for ((id, fields) in itemsWithFields) {
             if (fields.isNotEmpty() && acceptSelectedFields(id, fields)) {
@@ -442,6 +450,12 @@ class MetadataReviewManager(
      */
     suspend fun writeAndApproveVerified(itemSelections: Map<String, Set<String>> = emptyMap()): Int = withContext(Dispatchers.IO) {
         val verifiedItems = inboxDao.getPendingVerifiedItems()
+        val targetTracks = verifiedItems.mapNotNull { item ->
+            trackDao.getTrackById(item.trackId)?.toTrack()
+        }
+        if (targetTracks.isNotEmpty()) {
+            writeQueue?.ensurePermissionsUpfront(targetTracks)
+        }
         var count = 0
         for (item in verifiedItems) {
             val fields = itemSelections[item.id] ?: getDefaultProposedFields(item)
@@ -459,6 +473,12 @@ class MetadataReviewManager(
      */
     suspend fun approveAllVerified(): Int = withContext(Dispatchers.IO) {
         val verifiedItems = inboxDao.getPendingVerifiedItems()
+        val targetTracks = verifiedItems.mapNotNull { item ->
+            trackDao.getTrackById(item.trackId)?.toTrack()
+        }
+        if (targetTracks.isNotEmpty()) {
+            writeQueue?.ensurePermissionsUpfront(targetTracks)
+        }
         var count = 0
         for (item in verifiedItems) {
             if (acceptAllProposed(item.id)) {
@@ -470,6 +490,13 @@ class MetadataReviewManager(
     }
 
     suspend fun approveMultiple(itemIds: List<String>): Int = withContext(Dispatchers.IO) {
+        val targetTracks = itemIds.mapNotNull { id ->
+            val item = inboxDao.getItemById(id)
+            if (item != null) trackDao.getTrackById(item.trackId)?.toTrack() else null
+        }
+        if (targetTracks.isNotEmpty()) {
+            writeQueue?.ensurePermissionsUpfront(targetTracks)
+        }
         var count = 0
         for (id in itemIds) {
             if (acceptAllProposed(id)) {

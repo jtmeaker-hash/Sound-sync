@@ -160,10 +160,16 @@ class AudioOutputTracker private constructor(private val context: Context) {
     }
 
     fun buildSnapshot(): AudioOutputDiagnosticsSnapshot {
-        val btState = when {
-            bluetoothAdapter == null -> "UNAVAILABLE"
-            bluetoothAdapter.isEnabled -> "ENABLED"
-            else -> "DISABLED"
+        val btState = try {
+            when {
+                bluetoothAdapter == null -> "UNAVAILABLE"
+                bluetoothAdapter.isEnabled -> "ENABLED"
+                else -> "DISABLED"
+            }
+        } catch (_: SecurityException) {
+            "PERMISSION_DENIED"
+        } catch (_: Exception) {
+            "UNAVAILABLE"
         }
 
         val devices = mutableListOf<String>()

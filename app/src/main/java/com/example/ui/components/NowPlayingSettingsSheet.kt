@@ -59,13 +59,19 @@ fun NowPlayingSettingsSheet(
     onSetEqLow: (Float) -> Unit = {},
     onSetEqMid: (Float) -> Unit = {},
     onSetEqHigh: (Float) -> Unit = {},
+    eq6Bands: List<Float> = emptyList(),
+    onSetEqBandGain: (Int, Float) -> Unit = { _, _ -> },
+    onResetEqBands: () -> Unit = {},
+    onApplyEqPreset: (String) -> Unit = {},
     // Haas state
     haasEnabled: Boolean = false,
     haasAmount: Float = 0.5f,
     haasDelayMs: Float = 5f,
+    haasBassProtect: Boolean = true,
     onSetHaasEnabled: (Boolean) -> Unit = {},
     onSetHaasAmount: (Float) -> Unit = {},
     onSetHaasDelayMs: (Float) -> Unit = {},
+    onSetHaasBassProtect: (Boolean) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -94,7 +100,7 @@ fun NowPlayingSettingsSheet(
                 }
             }
 
-            // ── Audio Effects Panel (3-Band EQ & Haas 3D Surround) ───
+            // ── Audio Effects Panel (6-Band EQ & Haas 3D Surround) ───
             AudioEffectsPanel(
                 eqEnabled = eqEnabled,
                 eqLow = eqLow,
@@ -104,12 +110,18 @@ fun NowPlayingSettingsSheet(
                 onSetEqLow = onSetEqLow,
                 onSetEqMid = onSetEqMid,
                 onSetEqHigh = onSetEqHigh,
+                eq6Bands = eq6Bands,
+                onSetEqBandGain = onSetEqBandGain,
+                onResetEqBands = onResetEqBands,
+                onApplyEqPreset = onApplyEqPreset,
                 haasEnabled = haasEnabled,
                 haasAmount = haasAmount,
                 haasDelayMs = haasDelayMs,
+                haasBassProtect = haasBassProtect,
                 onSetHaasEnabled = onSetHaasEnabled,
                 onSetHaasAmount = onSetHaasAmount,
                 onSetHaasDelayMs = onSetHaasDelayMs,
+                onSetHaasBassProtect = onSetHaasBassProtect,
                 modifier = Modifier.fillMaxWidth()
             )
 

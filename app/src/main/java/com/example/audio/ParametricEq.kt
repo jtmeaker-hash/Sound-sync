@@ -54,6 +54,19 @@ class ParametricEq(val sampleRate: Int) {
         const val MAX_Q = 20.0
 
         /**
+         * Professional 6-band parametric layout with musical center frequencies across the audible spectrum.
+         */
+        val DEFAULT_6_BANDS: List<EqBand>
+            get() = listOf(
+                EqBand(0, "Sub-Bass", EqFilterType.LOW_SHELF, 60.0, 0.0, 0.71, true),
+                EqBand(1, "Bass", EqFilterType.PEAKING, 150.0, 0.0, 1.0, true),
+                EqBand(2, "Low-Mid", EqFilterType.PEAKING, 400.0, 0.0, 1.2, true),
+                EqBand(3, "Mid / Vocals", EqFilterType.PEAKING, 1000.0, 0.0, 1.4, true),
+                EqBand(4, "Upper-Mid", EqFilterType.PEAKING, 2400.0, 0.0, 1.4, true),
+                EqBand(5, "High / Air", EqFilterType.HIGH_SHELF, 8000.0, 0.0, 0.71, true)
+            )
+
+        /**
          * Professional 10-band parametric layout covering the full audible spectrum.
          */
         val DEFAULT_10_BANDS: List<EqBand>
@@ -326,6 +339,22 @@ class ParametricEq(val sampleRate: Int) {
     var highGain: Float = 1f
         set(value) { field = value.coerceIn(0f, 2f) }
 
+    // Dedicated 6-band gains in dB (-12.0 dB to +12.0 dB, 0.0 dB neutral)
+    val eq6BandGainsDb = FloatArray(6) { 0f }
+    private val applied6BandGainsDb = FloatArray(6) { Float.NaN }
+
+    fun set6BandGain(index: Int, gainDb: Float) {
+        if (index in 0..5) {
+            eq6BandGainsDb[index] = gainDb.coerceIn(-12f, 12f)
+        }
+    }
+
+    fun set6BandGains(gains: List<Float>) {
+        for (i in 0 until minOf(6, gains.size)) {
+            eq6BandGainsDb[i] = gains[i].coerceIn(-12f, 12f)
+        }
+    }
+
     // State tracking to detect updates
     private var appliedPreamp = Double.NaN
     private var appliedLow = Float.NaN
@@ -475,7 +504,8 @@ class ParametricEq(val sampleRate: Int) {
             return
         }
 
-        val isUnityQuick = (lowGain == 1f && midGain == 1f && highGain == 1f)
+        val are6BandsNeutral = eq6BandGainsDb.all { abs(it) < 0.001f }
+        val isUnityQuick = (lowGain == 1f && midGain == 1f && highGain == 1f && are6BandsNeutral)
         val isUnityParametric = (preampDb == 0.0) && !autoHeadroomEnabled && bands.all {
             !it.isEnabled || (it.gainDb == 0.0 && it.type != EqFilterType.HIGH_PASS && it.type != EqFilterType.LOW_PASS && it.type != EqFilterType.NOTCH && it.type != EqFilterType.BAND_PASS)
         }
@@ -596,6 +626,13 @@ class ParametricEq(val sampleRate: Int) {
             needsUpdate = true
         }
 
+        for (i in 0..5) {
+            if (eq6BandGainsDb[i] != applied6BandGainsDb[i]) {
+                applied6BandGainsDb[i] = eq6BandGainsDb[i]
+                needsUpdate = true
+            }
+        }
+
         synchronized(bands) {
             if (bands.size != appliedBands.size) {
                 rebuildBiquads(immediate = false)
@@ -633,12 +670,15 @@ class ParametricEq(val sampleRate: Int) {
                     continue
                 }
 
-                // Combine parametric band gain with quick DJ mixer knob offsets for standard bands
-                val djKnobOffsetDb = when (i) {
-                    1 -> linearToDb(lowGain)      // Bass band
-                    3 -> linearToDb(midGain)      // Mid band
-                    5 -> linearToDb(highGain)     // Presence band
-                    else -> 0.0
+                // Combine parametric band gain with 6-band gains or quick DJ mixer knob offsets
+                val djKnobOffsetDb = when {
+                    bands.size == 6 && i in 0..5 -> eq6BandGainsDb[i].toDouble()
+                    else -> when (i) {
+                        1 -> linearToDb(lowGain) + (if (eq6BandGainsDb[0] != 0f) eq6BandGainsDb[0].toDouble() else 0.0)
+                        3 -> linearToDb(midGain) + (if (eq6BandGainsDb[3] != 0f) eq6BandGainsDb[3].toDouble() else 0.0)
+                        5 -> linearToDb(highGain) + (if (eq6BandGainsDb[5] != 0f) eq6BandGainsDb[5].toDouble() else 0.0)
+                        else -> 0.0
+                    }
                 }
                 val effectiveGainDb = (band.gainDb + djKnobOffsetDb).coerceIn(MIN_GAIN_DB, MAX_GAIN_DB)
 

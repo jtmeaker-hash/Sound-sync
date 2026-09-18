@@ -84,16 +84,9 @@ fun MetadataReviewInboxScreen(
                         Button(
                             onClick = {
                                 coroutineScope.launch {
-                                    val verifiedItems = pendingItems.filter { it.matchStatus == "VERIFIED" || it.confidenceScore >= 95.0 }
-                                    var count = 0
-                                    for (item in verifiedItems) {
-                                        val fields = getSelectedFields(item)
-                                        if (fields.isNotEmpty() && reviewManager.acceptSelectedFields(item.id, fields)) {
-                                            itemSelections.remove(item.id)
-                                            selectedIds.remove(item.id)
-                                            count++
-                                        }
-                                    }
+                                    val count = reviewManager.writeAndApproveVerified(itemSelections)
+                                    itemSelections.clear()
+                                    selectedIds.clear()
                                     Toast.makeText(context, "Written & approved $count verified tracks", Toast.LENGTH_SHORT).show()
                                 }
                             },
@@ -160,15 +153,12 @@ fun MetadataReviewInboxScreen(
                                 Button(
                                     onClick = {
                                         coroutineScope.launch {
-                                            val itemsToProcess = pendingItems.filter { selectedIds.contains(it.id) }
-                                            var count = 0
-                                            for (item in itemsToProcess) {
-                                                val fields = getSelectedFields(item)
-                                                if (fields.isNotEmpty() && reviewManager.acceptSelectedFields(item.id, fields)) {
-                                                    itemSelections.remove(item.id)
-                                                    count++
-                                                }
+                                            val selectionsToProcess = selectedIds.associateWith { id ->
+                                                val item = pendingItems.firstOrNull { it.id == id }
+                                                if (item != null) getSelectedFields(item) else emptySet()
                                             }
+                                            val count = reviewManager.writeAndApproveAll(selectionsToProcess)
+                                            itemSelections.clear()
                                             selectedIds.clear()
                                             Toast.makeText(context, "Written & approved $count tracks", Toast.LENGTH_SHORT).show()
                                         }
