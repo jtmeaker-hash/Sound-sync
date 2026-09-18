@@ -1631,3 +1631,48 @@ d171449 Fix metadata re-analysis loop and startup ANR freeze
 ```
 
 ---
+
+## CI Run 35296782123 — PASS
+
+- **Date:** 2026-09-18T01:54:21.262636+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`85ed88c9be`](https://github.com/jtmeaker-hash/Sound-sync/commit/85ed88c9be348abbfae742287183bdce9031c3dd)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35296782123)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ✅ PASS |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+No CI build/test failures detected in this run.
+
+### Summary of changes
+
+feat(metadata): unify write and approve workflow with all proposed fields checked by default
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+85ed88c feat(metadata): unify write and approve workflow with all proposed fields checked by default
+ .../metadata/review/MetadataReviewManager.kt       | 269 ++++++++++++-------
+ .../ui/library/MetadataReviewInboxScreen.kt        | 290 +++++++++++++--------
+ .../ManualCoverArtMdApprovalIntegrationTest.kt     | 194 ++++++++++++++
+ 3 files changed, 548 insertions(+), 205 deletions(-)
+```
+
+---
