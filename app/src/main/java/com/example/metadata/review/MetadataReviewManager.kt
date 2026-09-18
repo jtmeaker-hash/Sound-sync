@@ -11,6 +11,8 @@ import com.example.metadata.history.MetadataHistoryManager
 import com.example.metadata.parser.TrackIdentityParser
 import com.example.metadata.MetadataFileWriteQueue
 import com.example.metadata.MetadataWriteResult
+import com.example.metadata.LocalMetadataCompletenessChecker
+import com.example.metadata.apple.AppleTrackResult
 import com.example.model.MetadataScanState
 import com.example.model.MetadataWriteState
 import com.example.model.Track
@@ -32,7 +34,56 @@ class MetadataReviewManager(
 
     companion object {
         private const val TAG = "MetadataReviewManager"
+
+        /**
+         * Returns all proposed metadata fields that have a valid proposed value for an item.
+         * Only fields with actual proposed values are included (Requirement 2 & 3).
+         */
+        fun getDefaultProposedFields(item: MetadataReviewItemEntity): Set<String> {
+            val fields = mutableSetOf<String>()
+            val hasProposedArt = !item.artworkCachePath.isNullOrBlank() ||
+                    !item.proposedArtworkUrl.isNullOrBlank() ||
+                    item.provider == "Manual Cover"
+            if (hasProposedArt) {
+                fields.add("artwork")
+            }
+            if (item.proposedTitle.isNotBlank()) {
+                fields.add("title")
+            }
+            if (item.proposedArtist.isNotBlank()) {
+                fields.add("artist")
+            }
+            if (item.proposedAlbum.isNotBlank()) {
+                fields.add("album")
+            }
+            if (item.proposedYear != null && item.proposedYear > 0) {
+                fields.add("year")
+            }
+            if (!item.proposedGenre.isNullOrBlank()) {
+                fields.add("genre")
+            }
+            if (item.proposedTrackNumber != null && item.proposedTrackNumber > 0) {
+                fields.add("tracknumber")
+            }
+            if (!item.candidatesJson.isNullOrBlank()) {
+                try {
+                    val candidate = AppleTrackResult.listFromJson(item.candidatesJson).firstOrNull()
+                    if (candidate != null) {
+                        if (!candidate.collectionArtistName.isNullOrBlank()) {
+                            fields.add("albumartist")
+                        }
+                        if (candidate.discNumber != null && candidate.discNumber > 0) {
+                            fields.add("discnumber")
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            return fields
+        }
     }
+
+    fun getDefaultProposedFields(item: MetadataReviewItemEntity): Set<String> =
+        Companion.getDefaultProposedFields(item)
 
     suspend fun submitForReview(
         track: TrackEntity,
@@ -149,85 +200,22 @@ class MetadataReviewManager(
 
     suspend fun acceptAllProposed(itemId: String): Boolean = withContext(Dispatchers.IO) {
         val item = inboxDao.getItemById(itemId) ?: return@withContext false
-        val track = trackDao.getTrackById(item.trackId) ?: return@withContext false
-        val settings = settingsStore.load()
+        val fields = getDefaultProposedFields(item)
+        acceptSelectedFields(itemId, fields)
+    }
 
-        val finalTitle = item.proposedTitle.takeIf { it.isNotBlank() } ?: track.title
-        val finalArtist = item.proposedArtist.takeIf { it.isNotBlank() } ?: track.artist
-        val shouldReplaceArtwork = settings.replaceExistingArtwork || track.artworkUrl.isNullOrBlank() || item.provider == "Manual Cover"
-        val finalArtworkUrl = if (shouldReplaceArtwork) (item.proposedArtworkUrl ?: track.artworkUrl) else track.artworkUrl
-        val finalArtworkCachePath = if (shouldReplaceArtwork) (item.artworkCachePath ?: track.artworkCachePath) else track.artworkCachePath
+    suspend fun writeAndApprove(itemId: String, fieldNames: Set<String>): Boolean = withContext(Dispatchers.IO) {
+        acceptSelectedFields(itemId, fieldNames)
+    }
 
-        // 1. Transactional Pre-Write Backup (Sections 10 & 11)
-        if (settings.keepOriginalMetadataBackup) {
-            backupManager.savePreWriteBackup(track)
-        }
-
-        // Record history for changes
-        if (finalTitle != track.title) {
-            historyManager.recordChange(track.id, track.filePath, "title", track.title, finalTitle, item.provider, false)
-        }
-        if (finalArtist != track.artist) {
-            historyManager.recordChange(track.id, track.filePath, "artist", track.artist, finalArtist, item.provider, false)
-        }
-        if (item.proposedAlbum != track.album) {
-            historyManager.recordChange(track.id, track.filePath, "album", track.album, item.proposedAlbum, item.provider, false)
-        }
-        if (item.proposedGenre != null && item.proposedGenre != track.genre) {
-            historyManager.recordChange(track.id, track.filePath, "genre", track.genre, item.proposedGenre, item.provider, false)
-        }
-        if (item.proposedYear != null && item.proposedYear != track.releaseYear) {
-            historyManager.recordChange(track.id, track.filePath, "year", track.releaseYear?.toString(), item.proposedYear.toString(), item.provider, false)
-        }
-
-        val updated = track.copy(
-            title = finalTitle,
-            artist = finalArtist,
-            album = item.proposedAlbum,
-            genre = item.proposedGenre ?: track.genre,
-            releaseYear = item.proposedYear ?: track.releaseYear,
-            trackNumber = item.proposedTrackNumber ?: track.trackNumber,
-            artworkUrl = finalArtworkUrl,
-            artworkCachePath = finalArtworkCachePath,
-            metadataSource = item.provider,
-            metadataConfidence = item.confidenceScore,
-            metadataScanState = MetadataScanState.APPLIED.name,
-            userConfirmedMetadata = true
-        )
-
-        // 2. Physical File Writing with Scoped Storage MediaStore Permission Handling
-        val hasPhysicalFile = (File(track.filePath).exists() && File(track.filePath).isFile) || track.filePath.startsWith("content://")
-        if (hasPhysicalFile) {
-            val artworkBytes = item.artworkCachePath?.let { path ->
-                try { File(path).takeIf { it.exists() }?.readBytes() } catch (_: Exception) { null }
-            }
-            val writeQueue = try {
-                MetadataFileWriteQueue.getInstance(context)
-            } catch (_: Throwable) { null }
-
-            val writeResult = writeQueue?.writeDirect(
-                track = updated.toTrack(),
-                artworkBytes = artworkBytes
-            )
-
-            if (writeResult != null && writeResult !is MetadataWriteResult.Written && writeResult !is MetadataWriteResult.AlreadyInSync && writeResult !is MetadataWriteResult.Partial) {
-                Log.e(TAG, "ARTWORK_WRITE_FAILED: Physical file write failed for item $itemId: $writeResult")
-                return@withContext false
+    suspend fun writeAndApproveAll(itemsWithFields: Map<String, Set<String>>): Int = withContext(Dispatchers.IO) {
+        var count = 0
+        for ((id, fields) in itemsWithFields) {
+            if (fields.isNotEmpty() && acceptSelectedFields(id, fields)) {
+                count++
             }
         }
-
-        val finalWriteState = if (item.provider == "Manual Cover" || item.artworkCachePath != null) {
-            MetadataWriteState.ARTWORK_SAVED.name
-        } else {
-            MetadataWriteState.FILE_WRITE_SUCCESS.name
-        }
-        val finalTrackToSave = updated.copy(metadataWriteState = finalWriteState)
-        trackDao.updateTrack(finalTrackToSave)
-        inboxDao.updateStatus(itemId, "ACCEPTED")
-        com.example.util.AlbumArtHelper.invalidateTrack(finalTrackToSave.id, finalTrackToSave.artist, finalTrackToSave.album)
-
-        Log.i(TAG, "Approved and applied metadata for item $itemId (track ${track.id})")
-        true
+        count
     }
 
     suspend fun acceptSpecificField(itemId: String, fieldName: String): Boolean = withContext(Dispatchers.IO) {
@@ -235,10 +223,15 @@ class MetadataReviewManager(
     }
 
     /**
-     * Applies only the explicitly selected fields from the proposed candidate (Upgrade 26).
-     * Protected by pre-write backup, history recording, and transactional file rollback.
+     * Writes selected metadata fields + artwork to the audio file, verifies write success,
+     * updates the database/library entry, and marks the MD result as approved (Requirements 1, 5, 12, 13).
      */
     suspend fun acceptSelectedFields(itemId: String, fieldNames: Set<String>): Boolean = withContext(Dispatchers.IO) {
+        if (fieldNames.isEmpty()) {
+            Log.w(TAG, "acceptSelectedFields called with empty field set for $itemId — skipping write")
+            return@withContext false
+        }
+
         val item = inboxDao.getItemById(itemId) ?: return@withContext false
         val track = trackDao.getTrackById(item.trackId) ?: return@withContext false
         val settings = settingsStore.load()
@@ -249,6 +242,10 @@ class MetadataReviewManager(
 
         var updated = track
         val provMap = com.example.metadata.merge.TrackFieldProvenance.parse(track.fieldProvenanceJson).toMutableMap()
+
+        val candidate = item.candidatesJson?.let {
+            try { AppleTrackResult.listFromJson(it).firstOrNull() } catch (_: Exception) { null }
+        }
 
         for (field in fieldNames) {
             when (field.lowercase()) {
@@ -274,42 +271,71 @@ class MetadataReviewManager(
                     }
                 }
                 "genre" -> {
-                    item.proposedGenre?.let {
+                    item.proposedGenre?.takeIf { it.isNotBlank() }?.let {
                         historyManager.recordChange(track.id, track.filePath, "genre", track.genre, it, item.provider, false)
                         updated = updated.copy(genre = it)
                         provMap["genre"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
                     }
                 }
                 "year" -> {
-                    item.proposedYear?.let {
+                    item.proposedYear?.takeIf { it > 0 }?.let {
                         historyManager.recordChange(track.id, track.filePath, "year", track.releaseYear?.toString(), it.toString(), item.provider, false)
                         updated = updated.copy(releaseYear = it)
                         provMap["year"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
                     }
                 }
+                "tracknumber", "track", "track #", "track_number" -> {
+                    item.proposedTrackNumber?.takeIf { it > 0 }?.let {
+                        historyManager.recordChange(track.id, track.filePath, "trackNumber", track.trackNumber.toString(), it.toString(), item.provider, false)
+                        updated = updated.copy(trackNumber = it)
+                        provMap["trackNumber"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
+                }
+                "discnumber", "disc", "disc #" -> {
+                    candidate?.discNumber?.takeIf { it > 0 }?.let {
+                        historyManager.recordChange(track.id, track.filePath, "discNumber", track.discNumber.toString(), it.toString(), item.provider, false)
+                        updated = updated.copy(discNumber = it)
+                        provMap["discNumber"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
+                }
+                "albumartist", "album artist" -> {
+                    candidate?.collectionArtistName?.takeIf { it.isNotBlank() }?.let {
+                        historyManager.recordChange(track.id, track.filePath, "albumArtist", track.albumArtist, it, item.provider, false)
+                        updated = updated.copy(albumArtist = it)
+                        provMap["albumArtist"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
+                }
                 "artwork" -> {
-                    val artUrl = item.artworkCachePath ?: item.proposedArtworkUrl
-                    if (!artUrl.isNullOrBlank()) {
-                        updated = updated.copy(
-                            artworkUrl = item.proposedArtworkUrl ?: updated.artworkUrl,
-                            artworkCachePath = item.artworkCachePath ?: updated.artworkCachePath,
-                            artworkSource = item.provider
-                        )
-                        provMap["artwork"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    val shouldReplaceArtwork = settings.replaceExistingArtwork || track.artworkUrl.isNullOrBlank() || item.provider == "Manual Cover"
+                    if (shouldReplaceArtwork) {
+                        val artUrl = item.artworkCachePath ?: item.proposedArtworkUrl
+                        if (!artUrl.isNullOrBlank()) {
+                            updated = updated.copy(
+                                artworkUrl = item.proposedArtworkUrl ?: updated.artworkUrl,
+                                artworkCachePath = item.artworkCachePath ?: updated.artworkCachePath,
+                                artworkSource = item.provider
+                            )
+                            provMap["artwork"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                        }
+                    }
+                }
+                "bpm" -> {
+                    if (updated.bpm > 0.0) {
+                        provMap["bpm"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
+                    }
+                }
+                "key", "musicalkey" -> {
+                    if (updated.musicalKey.isNotBlank()) {
+                        provMap["key"] = com.example.metadata.merge.MetadataSourceProvenance.USER_EDIT
                     }
                 }
             }
         }
 
-        val finalTrack = updated.copy(
-            fieldProvenanceJson = com.example.metadata.merge.TrackFieldProvenance.toJson(provMap),
-            metadataScanState = MetadataScanState.APPLIED.name,
-            userConfirmedMetadata = true
-        )
         // Physical File Writing with Scoped Storage MediaStore Permission Handling
-        val hasPhysicalFile = (File(finalTrack.filePath).exists() && File(finalTrack.filePath).isFile) || finalTrack.filePath.startsWith("content://")
+        val hasPhysicalFile = (File(updated.filePath).exists() && File(updated.filePath).isFile) || updated.filePath.startsWith("content://")
         if (hasPhysicalFile) {
-            val artworkBytes = if (fieldNames.contains("artwork")) {
+            val artworkBytes = if (fieldNames.any { it.equals("artwork", ignoreCase = true) }) {
                 item.artworkCachePath?.let { path ->
                     try { File(path).takeIf { it.exists() }?.readBytes() } catch (_: Exception) { null }
                 }
@@ -320,27 +346,53 @@ class MetadataReviewManager(
             } catch (_: Throwable) { null }
 
             val writeResult = writeQueue?.writeDirect(
-                track = finalTrack.toTrack(),
+                track = updated.toTrack(),
                 artworkBytes = artworkBytes
             )
 
             if (writeResult != null && writeResult !is MetadataWriteResult.Written && writeResult !is MetadataWriteResult.AlreadyInSync && writeResult !is MetadataWriteResult.Partial) {
-                Log.e(TAG, "ARTWORK_WRITE_FAILED: Physical file write failed for item $itemId with fields $fieldNames: $writeResult")
+                Log.e(TAG, "METADATA_WRITE_FAILED: Physical file write failed for item $itemId with fields $fieldNames: $writeResult")
                 return@withContext false
             }
         }
 
-        val finalWriteState = if (fieldNames.contains("artwork") || item.provider == "Manual Cover") {
+        val hasCompleteEmbedded = updated.title.isNotBlank() &&
+                !LocalMetadataCompletenessChecker.isPlaceholderTitle(updated.title) &&
+                updated.artist.isNotBlank() &&
+                !LocalMetadataCompletenessChecker.isPlaceholderArtist(updated.artist) &&
+                updated.album.isNotBlank() &&
+                !LocalMetadataCompletenessChecker.isPlaceholderAlbum(updated.album) &&
+                LocalMetadataCompletenessChecker.hasValidArtwork(
+                    context = context,
+                    hasEmbeddedArtwork = updated.artworkSource in listOf("Embedded Tag", "Embedded") || fieldNames.any { it.equals("artwork", ignoreCase = true) },
+                    track = updated.toTrack(),
+                    artworkSource = updated.artworkSource,
+                    artworkUrl = updated.artworkUrl,
+                    artworkCachePath = updated.artworkCachePath
+                )
+
+        val isComplete = hasCompleteEmbedded || LocalMetadataCompletenessChecker.evaluateTrack(context, updated.toTrack()).isComplete
+
+        val finalScanState = if (isComplete) MetadataScanState.COMPLETE.name else MetadataScanState.APPROVED.name
+        val finalAnalysisState = if (isComplete) com.example.model.AnalysisState.COMPLETE.name else updated.analysisState
+        val finalWriteState = if (fieldNames.any { it.equals("artwork", ignoreCase = true) } || item.provider == "Manual Cover") {
             MetadataWriteState.ARTWORK_SAVED.name
         } else {
-            finalTrack.metadataWriteState
+            MetadataWriteState.FILE_WRITE_SUCCESS.name
         }
-        val finalTrackToSave = finalTrack.copy(metadataWriteState = finalWriteState)
+
+        val finalTrackToSave = updated.copy(
+            fieldProvenanceJson = com.example.metadata.merge.TrackFieldProvenance.toJson(provMap),
+            metadataScanState = finalScanState,
+            metadataWriteState = finalWriteState,
+            analysisState = finalAnalysisState,
+            userConfirmedMetadata = true
+        )
         trackDao.updateTrack(finalTrackToSave)
         inboxDao.updateStatus(itemId, "ACCEPTED")
         com.example.util.AlbumArtHelper.invalidateTrack(finalTrackToSave.id, finalTrackToSave.artist, finalTrackToSave.album)
 
-        Log.i(TAG, "Accepted selected fields ($fieldNames) for item $itemId (track ${track.id})")
+        Log.i(TAG, "Write & Approved metadata for item $itemId (track ${track.id}, scanState=$finalScanState)")
         true
     }
 
@@ -382,6 +434,23 @@ class MetadataReviewManager(
     suspend fun ignoreTrack(itemId: String): Boolean = withContext(Dispatchers.IO) {
         inboxDao.updateStatus(itemId, "IGNORED")
         true
+    }
+
+    /**
+     * Writes selected metadata fields + artwork and approves ONLY items classified as VERIFIED (Requirement 7).
+     * Physical file writing and verification must succeed before approving.
+     */
+    suspend fun writeAndApproveVerified(itemSelections: Map<String, Set<String>> = emptyMap()): Int = withContext(Dispatchers.IO) {
+        val verifiedItems = inboxDao.getPendingVerifiedItems()
+        var count = 0
+        for (item in verifiedItems) {
+            val fields = itemSelections[item.id] ?: getDefaultProposedFields(item)
+            if (fields.isNotEmpty() && acceptSelectedFields(item.id, fields)) {
+                count++
+            }
+        }
+        Log.i(TAG, "Write & Approved all verified items ($count applied)")
+        count
     }
 
     /**

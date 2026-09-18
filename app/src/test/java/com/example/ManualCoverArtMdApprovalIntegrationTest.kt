@@ -10,6 +10,7 @@ import com.example.metadata.MetadataWriteResult
 import com.example.metadata.backup.MetadataBackupManager
 import com.example.metadata.history.MetadataHistoryManager
 import com.example.metadata.review.MetadataReviewManager
+import com.example.model.MetadataScanState
 import com.example.model.MetadataWriteState
 import com.example.model.Track
 import com.example.storage.AudioTagWriter
@@ -428,6 +429,199 @@ class ManualCoverArtMdApprovalIntegrationTest {
         assertEquals("Permission required", MetadataWriteState.PERMISSION_REQUIRED.displayName)
         assertEquals("Write failed", MetadataWriteState.FILE_WRITE_FAILED.displayName)
         assertEquals("Unsupported format", MetadataWriteState.FORMAT_WRITE_UNSUPPORTED.displayName)
+    }
+
+    @Test
+    fun `getDefaultProposedFields returns all non-empty proposed fields`() = runBlocking {
+        val cacheFile = File(tempFolder.root, "default_fields_art.jpg")
+        cacheFile.writeBytes(sampleArtworkBytes)
+
+        val item = MetadataReviewItemEntity(
+            id = "test-default-fields-id",
+            trackId = "track-1",
+            filePath = "/Music/test.mp3",
+            originalTitle = "Old Title",
+            proposedTitle = "New Title",
+            originalArtist = "Old Artist",
+            proposedArtist = "New Artist",
+            originalAlbum = "Old Album",
+            proposedAlbum = "New Album",
+            proposedGenre = "Rock",
+            proposedYear = 2024,
+            proposedTrackNumber = 7,
+            proposedArtworkUrl = "file://${cacheFile.absolutePath}",
+            artworkCachePath = cacheFile.absolutePath,
+            confidenceScore = 95.0,
+            provider = "Apple Music",
+            evidenceSummary = "Match found"
+        )
+
+        val defaultFields = MetadataReviewManager.getDefaultProposedFields(item)
+        val expected = setOf("artwork", "title", "artist", "album", "genre", "year", "tracknumber")
+        assertEquals(expected, defaultFields)
+    }
+
+    @Test
+    fun `writeAndApprove writes physical tags and artwork and updates track to COMPLETE`() = runBlocking {
+        val mp3File = File(tempFolder.root, "write_and_approve.mp3")
+        createSampleMp3File(mp3File)
+
+        val track = Track(
+            id = "write-approve-track-1",
+            title = "Old Song",
+            artist = "Old Singer",
+            album = "Old Record",
+            filePath = mp3File.absolutePath,
+            metadataScanState = "PENDING"
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(track))
+
+        val cacheFile = File(tempFolder.root, "write_approve_cover.jpg")
+        cacheFile.writeBytes(sampleArtworkBytes)
+
+        val item = MetadataReviewItemEntity(
+            id = "review-write-approve-1",
+            trackId = track.id,
+            filePath = mp3File.absolutePath,
+            originalTitle = "Old Song",
+            proposedTitle = "New Song",
+            originalArtist = "Old Singer",
+            proposedArtist = "New Singer",
+            originalAlbum = "Old Record",
+            proposedAlbum = "New Record",
+            proposedGenre = "Electronic",
+            proposedYear = 2024,
+            proposedTrackNumber = 4,
+            proposedArtworkUrl = "file://${cacheFile.absolutePath}",
+            artworkCachePath = cacheFile.absolutePath,
+            confidenceScore = 98.0,
+            status = "PENDING",
+            provider = "Apple Music",
+            evidenceSummary = "High confidence match"
+        )
+        reviewDao.insertItem(item)
+
+        val defaultFields = MetadataReviewManager.getDefaultProposedFields(item)
+        assertTrue(defaultFields.containsAll(setOf("artwork", "title", "artist", "album", "genre", "year", "tracknumber")))
+
+        // Execute Write & Approve
+        val success = reviewManager.writeAndApprove(item.id, defaultFields)
+        assertTrue("writeAndApprove must succeed", success)
+
+        // Item status must be ACCEPTED
+        val updatedItem = reviewDao.getItemById(item.id)
+        assertEquals("ACCEPTED", updatedItem?.status)
+
+        // Physical audio file must have new embedded artwork & tags
+        val readBack = AudioEmbeddedMetadataReader.read(context, mp3File.absolutePath, includeArtworkBytes = true)
+        assertTrue("Audio file must have embedded artwork", readBack.hasEmbeddedArtwork)
+        assertTrue("Artwork bytes must match", sampleArtworkBytes.contentEquals(readBack.embeddedArtworkBytes!!))
+        assertEquals("New Song", readBack.title)
+        assertEquals("New Singer", readBack.artist)
+        assertEquals("New Record", readBack.album)
+
+        // DB track must be updated with COMPLETE scan state and userConfirmedMetadata = true
+        val updatedTrack = trackDao.getTrackById(track.id)
+        assertNotNull(updatedTrack)
+        assertEquals("New Song", updatedTrack?.title)
+        assertEquals("New Singer", updatedTrack?.artist)
+        assertEquals("New Record", updatedTrack?.album)
+        assertEquals("Electronic", updatedTrack?.genre)
+        assertEquals(2024, updatedTrack?.releaseYear)
+        assertEquals(4, updatedTrack?.trackNumber)
+        assertEquals(MetadataScanState.COMPLETE.name, updatedTrack?.metadataScanState)
+        assertTrue(updatedTrack?.userConfirmedMetadata == true)
+    }
+
+    @Test
+    fun `writeAndApprove respects deselected fields and preserves existing values without erasing`() = runBlocking {
+        val mp3File = File(tempFolder.root, "deselected_fields.mp3")
+        createSampleMp3File(mp3File)
+
+        val track = Track(
+            id = "deselected-track-1",
+            title = "Initial Title",
+            artist = "Initial Artist",
+            album = "Untouched Album",
+            genre = "Untouched Genre",
+            releaseYear = 2005,
+            filePath = mp3File.absolutePath
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(track))
+
+        val item = MetadataReviewItemEntity(
+            id = "review-deselected-1",
+            trackId = track.id,
+            filePath = mp3File.absolutePath,
+            originalTitle = "Initial Title",
+            proposedTitle = "Updated Title",
+            originalArtist = "Initial Artist",
+            proposedArtist = "Updated Artist",
+            originalAlbum = "Untouched Album",
+            proposedAlbum = "Overwritten Album",
+            proposedGenre = "Overwritten Genre",
+            proposedYear = 2022,
+            confidenceScore = 85.0,
+            status = "PENDING",
+            provider = "Apple Music",
+            evidenceSummary = "Deselect test"
+        )
+        reviewDao.insertItem(item)
+
+        // User unchecks album, genre, and year, only selecting title and artist
+        val selectedFields = setOf("title", "artist")
+        val success = reviewManager.writeAndApprove(item.id, selectedFields)
+        assertTrue("writeAndApprove with partial fields must succeed", success)
+
+        val updatedTrack = trackDao.getTrackById(track.id)
+        assertNotNull(updatedTrack)
+        // Updated fields
+        assertEquals("Updated Title", updatedTrack?.title)
+        assertEquals("Updated Artist", updatedTrack?.artist)
+        // Deselected fields must be untouched and NOT erased
+        assertEquals("Untouched Album", updatedTrack?.album)
+        assertEquals("Untouched Genre", updatedTrack?.genre)
+        assertEquals(2005, updatedTrack?.releaseYear)
+    }
+
+    @Test
+    fun `writeAndApprove rejects empty field selection and does not write or mark accepted`() = runBlocking {
+        val mp3File = File(tempFolder.root, "empty_selection.mp3")
+        createSampleMp3File(mp3File)
+
+        val track = Track(
+            id = "empty-selection-track-1",
+            title = "Original Title",
+            artist = "Original Artist",
+            album = "Original Album",
+            filePath = mp3File.absolutePath
+        )
+        trackDao.insertTrack(TrackEntity.fromTrack(track))
+
+        val item = MetadataReviewItemEntity(
+            id = "review-empty-selection-1",
+            trackId = track.id,
+            filePath = mp3File.absolutePath,
+            originalTitle = "Original Title",
+            proposedTitle = "New Title",
+            originalArtist = "Original Artist",
+            proposedArtist = "New Artist",
+            originalAlbum = "Original Album",
+            proposedAlbum = "New Album",
+            confidenceScore = 90.0,
+            status = "PENDING",
+            provider = "Apple Music",
+            evidenceSummary = "Empty selection test"
+        )
+        reviewDao.insertItem(item)
+
+        // 0 fields selected
+        val success = reviewManager.writeAndApprove(item.id, emptySet())
+        assertFalse("writeAndApprove with 0 selected fields must return false", success)
+
+        // Item must still be PENDING
+        val itemAfter = reviewDao.getItemById(item.id)
+        assertEquals("PENDING", itemAfter?.status)
     }
 
     private fun createInMemoryAppDatabase(): AppDatabase {

@@ -46,7 +46,12 @@ fun MetadataReviewInboxScreen(
     val modifiedTracksCount by reviewManager.observeModifiedTracksCount().collectAsState(initial = 0)
 
     val selectedIds = remember { mutableStateListOf<String>() }
+    val itemSelections = remember { mutableStateMapOf<String, Set<String>>() }
     var showRestoreDialog by remember { mutableStateOf(false) }
+
+    fun getSelectedFields(item: MetadataReviewItemEntity): Set<String> {
+        return itemSelections[item.id] ?: reviewManager.getDefaultProposedFields(item)
+    }
 
     val verifiedCount = pendingItems.count { it.matchStatus == "VERIFIED" || it.confidenceScore >= 95.0 }
 
@@ -74,13 +79,22 @@ fun MetadataReviewInboxScreen(
                         Icon(Icons.Default.Restore, contentDescription = "Restore Metadata Changes", tint = DeckACyan)
                     }
 
-                    // Section 7: Approve All Verified (ONLY applies verified matches)
+                    // Section 7 / Requirement 7: Write & Approve Verified
                     if (verifiedCount > 0) {
                         Button(
                             onClick = {
                                 coroutineScope.launch {
-                                    val count = reviewManager.approveAllVerified()
-                                    Toast.makeText(context, "Applied $count verified matches", Toast.LENGTH_SHORT).show()
+                                    val verifiedItems = pendingItems.filter { it.matchStatus == "VERIFIED" || it.confidenceScore >= 95.0 }
+                                    var count = 0
+                                    for (item in verifiedItems) {
+                                        val fields = getSelectedFields(item)
+                                        if (fields.isNotEmpty() && reviewManager.acceptSelectedFields(item.id, fields)) {
+                                            itemSelections.remove(item.id)
+                                            selectedIds.remove(item.id)
+                                            count++
+                                        }
+                                    }
+                                    Toast.makeText(context, "Written & approved $count verified tracks", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
@@ -89,7 +103,7 @@ fun MetadataReviewInboxScreen(
                         ) {
                             Icon(Icons.Default.Verified, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Approve Verified ($verifiedCount)", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("Write & Approve Verified ($verifiedCount)", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                     }
                 },
@@ -127,8 +141,8 @@ fun MetadataReviewInboxScreen(
                             )
                         }
 
-                        if (selectedIds.isNotEmpty()) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (selectedIds.isNotEmpty()) {
                                 OutlinedButton(
                                     onClick = {
                                         coroutineScope.launch {
@@ -142,18 +156,53 @@ fun MetadataReviewInboxScreen(
                                 ) {
                                     Text("Reject Selected", fontSize = 12.sp)
                                 }
+                                val isAllSelected = selectedIds.size == pendingItems.size
                                 Button(
                                     onClick = {
                                         coroutineScope.launch {
-                                            val count = reviewManager.approveMultiple(selectedIds.toList())
+                                            val itemsToProcess = pendingItems.filter { selectedIds.contains(it.id) }
+                                            var count = 0
+                                            for (item in itemsToProcess) {
+                                                val fields = getSelectedFields(item)
+                                                if (fields.isNotEmpty() && reviewManager.acceptSelectedFields(item.id, fields)) {
+                                                    itemSelections.remove(item.id)
+                                                    count++
+                                                }
+                                            }
                                             selectedIds.clear()
-                                            Toast.makeText(context, "Approved $count items", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "Written & approved $count tracks", Toast.LENGTH_SHORT).show()
                                         }
                                     },
-                                    colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
+                                    colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                 ) {
-                                    Text("Approve Selected", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Text(
+                                        if (isAllSelected) "Write & Approve All" else "Write & Approve Selected (${selectedIds.size})",
+                                        color = DjObsidian,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            } else {
+                                Button(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            var count = 0
+                                            for (item in pendingItems) {
+                                                val fields = getSelectedFields(item)
+                                                if (fields.isNotEmpty() && reviewManager.acceptSelectedFields(item.id, fields)) {
+                                                    itemSelections.remove(item.id)
+                                                    count++
+                                                }
+                                            }
+                                            selectedIds.clear()
+                                            Toast.makeText(context, "Written & approved $count tracks", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("Write & Approve All", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                             }
                         }
@@ -198,41 +247,44 @@ fun MetadataReviewInboxScreen(
             ) {
                 items(pendingItems, key = { it.id }) { item ->
                     val isSelected = selectedIds.contains(item.id)
+                    val itemFields = getSelectedFields(item)
                     SafeReviewItemCard(
                         item = item,
                         isSelected = isSelected,
                         onToggleSelect = {
                             if (isSelected) selectedIds.remove(item.id) else selectedIds.add(item.id)
                         },
-                        onApprove = {
-                            coroutineScope.launch {
-                                val success = reviewManager.acceptAllProposed(item.id)
-                                if (success) {
-                                    Toast.makeText(context, "Metadata & artwork embedded successfully!", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "File write not completed (item kept in approval queue)", Toast.LENGTH_LONG).show()
-                                }
-                            }
+                        selectedFields = itemFields,
+                        onToggleField = { field, isChecked ->
+                            val current = getSelectedFields(item)
+                            val updated = if (isChecked) current + field else current - field
+                            itemSelections[item.id] = updated
                         },
-                        onApplySelected = { fields ->
+                        onWriteAndApprove = { fields ->
                             coroutineScope.launch {
                                 val success = reviewManager.acceptSelectedFields(item.id, fields)
                                 if (success) {
-                                    Toast.makeText(context, "Applied ${fields.size} fields to file & library", Toast.LENGTH_SHORT).show()
+                                    itemSelections.remove(item.id)
+                                    selectedIds.remove(item.id)
+                                    Toast.makeText(context, "Metadata & artwork written to file and approved!", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    Toast.makeText(context, "File write not completed (item kept in approval queue)", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "File write failed (item kept in approval queue)", Toast.LENGTH_LONG).show()
                                 }
                             }
                         },
                         onKeepLocal = {
                             coroutineScope.launch {
                                 reviewManager.keepLocal(item.id)
+                                itemSelections.remove(item.id)
+                                selectedIds.remove(item.id)
                                 Toast.makeText(context, "Preserved local metadata", Toast.LENGTH_SHORT).show()
                             }
                         },
                         onReject = {
                             coroutineScope.launch {
                                 reviewManager.rejectProposal(item.id)
+                                itemSelections.remove(item.id)
+                                selectedIds.remove(item.id)
                             }
                         },
                         onRestore = {
@@ -309,22 +361,14 @@ private fun SafeReviewItemCard(
     item: MetadataReviewItemEntity,
     isSelected: Boolean,
     onToggleSelect: () -> Unit,
-    onApprove: () -> Unit,
-    onApplySelected: (Set<String>) -> Unit,
+    selectedFields: Set<String>,
+    onToggleField: (String, Boolean) -> Unit,
+    onWriteAndApprove: (Set<String>) -> Unit,
     onKeepLocal: () -> Unit,
     onReject: () -> Unit,
     onRestore: () -> Unit
 ) {
-    val selectedFields = remember { mutableStateListOf<String>() }
     val isManualCover = item.provider == "Manual Cover"
-
-    LaunchedEffect(item.id) {
-        if (isManualCover || !item.artworkCachePath.isNullOrBlank()) {
-            if (!selectedFields.contains("artwork")) {
-                selectedFields.add("artwork")
-            }
-        }
-    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -349,7 +393,7 @@ private fun SafeReviewItemCard(
                         modifier = Modifier.size(24.dp)
                     )
 
-                    // Status Badge (Section 16)
+                    // Status Badge (Section 16 / Requirement 11)
                     val (badgeText, badgeColor) = when (item.matchStatus) {
                         "VERIFIED" -> "VERIFIED" to NeonGreen
                         "CONFLICTING_RESULTS" -> "MULTIPLE MATCHES" to DeckACyan
@@ -382,12 +426,13 @@ private fun SafeReviewItemCard(
                 )
             }
 
-            // Side-by-Side Artwork Preview (Section 12)
-            val hasArtworkChange = !item.artworkCachePath.isNullOrBlank() ||
-                    (!item.proposedArtworkUrl.isNullOrBlank() && item.proposedArtworkUrl != item.originalArtworkUrl) ||
+            // Side-by-Side Artwork Preview (Section 12 / Requirement 4)
+            val hasProposedArt = !item.artworkCachePath.isNullOrBlank() ||
+                    !item.proposedArtworkUrl.isNullOrBlank() ||
                     isManualCover
+            val hasArtworkChange = hasProposedArt || !item.originalArtworkUrl.isNullOrBlank()
 
-            if (hasArtworkChange || !item.originalArtworkUrl.isNullOrBlank()) {
+            if (hasArtworkChange) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -416,29 +461,39 @@ private fun SafeReviewItemCard(
                         val artChecked = selectedFields.contains("artwork")
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable {
-                                if (artChecked) selectedFields.remove("artwork") else selectedFields.add("artwork")
+                            modifier = Modifier.clickable(enabled = hasProposedArt) {
+                                onToggleField("artwork", !artChecked)
                             }
                         ) {
-                            Checkbox(
-                                checked = artChecked,
-                                onCheckedChange = { chk ->
-                                    if (chk) selectedFields.add("artwork") else selectedFields.remove("artwork")
-                                }
-                            )
+                            if (hasProposedArt) {
+                                Checkbox(
+                                    checked = artChecked,
+                                    onCheckedChange = { chk -> onToggleField("artwork", chk) }
+                                )
+                            }
                             Text(if (isManualCover) "Apply Cover" else "Apply Art", color = TextSecondary, fontSize = 10.sp)
                         }
                     }
                 }
             }
 
-            // Text Metadata Comparison or Artwork Mutation Indicator
-            val isTitleChanged = !item.originalTitle.equals(item.proposedTitle, ignoreCase = true) && item.proposedTitle.isNotBlank()
-            val isArtistChanged = !item.originalArtist.equals(item.proposedArtist, ignoreCase = true) && item.proposedArtist.isNotBlank()
-            val isAlbumChanged = !item.originalAlbum.equals(item.proposedAlbum, ignoreCase = true) && item.proposedAlbum.isNotBlank()
-            val hasTextChanges = isTitleChanged || isArtistChanged || isAlbumChanged || item.proposedYear != null || item.proposedGenre != null
+            // Text Metadata Comparison (Requirements 2, 3, 9, 13, 14)
+            val topCandidate = remember(item.candidatesJson) {
+                item.candidatesJson?.let {
+                    try { AppleTrackResult.listFromJson(it).firstOrNull() } catch (_: Exception) { null }
+                }
+            }
 
-            if (hasTextChanges) {
+            val hasProposedText = item.proposedTitle.isNotBlank() ||
+                    item.proposedArtist.isNotBlank() ||
+                    item.proposedAlbum.isNotBlank() ||
+                    (item.proposedYear != null && item.proposedYear > 0) ||
+                    !item.proposedGenre.isNullOrBlank() ||
+                    (item.proposedTrackNumber != null && item.proposedTrackNumber > 0) ||
+                    (topCandidate?.discNumber != null && topCandidate.discNumber > 0) ||
+                    (!topCandidate?.collectionArtistName.isNullOrBlank())
+
+            if (hasProposedText) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -446,47 +501,77 @@ private fun SafeReviewItemCard(
                         .padding(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    SelectableComparisonRow(
-                        label = "Title",
-                        current = item.originalTitle,
-                        proposed = item.proposedTitle,
-                        isChecked = selectedFields.contains("title"),
-                        onToggle = { chk -> if (chk) selectedFields.add("title") else selectedFields.remove("title") }
-                    )
-                    SelectableComparisonRow(
-                        label = "Artist",
-                        current = item.originalArtist,
-                        proposed = item.proposedArtist,
-                        isChecked = selectedFields.contains("artist"),
-                        onToggle = { chk -> if (chk) selectedFields.add("artist") else selectedFields.remove("artist") }
-                    )
-                    SelectableComparisonRow(
-                        label = "Album",
-                        current = item.originalAlbum,
-                        proposed = item.proposedAlbum,
-                        isChecked = selectedFields.contains("album"),
-                        onToggle = { chk -> if (chk) selectedFields.add("album") else selectedFields.remove("album") }
-                    )
-                    if (item.proposedYear != null) {
+                    if (item.proposedTitle.isNotBlank()) {
+                        SelectableComparisonRow(
+                            label = "Title",
+                            current = item.originalTitle,
+                            proposed = item.proposedTitle,
+                            isChecked = selectedFields.contains("title"),
+                            onToggle = { chk -> onToggleField("title", chk) }
+                        )
+                    }
+                    if (item.proposedArtist.isNotBlank()) {
+                        SelectableComparisonRow(
+                            label = "Artist",
+                            current = item.originalArtist,
+                            proposed = item.proposedArtist,
+                            isChecked = selectedFields.contains("artist"),
+                            onToggle = { chk -> onToggleField("artist", chk) }
+                        )
+                    }
+                    if (item.proposedAlbum.isNotBlank()) {
+                        SelectableComparisonRow(
+                            label = "Album",
+                            current = item.originalAlbum,
+                            proposed = item.proposedAlbum,
+                            isChecked = selectedFields.contains("album"),
+                            onToggle = { chk -> onToggleField("album", chk) }
+                        )
+                    }
+                    if (!topCandidate?.collectionArtistName.isNullOrBlank()) {
+                        SelectableComparisonRow(
+                            label = "Album Artist",
+                            current = "—",
+                            proposed = topCandidate!!.collectionArtistName!!,
+                            isChecked = selectedFields.contains("albumartist"),
+                            onToggle = { chk -> onToggleField("albumartist", chk) }
+                        )
+                    }
+                    if (item.proposedYear != null && item.proposedYear > 0) {
                         SelectableComparisonRow(
                             label = "Year",
                             current = "—",
                             proposed = item.proposedYear.toString(),
                             isChecked = selectedFields.contains("year"),
-                            onToggle = { chk -> if (chk) selectedFields.add("year") else selectedFields.remove("year") }
+                            onToggle = { chk -> onToggleField("year", chk) }
                         )
                     }
-                    if (item.proposedGenre != null) {
+                    if (!item.proposedGenre.isNullOrBlank()) {
                         SelectableComparisonRow(
                             label = "Genre",
                             current = "—",
                             proposed = item.proposedGenre,
                             isChecked = selectedFields.contains("genre"),
-                            onToggle = { chk -> if (chk) selectedFields.add("genre") else selectedFields.remove("genre") }
+                            onToggle = { chk -> onToggleField("genre", chk) }
                         )
                     }
                     if (item.proposedTrackNumber != null && item.proposedTrackNumber > 0) {
-                        HighlightableComparisonRow("Track #", "—", item.proposedTrackNumber.toString())
+                        SelectableComparisonRow(
+                            label = "Track #",
+                            current = "—",
+                            proposed = item.proposedTrackNumber.toString(),
+                            isChecked = selectedFields.contains("tracknumber"),
+                            onToggle = { chk -> onToggleField("tracknumber", chk) }
+                        )
+                    }
+                    if (topCandidate?.discNumber != null && topCandidate.discNumber > 0) {
+                        SelectableComparisonRow(
+                            label = "Disc #",
+                            current = "—",
+                            proposed = topCandidate.discNumber.toString(),
+                            isChecked = selectedFields.contains("discnumber"),
+                            onToggle = { chk -> onToggleField("discnumber", chk) }
+                        )
                     }
                 }
             } else {
@@ -551,7 +636,7 @@ private fun SafeReviewItemCard(
                 )
             }
 
-            // Action Buttons: Keep Local vs Apply Selected vs Approve All vs Reject (Upgrade 26)
+            // Action Buttons: Keep Local | Reject | Write & Approve (X) (Requirements 1, 8, 9, 10)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -576,22 +661,21 @@ private fun SafeReviewItemCard(
                         Text("Reject", fontSize = 11.sp)
                     }
 
-                    if (selectedFields.isNotEmpty()) {
-                        Button(
-                            onClick = { onApplySelected(selectedFields.toSet()) },
-                            colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Text("Apply Selected (${selectedFields.size})", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                        }
-                    }
-
+                    val count = selectedFields.size
                     Button(
-                        onClick = onApprove,
-                        colors = ButtonDefaults.buttonColors(containerColor = DeckACyan),
+                        onClick = { onWriteAndApprove(selectedFields) },
+                        enabled = count > 0,
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                     ) {
-                        Text(if (isManualCover) "Approve / Write to Track" else "Approve All", color = DjObsidian, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Icon(Icons.Default.Check, contentDescription = null, tint = DjObsidian, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = if (count > 0) "Write & Approve ($count)" else "Write & Approve",
+                            color = DjObsidian,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
                     }
                 }
             }
@@ -611,23 +695,19 @@ private fun SelectableComparisonRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = isChanged) { onToggle(!isChecked) },
+            .clickable { onToggle(!isChecked) },
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (isChanged) {
-            Checkbox(
-                checked = isChecked,
-                onCheckedChange = onToggle,
-                modifier = Modifier.size(20.dp).padding(end = 4.dp)
-            )
-        } else {
-            Spacer(Modifier.width(20.dp))
-        }
+        Checkbox(
+            checked = isChecked,
+            onCheckedChange = onToggle,
+            modifier = Modifier.size(20.dp).padding(end = 4.dp)
+        )
 
-        Text(label, color = TextSecondary, fontSize = 11.sp, modifier = Modifier.width(45.dp))
+        Text(label, color = TextSecondary, fontSize = 11.sp, modifier = Modifier.width(75.dp))
         Text(
-            text = current.ifBlank { "(empty)" },
+            text = current.ifBlank { "—" },
             color = TextMuted,
             fontSize = 11.sp,
             modifier = Modifier.weight(1f),
@@ -642,7 +722,7 @@ private fun SelectableComparisonRow(
         )
         Text(
             text = proposed,
-            color = if (isChanged) (if (isChecked) NeonGreen else DeckACyan) else TextPrimary,
+            color = if (isChanged) (if (isChecked) NeonGreen else DeckACyan) else (if (isChecked) TextPrimary else TextMuted),
             fontWeight = if (isChanged) FontWeight.Bold else FontWeight.Normal,
             fontSize = 11.sp,
             modifier = Modifier.weight(1f),
