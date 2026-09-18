@@ -1732,3 +1732,59 @@ a204a04 feat(audio,storage): batch metadata permissions, startup bluetooth check
 ```
 
 ---
+
+## CI Run 35311469763 — PASS
+
+- **Date:** 2026-09-18T05:43:08.260372+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`cb55e65ba6`](https://github.com/jtmeaker-hash/Sound-sync/commit/cb55e65ba623fc54c1ef1297d7837836d3611518)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35311469763)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ✅ PASS |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+No CI build/test failures detected in this run.
+
+### Summary of changes
+
+perf: complete Android performance audit, reactive cascade throttle, zero-alloc waveform, fast-path media scan
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+cb55e65 perf: complete Android performance audit, reactive cascade throttle, zero-alloc waveform, fast-path media scan
+ .../com/example/analysis/TrackAnalysisManager.kt   | 46 ++++++++-------
+ app/src/main/java/com/example/data/AppDatabase.kt  | 16 ++++-
+ app/src/main/java/com/example/data/TrackEntity.kt  |  4 +-
+ .../metadata/artwork/CanonicalArtworkDetector.kt   |  7 ---
+ .../com/example/storage/LocalFileSystemScanner.kt  | 59 ++++++++++---------
+ .../java/com/example/storage/MediaScannerHelper.kt | 15 +++++
+ .../example/storage/TrackSelfHealingResolver.kt    | 33 +++++++++++
+ .../main/java/com/example/ui/MainDjViewModel.kt    | 60 ++++++++++++++-----
+ .../example/ui/components/DjFileExplorerView.kt    |  4 +-
+ .../java/com/example/ui/components/DjMiniPlayer.kt | 68 +++++++++++++---------
+ .../example/ui/components/DuplicateFinderSheet.kt  |  2 +-
+ .../example/ui/components/RekordboxWaveformView.kt | 24 +++++---
+ .../ui/components/SpectrogramAnalyzerView.kt       |  2 +-
+ .../com/example/ui/library/SmartCratesScreen.kt    |  4 +-
+ 14 files changed, 229 insertions(+), 115 deletions(-)
+```
+
+---
