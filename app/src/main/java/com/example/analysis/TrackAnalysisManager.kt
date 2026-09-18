@@ -170,7 +170,13 @@ class TrackAnalysisManager private constructor(
                 val tracks = trackDao.getTracksByIds(trackIds)
                 val needingAnalysis = tracks.filter { entity ->
                     entity.analysisState != AnalysisState.COMPLETE.name &&
-                    (entity.analysisState in listOf(AnalysisState.NOT_ANALYSED.name, AnalysisState.QUEUED.name, AnalysisState.PARTIAL.name))
+                    (entity.analysisState in listOf(
+                        AnalysisState.NOT_ANALYSED.name,
+                        AnalysisState.QUEUED.name,
+                        AnalysisState.ANALYSING.name,
+                        AnalysisState.PARTIAL.name,
+                        AnalysisState.FAILED_RETRYABLE.name
+                    ))
                 }.filter { entity ->
                     !com.example.metadata.LocalMetadataCompletenessChecker.evaluateTrack(context, entity.toTrack()).isComplete
                 }.map { it.id }
@@ -298,6 +304,14 @@ class TrackAnalysisManager private constructor(
 
         val runId = "scan_${System.currentTimeMillis()}"
         Log.d(TAG, "[$runId] Background library analysis loop started.")
+
+        // Recover any jobs interrupted in ANALYSING state due to process death
+        try {
+            val recovered = trackDao.recoverStaleAnalyzingTracks()
+            if (recovered > 0) {
+                Log.i(TAG, "[$runId] Recovered $recovered stale ANALYSING tracks back to QUEUED after process restart.")
+            }
+        } catch (_: Exception) {}
 
         // Reconcile any tracks with already-complete metadata before determining queue size
         reconcileCompleteTracksInDatabase()
@@ -460,6 +474,17 @@ class TrackAnalysisManager private constructor(
                                     else "Scanning metadata · $currentProcessed / $totalEligible • ${track.title}"
                 )
 
+                // Mark explicit persistent in-flight state
+                try {
+                    trackDao.updateTrackAnalysisStatus(
+                        id = trackId,
+                        state = AnalysisState.ANALYSING.name,
+                        lastAnalysedAt = System.currentTimeMillis(),
+                        reason = null,
+                        retryCount = entity.analysisRetryCount
+                    )
+                } catch (_: Exception) {}
+
                 val outcome = processSingleTrackWithOutcome(track)
                 processedIdsInThisRun.add(trackId)
 
@@ -469,7 +494,9 @@ class TrackAnalysisManager private constructor(
                     ProcessOutcome.FAILED_TERMINAL -> failedTerminal++
                     ProcessOutcome.RETRYABLE_FAILURE -> {
                         val check = trackDao.getTrackById(trackId)
-                        if (check == null || check.analysisRetryCount >= 3 || check.analysisState == AnalysisState.FAILED.name) {
+                        if (check == null || check.analysisRetryCount >= 3 ||
+                            check.analysisState == AnalysisState.FAILED.name ||
+                            check.analysisState == AnalysisState.FAILED_PERMANENT.name) {
                             failedTerminal++
                         }
                     }
@@ -649,7 +676,7 @@ class TrackAnalysisManager private constructor(
                 trackDao.updatePlayabilityStatus(track.id, status, code, avail.details.ifBlank { "Storage file inaccessible during analysis" })
                 val newRetry = (track.analysisRetryCount + 1).coerceAtMost(3)
                 val isTerminal = newRetry >= 3 || avail.state == com.example.storage.StorageAvailabilityState.VOLUME_UNMOUNTED || avail.state == com.example.storage.StorageAvailabilityState.SOURCE_MISSING
-                val stateName = if (isTerminal) AnalysisState.FAILED.name else AnalysisState.PARTIAL.name
+                val stateName = if (isTerminal) AnalysisState.FAILED_PERMANENT.name else AnalysisState.FAILED_RETRYABLE.name
                 trackDao.updateTrackAnalysisStatus(
                     id = track.id,
                     state = stateName,
@@ -857,7 +884,7 @@ class TrackAnalysisManager private constructor(
         } catch (e: Exception) {
             val retryCount = track.analysisRetryCount + 1
             val isTerminal = retryCount >= 3
-            val newState = if (isTerminal) AnalysisState.FAILED else AnalysisState.PARTIAL
+            val newState = if (isTerminal) AnalysisState.FAILED_PERMANENT else AnalysisState.FAILED_RETRYABLE
             Log.e(TAG, "Analysis failed for track '${track.title}' (attempt $retryCount): ${e.message}")
 
             trackDao.updateTrackAnalysisStatus(

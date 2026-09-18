@@ -1598,9 +1598,15 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         if (selectedIndex >= 0 && listingTracks.size > 1) {
             playbackQueue.value = listingTracks
             queueIndex.value = selectedIndex
+            persistentQueueManager.setQueue(listingTracks, startTrack = listingTracks[selectedIndex], shuffle = _isShuffleEnabled.value)
+            syncQueueToSession()
         } else {
-            playbackQueue.value = emptyList()
+            val itemPath = fileItem.localFilePath ?: "https://www.googleapis.com/drive/v3/files/${fileItem.id}?alt=media"
+            val single = fileItem.toAppTrack(itemPath)
+            playbackQueue.value = listOf(single)
             queueIndex.value = 0
+            persistentQueueManager.setQueue(listOf(single), startTrack = single, shuffle = false)
+            syncQueueToSession()
         }
         playDriveTrack(fileItem)
     }
@@ -3048,10 +3054,17 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
                 if (fallback.any { it.id == effectiveTrack.id }) fallback.map { if (it.id == effectiveTrack.id) effectiveTrack else it } else listOf(effectiveTrack)
             }
             val index = targetList.indexOfFirst { it.id == effectiveTrack.id }
-            playbackQueue.value = targetList
-            queueIndex.value = if (index >= 0) index else 0
+            val available = targetList.filter { it.isAvailable && com.example.storage.StorageAvailabilityHelper.isTrackAvailable(getApplication(), it) }
+            val listToPlay = if (available.isNotEmpty()) available else targetList
+            val startTrack = listToPlay.firstOrNull { it.id == effectiveTrack.id } ?: effectiveTrack
+            val startIdx = listToPlay.indexOfFirst { it.id == startTrack.id }.coerceAtLeast(0)
+
+            playbackQueue.value = listToPlay
+            queueIndex.value = startIdx
+            persistentQueueManager.setQueue(listToPlay, startTrack = startTrack, shuffle = _isShuffleEnabled.value)
+            syncQueueToSession()
             nextTrackForCrossfade = null
-            playOrPreviewTrack(effectiveTrack, preserveQueue = true)
+            playOrPreviewTrack(startTrack, preserveQueue = true)
         }
     }
 
@@ -3183,6 +3196,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             playbackQueue.value = listOf(track)
             queueIndex.value = 0
+            persistentQueueManager.setQueue(listOf(track), startTrack = track, shuffle = false)
+            syncQueueToSession()
             playOrPreviewTrack(track, preserveQueue = true)
         }
         showSnackbar("Loaded Spotify track: '${item.name}'")
@@ -3231,6 +3246,8 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             playbackQueue.value = listOf(track)
             queueIndex.value = 0
+            persistentQueueManager.setQueue(listOf(track), startTrack = track, shuffle = false)
+            syncQueueToSession()
             playOrPreviewTrack(track, preserveQueue = true)
         }
         showSnackbar("Playing SoundCloud stream: '${item.title}'")

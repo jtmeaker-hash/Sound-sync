@@ -559,7 +559,8 @@ object AudioDecoder {
     suspend fun decodeToMonoPcm(
         context: Context,
         filePathOrUri: String,
-        maxDurationSeconds: Int = 180
+        maxDurationSeconds: Int = 180,
+        startOffsetSeconds: Int = 0
     ): DecodedAudioData? = withContext(Dispatchers.IO) {
         if (filePathOrUri.isBlank()) {
             Log.w(TAG, "decodeToMonoPcm called with blank filePathOrUri")
@@ -616,6 +617,9 @@ object AudioDecoder {
                     val durationMs = if (wavInfo.durationMs > 0) wavInfo.durationMs else (maxDurationSeconds * 1000L)
                     val maxSamples = (maxDurationSeconds * wavInfo.sampleRate).coerceAtLeast(1024)
                     val reader = com.example.analysis.WavPcmReader(context, filePathOrUri, wavInfo)
+                    if (startOffsetSeconds > 0) {
+                        reader.seekToMs(startOffsetSeconds * 1000L)
+                    }
                     val monoFloats = reader.use { it.readMonoFloats(maxSamples) }
                     if (monoFloats != null && monoFloats.isNotEmpty()) {
                         return@withContext DecodedAudioData(
@@ -631,6 +635,9 @@ object AudioDecoder {
             }
 
             extractor.selectTrack(audioTrackIndex)
+            if (startOffsetSeconds > 0) {
+                extractor.seekTo(startOffsetSeconds * 1_000_000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            }
 
             val rawSampleRate = if (audioFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
                 audioFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)

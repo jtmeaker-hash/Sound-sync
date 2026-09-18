@@ -456,14 +456,25 @@ class PersistentQueueManager(
         if (upcoming.isNotEmpty()) {
             return upcoming.first()
         }
-        // Fallback to repeat all / context tracks
+        // Fallback to repeat all
         if (_repeatMode.value == QueueRepeatMode.ALL) {
             val history = _playbackHistory.value
             if (history.isNotEmpty()) {
                 return if (_isShuffleEnabled.value) history.shuffled().firstOrNull() else history.lastOrNull()
             }
         }
-        return contextTrackProvider?.invoke()?.firstOrNull()
+        // Context fallback (only for track strictly FOLLOWING current, never current itself)
+        val current = _currentTrack.value
+        val contextTracks = contextTrackProvider?.invoke().orEmpty()
+        if (current != null && contextTracks.isNotEmpty()) {
+            val idx = contextTracks.indexOfFirst { it.id == current.id }
+            if (idx >= 0 && idx < contextTracks.lastIndex) {
+                return contextTracks[idx + 1]
+            } else if (idx >= 0 && _repeatMode.value == QueueRepeatMode.ALL) {
+                return contextTracks.firstOrNull()
+            }
+        }
+        return null
     }
 
     /**
@@ -600,21 +611,32 @@ class PersistentQueueManager(
             }
         }
 
-        // 5. Context fallback (e.g. continue playing library/folder)
-        val contextTracks = contextTrackProvider?.invoke()
-        if (!contextTracks.isNullOrEmpty()) {
-            val available = if (_isShuffleEnabled.value) contextTracks.shuffled() else contextTracks
-            val next = available.first()
-            _upcomingQueue.value = available.drop(1)
-            _currentTrack.value = next
-            _playbackPositionMs.value = 0L
-            saveToDiskAsync()
-            Log.d(TAG, "Next track from context provider: '${next.title}'")
-            return next
+        // 5. Context track fallback (advance to the track AFTER current in active context)
+        val contextTracks = contextTrackProvider?.invoke().orEmpty()
+        if (contextTracks.isNotEmpty() && current != null) {
+            val idx = contextTracks.indexOfFirst { it.id == current.id }
+            if (idx >= 0 && idx < contextTracks.lastIndex) {
+                val next = contextTracks[idx + 1]
+                _upcomingQueue.value = if (idx + 2 < contextTracks.size) contextTracks.subList(idx + 2, contextTracks.size) else emptyList()
+                _currentTrack.value = next
+                _playbackPositionMs.value = 0L
+                saveToDiskAsync()
+                Log.d(TAG, "Next track from context sequence [${idx + 1}/${contextTracks.size}]: '${next.title}'")
+                return next
+            } else if (idx >= 0 && _repeatMode.value == QueueRepeatMode.ALL) {
+                val next = contextTracks.first()
+                _upcomingQueue.value = contextTracks.drop(1)
+                _currentTrack.value = next
+                _playbackPositionMs.value = 0L
+                saveToDiskAsync()
+                Log.d(TAG, "Next track from context sequence loop start: '${next.title}'")
+                return next
+            }
         }
 
-        // End of playback
+        // End of playback without repeat: stop cleanly
         _currentTrack.value = null
+        _playbackPositionMs.value = 0L
         saveToDiskAsync()
         return null
     }

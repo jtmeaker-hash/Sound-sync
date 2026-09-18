@@ -177,7 +177,9 @@ enum class AnalysisState {
     ANALYSING,
     PARTIAL,
     COMPLETE,
-    FAILED
+    FAILED,
+    FAILED_RETRYABLE,
+    FAILED_PERMANENT
 }
 
 data class Track(
