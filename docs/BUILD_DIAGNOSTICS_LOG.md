@@ -1788,3 +1788,66 @@ cb55e65 perf: complete Android performance audit, reactive cascade throttle, zer
 ```
 
 ---
+
+## CI Run 35327875359 — FAIL
+
+- **Date:** 2026-09-18T09:12:34.170327+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`6c9bbc6018`](https://github.com/jtmeaker-hash/Sound-sync/commit/6c9bbc601832ec7721b18bc879b115d2da6cabf1)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35327875359)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `StorageDiagnosticsAndScanLifecycleTest > testOneFailedTrackDoesNotKeepEntireScanAliveForever FAILED`
+- `org.junit.ComparisonFailure at StorageDiagnosticsAndScanLifecycleTest.kt:197`
+- `StorageDiagnosticsAndScanLifecycleTest > testRetryableErrorRetriesWithinBoundThenTerminatesCorrectly FAILED`
+- `org.junit.ComparisonFailure at StorageDiagnosticsAndScanLifecycleTest.kt:231`
+- `558 tests completed, 2 failed, 2 skipped`
+- `> Task :app:testDebugUnitTest FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+- `Execution failed for task ':app:testDebugUnitTest'.`
+- `BUILD FAILED in 4m 15s`
+
+### Summary of changes
+
+fix(audio,player): rock-solid BPM/key DSP analysis and continuous playback repair
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+6c9bbc6 fix(audio,player): rock-solid BPM/key DSP analysis and continuous playback repair
+ .../com/example/analysis/TrackAnalysisManager.kt   |  35 +-
+ .../main/java/com/example/audio/AudioDecoder.kt    |   9 +-
+ app/src/main/java/com/example/data/TrackDao.kt     |  11 +-
+ .../com/example/metadata/LocalPcmAudioAnalyzer.kt  | 552 +++++++++++++++++----
+ app/src/main/java/com/example/model/Models.kt      |   4 +-
+ .../com/example/player/PersistentQueueManager.kt   |  50 +-
+ .../main/java/com/example/ui/MainDjViewModel.kt    |  25 +-
+ .../com/example/BpmKeyAnalysisRegressionTest.kt    | 215 ++++++++
+ .../example/ContinuousPlaybackRegressionTest.kt    | 186 +++++++
+ 9 files changed, 954 insertions(+), 133 deletions(-)
+```
+
+---
