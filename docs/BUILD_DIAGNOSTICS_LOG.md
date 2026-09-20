@@ -1955,3 +1955,57 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 35511629152 — FAIL
+
+- **Date:** 2026-09-20T12:51:00.361882+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`529e841332`](https://github.com/jtmeaker-hash/Sound-sync/commit/529e8413326187f6a45982eb3b610d226cb78a4b)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35511629152)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ✅ PASS |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `SoundSyncStep3LyricsIntelligenceTest > testCanonicalArtworkDetectorPlaceholderDistinction FAILED`
+- `java.lang.AssertionError at SoundSyncStep3LyricsIntelligenceTest.kt:474`
+- `559 tests completed, 1 failed, 2 skipped`
+- `> Task :app:testDebugUnitTest FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+- `Execution failed for task ':app:testDebugUnitTest'.`
+- `BUILD FAILED in 2m 57s`
+
+### Summary of changes
+
+fix: restore compatible Haas audio engine API
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+529e841 fix: restore compatible Haas audio engine API
+ .../main/java/com/example/audio/DjAudioEngine.kt   | 184 +++---------------
+ .../java/com/example/audio/HaasSpatializerTest.kt  | 214 ++++++---------------
+ 2 files changed, 81 insertions(+), 317 deletions(-)
+```
+
+---
