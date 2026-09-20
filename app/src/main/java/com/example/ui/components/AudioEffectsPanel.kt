@@ -100,12 +100,28 @@ fun AudioEffectsPanel(
     // Haas state
     haasEnabled: Boolean = false,
     haasAmount: Float = 0.5f,
-    haasDelayMs: Float = 16f,
+    haasDelayMs: Float = 8f,
     haasBassProtect: Boolean = true,
+    haasPreset: HaasSurroundEffect.HaasPreset = HaasSurroundEffect.HaasPreset.WIDE,
+    haasMode: HaasSurroundEffect.ProcessingMode = HaasSurroundEffect.ProcessingMode.SIDE_ONLY,
+    haasStereoWidth: Float = HaasSurroundEffect.DEFAULT_STEREO_WIDTH,
+    haasCrossfeed: Float = HaasSurroundEffect.DEFAULT_CROSSFEED,
+    haasLowCutoffHz: Float = HaasSurroundEffect.DEFAULT_LOW_CUTOFF_HZ,
+    haasHighCutoffHz: Float = HaasSurroundEffect.DEFAULT_HIGH_CUTOFF_HZ,
+    haasBalance: Float = HaasSurroundEffect.DEFAULT_BALANCE,
+    haasOutputCompDb: Float = HaasSurroundEffect.DEFAULT_OUTPUT_COMP_DB,
     onSetHaasEnabled: (Boolean) -> Unit = {},
     onSetHaasAmount: (Float) -> Unit = {},
     onSetHaasDelayMs: (Float) -> Unit = {},
     onSetHaasBassProtect: (Boolean) -> Unit = {},
+    onSetHaasPreset: (HaasSurroundEffect.HaasPreset) -> Unit = {},
+    onSetHaasMode: (HaasSurroundEffect.ProcessingMode) -> Unit = {},
+    onSetHaasStereoWidth: (Float) -> Unit = {},
+    onSetHaasCrossfeed: (Float) -> Unit = {},
+    onSetHaasLowCutoffHz: (Float) -> Unit = {},
+    onSetHaasHighCutoffHz: (Float) -> Unit = {},
+    onSetHaasBalance: (Float) -> Unit = {},
+    onSetHaasOutputCompDb: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Resolve current 6-band gains
@@ -369,12 +385,12 @@ fun AudioEffectsPanel(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             val haasPresets = listOf(
-                                Triple("Subtle", 8f, 0.45f),
-                                Triple("Wide", 16f, 0.70f),
-                                Triple("Very Wide", 25f, 1.0f)
+                                "SUBTLE" to HaasSurroundEffect.HaasPreset.SUBTLE,
+                                "WIDE" to HaasSurroundEffect.HaasPreset.WIDE,
+                                "ULTRA WIDE" to HaasSurroundEffect.HaasPreset.ULTRA_WIDE
                             )
-                            haasPresets.forEach { (name, delay, amount) ->
-                                val isSelected = abs(haasDelayMs - delay) < 1.0f && abs(haasAmount - amount) < 0.15f
+                            haasPresets.forEach { (label, p) ->
+                                val isSelected = haasPreset == p
                                 Surface(
                                     color = if (isSelected) DeckBPink.copy(alpha = 0.25f) else DjSurfaceCard,
                                     shape = RoundedCornerShape(6.dp),
@@ -383,12 +399,11 @@ fun AudioEffectsPanel(
                                         if (isSelected) DeckBPink else DjSurfaceBorder
                                     ),
                                     modifier = Modifier.clickable {
-                                        onSetHaasDelayMs(delay)
-                                        onSetHaasAmount(amount)
+                                        onSetHaasPreset(p)
                                     }
                                 ) {
                                     Text(
-                                        text = "$name (${delay.toInt()}ms)",
+                                        text = label,
                                         color = if (isSelected) DeckBPink else TextSecondary,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.SemiBold,
@@ -506,6 +521,114 @@ fun AudioEffectsPanel(
                             }
                         }
 
+                        // Stereo Width Slider (0.0 to 2.0)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Column(modifier = Modifier.width(60.dp)) {
+                                Text(
+                                    text = "SPREAD",
+                                    color = DeckBPink,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = "Width",
+                                    color = TextMuted,
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+
+                            Slider(
+                                value = haasStereoWidth,
+                                onValueChange = onSetHaasStereoWidth,
+                                valueRange = HaasSurroundEffect.MIN_STEREO_WIDTH..HaasSurroundEffect.MAX_STEREO_WIDTH,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(24.dp),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = DeckBPink,
+                                    activeTrackColor = DeckBPink,
+                                    inactiveTrackColor = DjSurfaceCard
+                                )
+                            )
+
+                            Surface(
+                                color = DeckBPink.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(0.5.dp, DeckBPink.copy(alpha = 0.4f)),
+                                modifier = Modifier.width(58.dp)
+                            ) {
+                                Text(
+                                    text = String.format(Locale.US, "%.2fx", haasStereoWidth),
+                                    color = DeckBPink,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = FontFamily.Monospace,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        // Crossfeed Slider (0% to 100%)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Column(modifier = Modifier.width(60.dp)) {
+                                Text(
+                                    text = "CROSSFEED",
+                                    color = DeckBPink,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = "Headphone",
+                                    color = TextMuted,
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+
+                            Slider(
+                                value = haasCrossfeed,
+                                onValueChange = onSetHaasCrossfeed,
+                                valueRange = HaasSurroundEffect.MIN_CROSSFEED..HaasSurroundEffect.MAX_CROSSFEED,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(24.dp),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = DeckBPink,
+                                    activeTrackColor = DeckBPink,
+                                    inactiveTrackColor = DjSurfaceCard
+                                )
+                            )
+
+                            Surface(
+                                color = DeckBPink.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(0.5.dp, DeckBPink.copy(alpha = 0.4f)),
+                                modifier = Modifier.width(58.dp)
+                            ) {
+                                Text(
+                                    text = "${(haasCrossfeed * 100).toInt()}%",
+                                    color = DeckBPink,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = FontFamily.Monospace,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                )
+                            }
+                        }
+
                         // Mono Bass Protect toggle
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -514,7 +637,7 @@ fun AudioEffectsPanel(
                         ) {
                             Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                 Text(
-                                    text = "MONO BASS PROTECT (< 140 Hz)",
+                                    text = "MONO BASS PROTECT (< ${(haasLowCutoffHz).toInt()} Hz)",
                                     color = TextPrimary,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
@@ -534,6 +657,44 @@ fun AudioEffectsPanel(
                                     checkedTrackColor = DeckBPink
                                 )
                             )
+                        }
+
+                        // Processing Mode Selector
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "MODE",
+                                color = TextSecondary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                val modes = listOf(
+                                    "SIDE ONLY" to HaasSurroundEffect.ProcessingMode.SIDE_ONLY,
+                                    "FULL STEREO" to HaasSurroundEffect.ProcessingMode.FULL_STEREO
+                                )
+                                modes.forEach { (label, m) ->
+                                    val isSelected = haasMode == m
+                                    Surface(
+                                        color = if (isSelected) DeckBPink.copy(alpha = 0.25f) else DjSurfaceCard,
+                                        shape = RoundedCornerShape(4.dp),
+                                        border = BorderStroke(0.5.dp, if (isSelected) DeckBPink else DjSurfaceBorder),
+                                        modifier = Modifier.clickable { onSetHaasMode(m) }
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            color = if (isSelected) DeckBPink else TextSecondary,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }

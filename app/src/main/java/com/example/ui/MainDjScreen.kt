@@ -215,6 +215,14 @@ fun MainDjScreen(
     val haasAmount by viewModel.audioEngine.haasAmount.collectAsState()
     val haasDelayMs by viewModel.audioEngine.haasDelayMs.collectAsState()
     val haasBassProtect by viewModel.audioEngine.haasBassProtect.collectAsState()
+    val haasPreset by viewModel.audioEngine.haasPreset.collectAsState()
+    val haasMode by viewModel.audioEngine.haasMode.collectAsState()
+    val haasStereoWidth by viewModel.audioEngine.haasStereoWidth.collectAsState()
+    val haasCrossfeed by viewModel.audioEngine.haasCrossfeed.collectAsState()
+    val haasLowCutoffHz by viewModel.audioEngine.haasLowCutoffHz.collectAsState()
+    val haasHighCutoffHz by viewModel.audioEngine.haasHighCutoffHz.collectAsState()
+    val haasBalance by viewModel.audioEngine.haasBalance.collectAsState()
+    val haasOutputCompDb by viewModel.audioEngine.haasOutputCompDb.collectAsState()
     val eq6Bands by viewModel.audioEngine.eq6Bands.collectAsState()
 
     // SoundSync In-App Update States
@@ -827,10 +835,26 @@ fun MainDjScreen(
                     haasAmount = haasAmount,
                     haasDelayMs = haasDelayMs,
                     haasBassProtect = haasBassProtect,
+                    haasPreset = haasPreset,
+                    haasMode = haasMode,
+                    haasStereoWidth = haasStereoWidth,
+                    haasCrossfeed = haasCrossfeed,
+                    haasLowCutoffHz = haasLowCutoffHz,
+                    haasHighCutoffHz = haasHighCutoffHz,
+                    haasBalance = haasBalance,
+                    haasOutputCompDb = haasOutputCompDb,
                     onSetHaasEnabled = { viewModel.audioEngine.setHaasEnabled(it) },
                     onSetHaasAmount = { viewModel.audioEngine.setHaasAmount(it) },
                     onSetHaasDelayMs = { viewModel.audioEngine.setHaasDelayMs(it) },
                     onSetHaasBassProtect = { viewModel.audioEngine.setHaasBassProtect(it) },
+                    onSetHaasPreset = { viewModel.audioEngine.setHaasPreset(it) },
+                    onSetHaasMode = { viewModel.audioEngine.setHaasMode(it) },
+                    onSetHaasStereoWidth = { viewModel.audioEngine.setHaasStereoWidth(it) },
+                    onSetHaasCrossfeed = { viewModel.audioEngine.setHaasCrossfeed(it) },
+                    onSetHaasLowCutoffHz = { viewModel.audioEngine.setHaasLowCutoffHz(it) },
+                    onSetHaasHighCutoffHz = { viewModel.audioEngine.setHaasHighCutoffHz(it) },
+                    onSetHaasBalance = { viewModel.audioEngine.setHaasBalance(it) },
+                    onSetHaasOutputCompDb = { viewModel.audioEngine.setHaasOutputCompDb(it) },
                     onDismiss = { showNowPlayingSettings = false }
                 )
             }
@@ -1435,10 +1459,26 @@ private fun SideDestinationScreen(
                             haasAmount = haasAmount,
                             haasDelayMs = haasDelayMs,
                             haasBassProtect = haasBassProtect,
+                            haasPreset = haasPreset,
+                            haasMode = haasMode,
+                            haasStereoWidth = haasStereoWidth,
+                            haasCrossfeed = haasCrossfeed,
+                            haasLowCutoffHz = haasLowCutoffHz,
+                            haasHighCutoffHz = haasHighCutoffHz,
+                            haasBalance = haasBalance,
+                            haasOutputCompDb = haasOutputCompDb,
                             onSetHaasEnabled = { viewModel.audioEngine.setHaasEnabled(it) },
                             onSetHaasAmount = { viewModel.audioEngine.setHaasAmount(it) },
                             onSetHaasDelayMs = { viewModel.audioEngine.setHaasDelayMs(it) },
-                            onSetHaasBassProtect = { viewModel.audioEngine.setHaasBassProtect(it) }
+                            onSetHaasBassProtect = { viewModel.audioEngine.setHaasBassProtect(it) },
+                            onSetHaasPreset = { viewModel.audioEngine.setHaasPreset(it) },
+                            onSetHaasMode = { viewModel.audioEngine.setHaasMode(it) },
+                            onSetHaasStereoWidth = { viewModel.audioEngine.setHaasStereoWidth(it) },
+                            onSetHaasCrossfeed = { viewModel.audioEngine.setHaasCrossfeed(it) },
+                            onSetHaasLowCutoffHz = { viewModel.audioEngine.setHaasLowCutoffHz(it) },
+                            onSetHaasHighCutoffHz = { viewModel.audioEngine.setHaasHighCutoffHz(it) },
+                            onSetHaasBalance = { viewModel.audioEngine.setHaasBalance(it) },
+                            onSetHaasOutputCompDb = { viewModel.audioEngine.setHaasOutputCompDb(it) }
                         )
                     }
                 }
