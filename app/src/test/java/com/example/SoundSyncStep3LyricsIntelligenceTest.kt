@@ -457,7 +457,7 @@ class SoundSyncStep3LyricsIntelligenceTest {
         )
         val placeholderTrack = createTestTrack(
             id = "placeholder_art",
-            artworkUrl = "https://example.com/art.jpg"
+            artworkUrl = "https://example.com/placeholder.jpg"
         )
         val nullArtTrack = createTestTrack(
             id = "null_art",
