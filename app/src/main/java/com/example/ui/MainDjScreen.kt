@@ -88,6 +88,7 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.rememberCoroutineScope
+import com.example.audio.HaasSurroundEffect
 import com.example.ui.components.AudioEffectsPanel
 import com.example.ui.djtools.ClippingDetectorTool
 import com.example.ui.djtools.DynamicRangeMeterTool
@@ -478,6 +479,14 @@ fun MainDjScreen(
                         haasAmount = haasAmount,
                         haasDelayMs = haasDelayMs,
                         haasBassProtect = haasBassProtect,
+                        haasPreset = haasPreset,
+                        haasMode = haasMode,
+                        haasStereoWidth = haasStereoWidth,
+                        haasCrossfeed = haasCrossfeed,
+                        haasLowCutoffHz = haasLowCutoffHz,
+                        haasHighCutoffHz = haasHighCutoffHz,
+                        haasBalance = haasBalance,
+                        haasOutputCompDb = haasOutputCompDb,
                         waveformStyle = waveformStyle,
                         onPickSafFolder = onPickSafFolder,
                         onPickAudioFiles = onPickAudioFiles,
@@ -1334,6 +1343,14 @@ private fun SideDestinationScreen(
     haasAmount: Float,
     haasDelayMs: Float,
     haasBassProtect: Boolean = true,
+    haasPreset: HaasSurroundEffect.HaasPreset = HaasSurroundEffect.HaasPreset.WIDE,
+    haasMode: HaasSurroundEffect.ProcessingMode = HaasSurroundEffect.ProcessingMode.SIDE_ONLY,
+    haasStereoWidth: Float = HaasSurroundEffect.DEFAULT_STEREO_WIDTH,
+    haasCrossfeed: Float = HaasSurroundEffect.DEFAULT_CROSSFEED,
+    haasLowCutoffHz: Float = HaasSurroundEffect.DEFAULT_LOW_CUTOFF_HZ,
+    haasHighCutoffHz: Float = HaasSurroundEffect.DEFAULT_HIGH_CUTOFF_HZ,
+    haasBalance: Float = HaasSurroundEffect.DEFAULT_BALANCE,
+    haasOutputCompDb: Float = HaasSurroundEffect.DEFAULT_OUTPUT_COMP_DB,
     waveformStyle: com.example.model.WaveformStyle = com.example.model.WaveformStyle.DETAILED,
     onPickSafFolder: () -> Unit,
     onPickAudioFiles: () -> Unit,
