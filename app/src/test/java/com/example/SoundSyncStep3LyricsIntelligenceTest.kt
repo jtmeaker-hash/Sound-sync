@@ -10,6 +10,8 @@ import com.example.lyrics.LyricsManager
 import com.example.lyrics.LyricsParser
 import com.example.lyrics.LyricsSource
 import com.example.lyrics.LyricsTimestampEditor
+import com.example.metadata.artwork.ArtworkStatus
+import com.example.metadata.artwork.CanonicalArtworkDetector
 import com.example.model.AudioQualityRating
 import com.example.model.Track
 import com.example.player.PersistentQueueManager
@@ -70,6 +72,7 @@ class SoundSyncStep3LyricsIntelligenceTest {
 
     @Before
     fun setup() {
+        CanonicalArtworkDetector.clearCache()
         context = ApplicationProvider.getApplicationContext()
         fakeLyricsDao = createFakeLyricsDao()
     }
@@ -91,7 +94,7 @@ class SoundSyncStep3LyricsIntelligenceTest {
         rating: Int = 3,
         dateAdded: Long = System.currentTimeMillis(),
         releaseYear: Int? = 2021,
-        artworkUrl: String? = "https://example.com/art.jpg",
+        artworkUrl: String? = "https://artwork.soundsync.test/cover.jpg",
         energyRating: Int = 7
     ): Track {
         return Track(
@@ -419,7 +422,7 @@ class SoundSyncStep3LyricsIntelligenceTest {
         val completeTrack = createTestTrack(
             id = "complete",
             artist = "Swedish House Mafia",
-            artworkUrl = "https://example.com/art.jpg",
+            artworkUrl = "https://artwork.soundsync.test/cover.jpg",
             bpm = 126.0,
             camelotKey = "8A",
             format = "FLAC",
@@ -447,6 +450,43 @@ class SoundSyncStep3LyricsIntelligenceTest {
     }
 
     @Test
+    fun testCanonicalArtworkDetectorPlaceholderDistinction() {
+        val validArtTrack = createTestTrack(
+            id = "valid_art",
+            artworkUrl = "https://artwork.soundsync.test/cover.jpg"
+        )
+        val placeholderTrack = createTestTrack(
+            id = "placeholder_art",
+            artworkUrl = "https://example.com/art.jpg"
+        )
+        val nullArtTrack = createTestTrack(
+            id = "null_art",
+            artworkUrl = null
+        )
+
+        assertEquals(
+            ArtworkStatus.HAS_ARTWORK,
+            CanonicalArtworkDetector.detectArtworkStatus(context, validArtTrack)
+        )
+        assertTrue(CanonicalArtworkDetector.hasArtwork(context, validArtTrack))
+        assertFalse(CanonicalArtworkDetector.isMissingArtwork(context, validArtTrack))
+
+        assertEquals(
+            ArtworkStatus.NO_ARTWORK,
+            CanonicalArtworkDetector.detectArtworkStatus(context, placeholderTrack)
+        )
+        assertFalse(CanonicalArtworkDetector.hasArtwork(context, placeholderTrack))
+        assertTrue(CanonicalArtworkDetector.isMissingArtwork(context, placeholderTrack))
+
+        assertEquals(
+            ArtworkStatus.NO_ARTWORK,
+            CanonicalArtworkDetector.detectArtworkStatus(context, nullArtTrack)
+        )
+        assertFalse(CanonicalArtworkDetector.hasArtwork(context, nullArtTrack))
+        assertTrue(CanonicalArtworkDetector.isMissingArtwork(context, nullArtTrack))
+    }
+
+    @Test
     fun testGetSmartCrateSuggestions() {
         val suggestions = SoundSyncIntelligenceEngine.getSmartCrateSuggestions(emptyList())
 
@@ -461,7 +501,7 @@ class SoundSyncStep3LyricsIntelligenceTest {
             id = "intel_1",
             title = "Acoustic Sunset",
             artist = "Deep Waves",
-            artworkUrl = "https://example.com/art.jpg",
+            artworkUrl = "https://artwork.soundsync.test/cover.jpg",
             bpm = 124.0,
             camelotKey = "8A",
             format = "FLAC",
