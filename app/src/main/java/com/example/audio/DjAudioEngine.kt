@@ -433,33 +433,6 @@ class DjAudioEngine(val context: Context) {
     private val _haasBassProtect = MutableStateFlow(true)
     val haasBassProtect = _haasBassProtect.asStateFlow()
 
-    private val _haasPreset = MutableStateFlow(HaasSurroundEffect.HaasPreset.WIDE)
-    val haasPreset = _haasPreset.asStateFlow()
-
-    private val _haasMode = MutableStateFlow(HaasSurroundEffect.ProcessingMode.SIDE_ONLY)
-    val haasMode = _haasMode.asStateFlow()
-
-    private val _haasStereoWidth = MutableStateFlow(HaasSurroundEffect.DEFAULT_STEREO_WIDTH)
-    val haasStereoWidth = _haasStereoWidth.asStateFlow()
-
-    private val _haasEffectMix = MutableStateFlow(HaasSurroundEffect.DEFAULT_EFFECT_MIX)
-    val haasEffectMix = _haasEffectMix.asStateFlow()
-
-    private val _haasCrossfeed = MutableStateFlow(HaasSurroundEffect.DEFAULT_CROSSFEED)
-    val haasCrossfeed = _haasCrossfeed.asStateFlow()
-
-    private val _haasLowCutoffHz = MutableStateFlow(HaasSurroundEffect.DEFAULT_LOW_CUTOFF_HZ)
-    val haasLowCutoffHz = _haasLowCutoffHz.asStateFlow()
-
-    private val _haasHighCutoffHz = MutableStateFlow(HaasSurroundEffect.DEFAULT_HIGH_CUTOFF_HZ)
-    val haasHighCutoffHz = _haasHighCutoffHz.asStateFlow()
-
-    private val _haasBalance = MutableStateFlow(HaasSurroundEffect.DEFAULT_BALANCE)
-    val haasBalance = _haasBalance.asStateFlow()
-
-    private val _haasOutputCompDb = MutableStateFlow(HaasSurroundEffect.DEFAULT_OUTPUT_COMP_DB)
-    val haasOutputCompDb = _haasOutputCompDb.asStateFlow()
-
     private val _crossfadeSeconds = MutableStateFlow(0)
     val crossfadeSeconds = _crossfadeSeconds.asStateFlow()
 
@@ -467,31 +440,13 @@ class DjAudioEngine(val context: Context) {
         // Restore persisted Haas settings
         val savedHaas = HaasSurroundEffect.loadSettings(context)
         _haasEnabled.value = savedHaas.isEnabled
-        _haasAmount.value = savedHaas.effectMix
+        _haasAmount.value = savedHaas.amount
         _haasDelayMs.value = savedHaas.delayMs
         _haasBassProtect.value = savedHaas.bassProtect
-        _haasPreset.value = savedHaas.preset
-        _haasMode.value = savedHaas.mode
-        _haasStereoWidth.value = savedHaas.stereoWidth
-        _haasEffectMix.value = savedHaas.effectMix
-        _haasCrossfeed.value = savedHaas.crossfeed
-        _haasLowCutoffHz.value = savedHaas.lowCutoffHz
-        _haasHighCutoffHz.value = savedHaas.highCutoffHz
-        _haasBalance.value = savedHaas.balance
-        _haasOutputCompDb.value = savedHaas.outputCompDb
-
         haasEffect.setEnabled(savedHaas.isEnabled)
-        haasEffect.setDelayMs(savedHaas.delayMs, fromPreset = true)
-        haasEffect.setStereoWidth(savedHaas.stereoWidth, fromPreset = true)
-        haasEffect.setEffectMix(savedHaas.effectMix, fromPreset = true)
-        haasEffect.setCrossfeed(savedHaas.crossfeed, fromPreset = true)
-        haasEffect.setLowCutoffHz(savedHaas.lowCutoffHz, fromPreset = true)
-        haasEffect.setHighCutoffHz(savedHaas.highCutoffHz, fromPreset = true)
-        haasEffect.setSpatialBalance(savedHaas.balance, fromPreset = true)
-        haasEffect.setOutputCompDb(savedHaas.outputCompDb, fromPreset = true)
-        haasEffect.setBassProtect(savedHaas.bassProtect, fromPreset = true)
-        haasEffect.setMode(savedHaas.mode, fromPreset = true)
-        haasEffect.setPreset(savedHaas.preset)
+        haasEffect.setAmount(savedHaas.amount)
+        haasEffect.setDelayMs(savedHaas.delayMs)
+        haasEffect.setBassProtect(savedHaas.bassProtect)
     }
 
     fun setCrossfadeSeconds(seconds: Int) {
@@ -860,132 +815,45 @@ class DjAudioEngine(val context: Context) {
         _filterKnob.value = value.coerceIn(0f, 1f)
     }
 
-    private fun syncAndSaveHaasSettings() {
-        HaasSurroundEffect.saveSettings(
-            context,
-            HaasSurroundEffect.HaasSettings(
-                isEnabled = _haasEnabled.value,
-                amount = _haasEffectMix.value,
-                delayMs = _haasDelayMs.value,
-                bassProtect = _haasBassProtect.value,
-                preset = _haasPreset.value,
-                mode = _haasMode.value,
-                stereoWidth = _haasStereoWidth.value,
-                effectMix = _haasEffectMix.value,
-                crossfeed = _haasCrossfeed.value,
-                lowCutoffHz = _haasLowCutoffHz.value,
-                highCutoffHz = _haasHighCutoffHz.value,
-                balance = _haasBalance.value,
-                outputCompDb = _haasOutputCompDb.value
-            )
-        )
-    }
-
     fun setHaasEnabled(enabled: Boolean) {
         _haasEnabled.value = enabled
         haasEffect.setEnabled(enabled)
-        syncAndSaveHaasSettings()
-    }
-
-    fun setHaasPreset(preset: HaasSurroundEffect.HaasPreset) {
-        _haasPreset.value = preset
-        haasEffect.applyPreset(preset)
-        _haasEnabled.value = haasEffect.isEnabled
-        _haasDelayMs.value = haasEffect.delayMs
-        _haasStereoWidth.value = haasEffect.stereoWidth
-        _haasEffectMix.value = haasEffect.effectMix
-        _haasAmount.value = haasEffect.effectMix
-        _haasCrossfeed.value = haasEffect.crossfeed
-        _haasLowCutoffHz.value = haasEffect.lowCutoffHz
-        _haasHighCutoffHz.value = haasEffect.highCutoffHz
-        _haasMode.value = haasEffect.mode
-        _haasOutputCompDb.value = haasEffect.outputCompDb
-        _haasBalance.value = haasEffect.balance
-        _haasBassProtect.value = haasEffect.bassProtect
-        syncAndSaveHaasSettings()
-    }
-
-    fun setHaasMode(mode: HaasSurroundEffect.ProcessingMode) {
-        _haasMode.value = mode
-        haasEffect.setMode(mode)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
+        HaasSurroundEffect.saveSettings(
+            context,
+            HaasSurroundEffect.HaasSettings(enabled, _haasAmount.value, _haasDelayMs.value, _haasBassProtect.value)
+        )
     }
 
     fun setHaasAmount(amount: Float) {
-        setHaasEffectMix(amount)
+        val clamped = amount.coerceIn(HaasSurroundEffect.MIN_AMOUNT, HaasSurroundEffect.MAX_AMOUNT)
+        _haasAmount.value = clamped
+        haasEffect.setAmount(clamped)
+        HaasSurroundEffect.saveSettings(
+            context,
+            HaasSurroundEffect.HaasSettings(_haasEnabled.value, clamped, _haasDelayMs.value, _haasBassProtect.value)
+        )
+        if (!_haasEnabled.value) {
+            haasEffect.setEnabled(false)
+        }
     }
 
     fun setHaasDelayMs(delayMs: Float) {
         val clamped = delayMs.coerceIn(HaasSurroundEffect.MIN_DELAY_MS, HaasSurroundEffect.MAX_DELAY_MS)
         _haasDelayMs.value = clamped
         haasEffect.setDelayMs(clamped)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
-    }
-
-    fun setHaasStereoWidth(width: Float) {
-        val clamped = width.coerceIn(HaasSurroundEffect.MIN_STEREO_WIDTH, HaasSurroundEffect.MAX_STEREO_WIDTH)
-        _haasStereoWidth.value = clamped
-        haasEffect.setStereoWidth(clamped)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
-    }
-
-    fun setHaasEffectMix(mix: Float) {
-        val clamped = mix.coerceIn(HaasSurroundEffect.MIN_EFFECT_MIX, HaasSurroundEffect.MAX_EFFECT_MIX)
-        _haasEffectMix.value = clamped
-        _haasAmount.value = clamped
-        haasEffect.setEffectMix(clamped)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
-    }
-
-    fun setHaasCrossfeed(crossfeed: Float) {
-        val clamped = crossfeed.coerceIn(HaasSurroundEffect.MIN_CROSSFEED, HaasSurroundEffect.MAX_CROSSFEED)
-        _haasCrossfeed.value = clamped
-        haasEffect.setCrossfeed(clamped)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
-    }
-
-    fun setHaasLowCutoffHz(hz: Float) {
-        val clamped = hz.coerceIn(HaasSurroundEffect.MIN_LOW_CUTOFF_HZ, HaasSurroundEffect.MAX_LOW_CUTOFF_HZ)
-        _haasLowCutoffHz.value = clamped
-        haasEffect.setLowCutoffHz(clamped)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
-    }
-
-    fun setHaasHighCutoffHz(hz: Float) {
-        val clamped = hz.coerceIn(HaasSurroundEffect.MIN_HIGH_CUTOFF_HZ, HaasSurroundEffect.MAX_HIGH_CUTOFF_HZ)
-        _haasHighCutoffHz.value = clamped
-        haasEffect.setHighCutoffHz(clamped)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
-    }
-
-    fun setHaasBalance(bal: Float) {
-        val clamped = bal.coerceIn(HaasSurroundEffect.MIN_BALANCE, HaasSurroundEffect.MAX_BALANCE)
-        _haasBalance.value = clamped
-        haasEffect.setSpatialBalance(clamped)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
-    }
-
-    fun setHaasOutputCompDb(db: Float) {
-        val clamped = db.coerceIn(HaasSurroundEffect.MIN_OUTPUT_COMP_DB, HaasSurroundEffect.MAX_OUTPUT_COMP_DB)
-        _haasOutputCompDb.value = clamped
-        haasEffect.setOutputCompDb(clamped)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
+        HaasSurroundEffect.saveSettings(
+            context,
+            HaasSurroundEffect.HaasSettings(_haasEnabled.value, _haasAmount.value, clamped, _haasBassProtect.value)
+        )
     }
 
     fun setHaasBassProtect(protect: Boolean) {
         _haasBassProtect.value = protect
         haasEffect.setBassProtect(protect)
-        _haasPreset.value = haasEffect.preset
-        syncAndSaveHaasSettings()
+        HaasSurroundEffect.saveSettings(
+            context,
+            HaasSurroundEffect.HaasSettings(_haasEnabled.value, _haasAmount.value, _haasDelayMs.value, protect)
+        )
     }
 
     fun toggleLoop(bars: Int) {
