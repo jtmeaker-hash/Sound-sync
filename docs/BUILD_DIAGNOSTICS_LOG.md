@@ -2009,3 +2009,67 @@ No explicit Fixes: section in commit message.
 ```
 
 ---
+
+## CI Run 35517566067 — FAIL
+
+- **Date:** 2026-09-20T14:49:45.703014+00:00
+- **Repository:** `jtmeaker-hash/Sound-sync`
+- **Branch/ref:** `main`
+- **Commit:** [`a6e7f7cc08`](https://github.com/jtmeaker-hash/Sound-sync/commit/a6e7f7cc08078951fd8dbc317180ad8952d14a25)
+- **Author:** jtmeaker-hash <jtmeaker@gmail.com>
+- **Actor:** `jtmeaker-hash`
+- **Event:** `push`
+- **Full log / report:** [Open GitHub Actions run](https://github.com/jtmeaker-hash/Sound-sync/actions/runs/35517566067)
+
+### Test & build results
+
+| Check | Result |
+|---|---|
+| Unit tests | ❌ FAIL |
+| Debug APK | ❌ FAIL |
+| Release APK | ⏭️ SKIPPED (non-release push) |
+
+### Issues
+
+No explicit Issues: section in commit message.
+
+### CI failures
+
+**Unit tests failed (exit 1)**
+- `> Task :app:compileDebugKotlin FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+- `Execution failed for task ':app:compileDebugKotlin'.`
+- `> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction`
+- `BUILD FAILED in 1m 8s`
+
+**Debug APK failed (exit 1)**
+- `> Task :app:compileDebugKotlin FAILED`
+- `FAILURE: Build failed with an exception.`
+- `* What went wrong:`
+- `Execution failed for task ':app:compileDebugKotlin'.`
+- `> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction`
+- `BUILD FAILED in 45s`
+
+### Summary of changes
+
+fix(audio): complete advanced Haas surround upgrade
+
+### Summary of fixes
+
+No explicit Fixes: section in commit message.
+
+### Commit/diff summary
+
+```text
+a6e7f7c fix(audio): complete advanced Haas surround upgrade
+ .../main/java/com/example/audio/DjAudioEngine.kt   | 184 +++++++--
+ .../java/com/example/audio/HaasSurroundEffect.kt   | 421 ++++++++++++++++++---
+ app/src/main/java/com/example/ui/MainDjScreen.kt   |  42 +-
+ .../com/example/ui/components/AudioEffectsPanel.kt | 181 ++++++++-
+ .../ui/components/NowPlayingSettingsSheet.kt       |  32 ++
+ .../java/com/example/audio/HaasSpatializerTest.kt  | 213 ++++++++---
+ 6 files changed, 919 insertions(+), 154 deletions(-)
+```
+
+---
