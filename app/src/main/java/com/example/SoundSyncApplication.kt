@@ -18,9 +18,11 @@ class SoundSyncApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.example.diagnostics.PerformanceDiagnostics.startTiming("AppInitialization")
         instance = this
         setupGlobalCrashHandler()
         Log.i(TAG, "SoundSyncApplication initialized. SDK: ${Build.VERSION.SDK_INT}, PID: ${Process.myPid()}")
+        com.example.diagnostics.PerformanceDiagnostics.endTiming("AppInitialization")
     }
 
     private fun setupGlobalCrashHandler() {

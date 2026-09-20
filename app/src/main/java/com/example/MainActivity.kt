@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
     private var activeViewModel: MainDjViewModel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        com.example.diagnostics.PerformanceDiagnostics.startTiming("MainActivity_onCreate")
         DjLogger.startTiming("APP_START", "SoundSync cold launch")
         super.onCreate(savedInstanceState)
         logHistoricalProcessExitReasons()
