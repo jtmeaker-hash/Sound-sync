@@ -107,6 +107,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private val db = AppDatabase.getDatabase(application)
     private val trackDao = db.trackDao()
+    private val trackEntityCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, com.example.model.Track>>()
     private val sourceFolderDao = db.sourceFolderDao()
     private val watchedFolderDao = db.watchedFolderDao()
     val playlistDao = db.playlistDao()
@@ -866,7 +867,15 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
         _storageRootAvailability
     ) { entities, rootAvailability ->
         val tracks = entities.map { entity ->
-            val track = entity.toTrack()
+            val hash = entity.hashCode()
+            val cached = trackEntityCache[entity.id]
+            val track = if (cached != null && cached.first == hash) {
+                cached.second
+            } else {
+                val newTrack = entity.toTrack()
+                trackEntityCache[entity.id] = Pair(hash, newTrack)
+                newTrack
+            }
             val isAvail = com.example.storage.StorageAvailabilityHelper.isTrackRootAvailable(track.filePath, rootAvailability)
             if (track.isAvailable == isAvail) track else track.copy(isAvailable = isAvail)
         }

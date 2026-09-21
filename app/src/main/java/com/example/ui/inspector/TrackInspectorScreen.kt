@@ -88,8 +88,15 @@ fun TrackInspectorScreen(
     var playlistsContainingTrack by remember { mutableStateOf<List<PlaylistEntity>>(emptyList()) }
 
     // Waveform & Spectrogram
-    var waveformData by remember { mutableStateOf<WaveformData?>(WaveformCache.get(WaveformCache.getCacheKey(initialTrack, context), context)) }
+    var waveformData by remember { mutableStateOf<WaveformData?>(null) }
     var isWaveformLoading by remember { mutableStateOf(false) }
+    LaunchedEffect(initialTrack.id) {
+        isWaveformLoading = true
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            waveformData = WaveformCache.get(WaveformCache.getCacheKey(initialTrack, context), context)
+        }
+        isWaveformLoading = false
+    }
     var spectrogramData by remember { mutableStateOf<SpectrogramAnalysis?>(null) }
     var isSpectrogramLoading by remember { mutableStateOf(false) }
 
