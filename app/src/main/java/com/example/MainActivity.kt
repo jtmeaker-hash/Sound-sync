@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.MotionEvent
 import android.os.StrictMode
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -39,6 +40,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private var activeViewModel: MainDjViewModel? = null
+    
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        com.example.scheduling.AdaptiveWorkScheduler.reportUserInteraction()
+        return super.dispatchTouchEvent(ev)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         com.example.diagnostics.PerformanceDiagnostics.startTiming("MainActivity_onCreate")

@@ -216,6 +216,7 @@ object LocalFileSystemScanner {
                 } else if (entry.isFile && AUDIO_EXTENSIONS.contains(entry.extension.lowercase(Locale.ROOT))) {
                     count++
                     onProgress(count, entry.name)
+                    com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
                     val track = extractTrackFromFile(context, entry, sourceId)
                     if (track != null) {
                         batch.add(track)

@@ -179,10 +179,12 @@ class AudioScanService : Service() {
 
                 suspend fun traverseDocumentFile(folder: DocumentFile, currentPath: String) {
                     if (isCancelled.get()) return
+                    com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
 
                     // Check pause state
                     while (isPaused.get()) {
                         if (isCancelled.get()) return
+                    com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
                         delay(300)
                     }
 
@@ -201,6 +203,7 @@ class AudioScanService : Service() {
 
                     for (file in files) {
                         if (isCancelled.get()) return
+                    com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
                         if (file.isDirectory) {
                             subDirectories.add(file)
                         } else if (file.isFile) {
@@ -218,9 +221,11 @@ class AudioScanService : Service() {
                     // Process audio files in this folder
                     for (audioFile in audioDocFiles) {
                         if (isCancelled.get()) return
+                    com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
 
                         while (isPaused.get()) {
                             if (isCancelled.get()) return
+                    com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
                             delay(300)
                         }
 
@@ -317,6 +322,7 @@ class AudioScanService : Service() {
                     // Recursively scan subfolders
                     for (subFolder in subDirectories) {
                         if (isCancelled.get()) return
+                    com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
                         val subName = subFolder.name ?: "Folder"
                         val subPath = if (currentPath.endsWith("/")) "$currentPath$subName" else "$currentPath/$subName"
                         traverseDocumentFile(subFolder, subPath)

@@ -631,6 +631,9 @@ class TrackAnalysisManager private constructor(
      * Detailed track processing returning explicit execution outcome.
      */
     suspend fun processSingleTrackWithOutcome(track: Track): ProcessOutcome = withContext(Dispatchers.IO) {
+        // Stage 3: Adaptive Work Scheduler - yield if user is interacting with the UI
+        com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
+        
         val file = if (!track.filePath.startsWith("content://")) File(track.filePath) else null
         val fileModTime = file?.lastModified() ?: track.dateAdded
 
