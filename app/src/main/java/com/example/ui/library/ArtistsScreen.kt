@@ -1,4 +1,5 @@
 package com.example.ui.library
+import androidx.compose.runtime.LaunchedEffect
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -55,12 +56,15 @@ fun ArtistsScreen(
 ) {
     var searchQuery by remember { mutableStateOf("") }
 
-    val filteredArtists = remember(artists, searchQuery) {
-        val q = searchQuery.trim().lowercase()
-        if (q.isBlank()) {
-            artists
-        } else {
-            artists.filter { it.name.lowercase().contains(q) }
+    var filteredArtists by remember { mutableStateOf(emptyList<Artist>()) }
+    LaunchedEffect(artists, searchQuery) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val q = searchQuery.trim().lowercase()
+            filteredArtists = if (q.isBlank()) {
+                artists
+            } else {
+                artists.filter { it.name.lowercase().contains(q) }
+            }
         }
     }
 

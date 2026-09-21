@@ -205,40 +205,43 @@ fun SongsScreen(
         (tracks.size - noCoverArtCount).coerceAtLeast(0)
     }
 
-    val filteredTracks = remember(tracks, searchQuery, sortMode, hideUnavailableTracks, activeCoverArtFilter, artworkVersion) {
-        val q = searchQuery.trim().lowercase()
-        val base = tracks.filter { track ->
-            val matchesAvailability = !hideUnavailableTracks || track.isAvailable
-            val matchesCoverArt = when (activeCoverArtFilter) {
-                CoverArtFilter.ALL -> true
-                CoverArtFilter.NO_COVER_ART, CoverArtFilter.NO_COVER -> {
-                    val missing = com.example.metadata.artwork.CanonicalArtworkDetector.isMissingArtwork(context, track)
-                    if (searchQuery.isBlank()) {
-                        try {
-                            Log.d(
-                                "ArtworkFilter",
-                                "[ArtworkFilter] title=${track.title} id=${track.id} hasRealArtwork=${!missing} source=${track.artworkSource ?: "NONE"} artworkUri=${track.artworkUrl ?: track.artworkCachePath ?: "NONE"} includedInNoArtworkFilter=$missing"
-                            )
-                        } catch (_: Throwable) {}
+    var filteredTracks by remember { mutableStateOf(emptyList<Track>()) }
+    LaunchedEffect(tracks, searchQuery, sortMode, hideUnavailableTracks, activeCoverArtFilter, artworkVersion) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val q = searchQuery.trim().lowercase()
+            val base = tracks.filter { track ->
+                val matchesAvailability = !hideUnavailableTracks || track.isAvailable
+                val matchesCoverArt = when (activeCoverArtFilter) {
+                    CoverArtFilter.ALL -> true
+                    CoverArtFilter.NO_COVER_ART, CoverArtFilter.NO_COVER -> {
+                        val missing = com.example.metadata.artwork.CanonicalArtworkDetector.isMissingArtwork(context, track)
+                        if (searchQuery.isBlank()) {
+                            try {
+                                Log.d(
+                                    "ArtworkFilter",
+                                    "[ArtworkFilter] title=${track.title} id=${track.id} hasRealArtwork=${!missing} source=${track.artworkSource ?: "NONE"} artworkUri=${track.artworkUrl ?: track.artworkCachePath ?: "NONE"} includedInNoArtworkFilter=$missing"
+                                )
+                            } catch (_: Throwable) {}
+                        }
+                        missing
                     }
-                    missing
+                    CoverArtFilter.HAS_COVER_ART, CoverArtFilter.HAS_COVER -> {
+                        com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(context, track)
+                    }
                 }
-                CoverArtFilter.HAS_COVER_ART, CoverArtFilter.HAS_COVER -> {
-                    com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(context, track)
-                }
+                val matchesQuery = q.isBlank() ||
+                    track.title.lowercase().contains(q) ||
+                    track.artist.lowercase().contains(q) ||
+                    track.album.lowercase().contains(q) ||
+                    track.format.lowercase().contains(q) ||
+                    track.genre.lowercase().contains(q) ||
+                    track.filePath.lowercase().contains(q)
+    
+                matchesAvailability && matchesCoverArt && matchesQuery
             }
-            val matchesQuery = q.isBlank() ||
-                track.title.lowercase().contains(q) ||
-                track.artist.lowercase().contains(q) ||
-                track.album.lowercase().contains(q) ||
-                track.format.lowercase().contains(q) ||
-                track.genre.lowercase().contains(q) ||
-                track.filePath.lowercase().contains(q)
-
-            matchesAvailability && matchesCoverArt && matchesQuery
+    
+            filteredTracks = sortMode.sort(base)
         }
-
-        sortMode.sort(base)
     }
 
     Column(

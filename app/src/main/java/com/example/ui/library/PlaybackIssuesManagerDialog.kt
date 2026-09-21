@@ -1,4 +1,5 @@
 package com.example.ui.library
+import androidx.compose.runtime.LaunchedEffect
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -37,16 +38,19 @@ fun PlaybackIssuesManagerDialog(
     val validationProgress by viewModel.playabilityValidationProgress.collectAsState()
     var filterQuery by remember { mutableStateOf("") }
 
-    val filteredList = remember(brokenTracks, filterQuery) {
-        if (filterQuery.isBlank()) {
-            brokenTracks
-        } else {
-            val q = filterQuery.trim().lowercase()
-            brokenTracks.filter {
-                it.title.lowercase().contains(q) ||
-                it.artist.lowercase().contains(q) ||
-                it.filePath.lowercase().contains(q) ||
-                it.playability.displayName.lowercase().contains(q)
+    var filteredList by remember { mutableStateOf(emptyList<Track>()) }
+    LaunchedEffect(brokenTracks, filterQuery) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            filteredList = if (filterQuery.isBlank()) {
+                brokenTracks
+            } else {
+                val q = filterQuery.trim().lowercase()
+                brokenTracks.filter {
+                    it.title.lowercase().contains(q) ||
+                    it.artist.lowercase().contains(q) ||
+                    it.filePath.lowercase().contains(q) ||
+                    it.playability.displayName.lowercase().contains(q)
+                }
             }
         }
     }

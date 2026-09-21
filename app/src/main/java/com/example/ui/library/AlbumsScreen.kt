@@ -66,20 +66,23 @@ fun AlbumsScreen(
 ) {
     var searchQuery by remember { mutableStateOf("") }
 
-    val filteredAlbums = remember(albums, searchQuery) {
-        val q = searchQuery.trim().lowercase()
-        val list = if (q.isBlank()) {
-            albums
-        } else {
-            albums.filter {
-                it.title.lowercase().contains(q) || it.artist.lowercase().contains(q)
+    var filteredAlbums by remember { mutableStateOf(emptyList<Album>()) }
+    LaunchedEffect(albums, searchQuery) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val q = searchQuery.trim().lowercase()
+            val list = if (q.isBlank()) {
+                albums
+            } else {
+                albums.filter {
+                    it.title.lowercase().contains(q) || it.artist.lowercase().contains(q)
+                }
             }
-        }
-        // Guarantee 100% stable unique keys for Compose LazyVerticalGrid
-        val seen = mutableSetOf<String>()
-        list.filter { album ->
-            val key = album.id.ifBlank { "album_${album.title}_${album.artist}" }
-            seen.add(key)
+            // Guarantee 100% stable unique keys for Compose LazyVerticalGrid
+            val seen = mutableSetOf<String>()
+            filteredAlbums = list.filter { album ->
+                val key = album.id.ifBlank { "album_${album.title}_${album.artist}" }
+                seen.add(key)
+            }
         }
     }
 

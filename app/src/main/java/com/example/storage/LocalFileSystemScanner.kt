@@ -208,7 +208,7 @@ object LocalFileSystemScanner {
         var count = 0
         val batch = mutableListOf<Track>()
 
-        fun walkDir(dir: File) {
+        suspend fun walkDir(dir: File) {
             val entries = dir.listFiles() ?: return
             for (entry in entries) {
                 if (entry.isDirectory && !entry.name.startsWith(".")) {
@@ -222,7 +222,7 @@ object LocalFileSystemScanner {
                         if (batch.size >= 50) {
                             val chunk = batch.toList()
                             batch.clear()
-                            kotlinx.coroutines.runBlocking { onBatch(chunk) }
+                            onBatch(chunk)
                         }
                     }
                 }

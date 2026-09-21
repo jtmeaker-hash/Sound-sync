@@ -1,4 +1,5 @@
 package com.example.ui.library
+import androidx.compose.runtime.LaunchedEffect
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -68,15 +69,18 @@ fun SelectTracksForPlaylistSheet(
     var searchQuery by remember { mutableStateOf("") }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
 
-    val filteredTracks = remember(availableTracks, searchQuery) {
-        val q = searchQuery.trim().lowercase()
-        if (q.isBlank()) {
-            availableTracks
-        } else {
-            availableTracks.filter {
-                it.title.lowercase().contains(q) ||
-                    it.artist.lowercase().contains(q) ||
-                    it.album.lowercase().contains(q)
+    var filteredTracks by remember { mutableStateOf(emptyList<Track>()) }
+    LaunchedEffect(availableTracks, searchQuery) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val q = searchQuery.trim().lowercase()
+            filteredTracks = if (q.isBlank()) {
+                availableTracks
+            } else {
+                availableTracks.filter {
+                    it.title.lowercase().contains(q) ||
+                        it.artist.lowercase().contains(q) ||
+                        it.album.lowercase().contains(q)
+                }
             }
         }
     }
