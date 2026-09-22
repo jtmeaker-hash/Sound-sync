@@ -116,6 +116,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
     }
 
     override suspend fun getArtworkForTrack(context: Context, track: Track, sizePx: Int): Bitmap = withContext(Dispatchers.IO) {
+        com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
         val cacheKey = computeCacheKey(track, sizePx)
         memoryCache.get(cacheKey)?.let { return@withContext it }
 
@@ -224,6 +225,7 @@ object AlbumArtHelper : CanonicalArtworkResolver {
     private val albumArtworkSemaphore = kotlinx.coroutines.sync.Semaphore(3)
 
     override suspend fun getArtworkForAlbum(context: Context, album: Album, sizePx: Int): Bitmap = withContext(Dispatchers.IO) {
+        com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
         val safeSize = sizePx.coerceIn(64, 512)
         val cacheKey = computeAlbumCacheKey(album, safeSize)
         memoryCache.get(cacheKey)?.let { return@withContext it }

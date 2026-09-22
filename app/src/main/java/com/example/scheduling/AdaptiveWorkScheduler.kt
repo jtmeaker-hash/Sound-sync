@@ -65,4 +65,13 @@ object AdaptiveWorkScheduler {
             delay(20)
         }
     }
+    
+    suspend fun yieldIfPlaybackOrActive(isPlaying: Boolean) {
+        val state = _usageState.value
+        if (state == DeviceUsageState.ACTIVE || isPlaying) {
+            delay(100)
+        } else if (state == DeviceUsageState.RECENTLY_ACTIVE) {
+            delay(20)
+        }
+    }
 }

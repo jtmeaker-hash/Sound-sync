@@ -70,6 +70,7 @@ class SoundSyncBackupManager(
     val isRestoring: StateFlow<Boolean> = _isRestoring.asStateFlow()
 
     private val restoreMutex = Mutex()
+    private val backupMutex = Mutex()
     private val _restoreProgress = MutableStateFlow(RestoreProgress())
     val restoreProgress: StateFlow<RestoreProgress> = _restoreProgress.asStateFlow()
 
@@ -183,7 +184,7 @@ class SoundSyncBackupManager(
 
         autoBackupJob?.cancel()
         autoBackupJob = scope.launch {
-            delay(5000)
+            delay(30000)
             try {
                 val analysisManager = com.example.analysis.TrackAnalysisManager.getInstance(context)
                 while (analysisManager.queueProgress.value.isRunning) {
@@ -200,6 +201,9 @@ class SoundSyncBackupManager(
      * Writes atomically to persistent storage.
      */
     suspend fun createBackup(targetUri: Uri? = null): Result<BackupSummary> = withContext(Dispatchers.IO) {
+        if (!backupMutex.tryLock()) {
+            return@withContext Result.failure(IllegalStateException("Backup already in progress"))
+        }
         _isBackingUp.value = true
         try {
             val tracks = database.trackDao().getAllTracksSync()
@@ -271,6 +275,7 @@ class SoundSyncBackupManager(
             Result.failure(e)
         } finally {
             _isBackingUp.value = false
+            backupMutex.unlock()
         }
     }
 
