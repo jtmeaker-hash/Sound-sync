@@ -175,6 +175,12 @@ fun SongsScreen(
     val context = LocalContext.current
     val theme = SoundSyncTheme.current
     var searchQuery by remember { mutableStateOf("") }
+    var debouncedQuery by remember { mutableStateOf("") }
+    
+    androidx.compose.runtime.LaunchedEffect(searchQuery) {
+        kotlinx.coroutines.delay(300L)
+        debouncedQuery = searchQuery
+    }
     var sortMode by remember { mutableStateOf(SongSortMode.TITLE_ASC) }
     var showSortMenu by remember { mutableStateOf(false) }
     var selectedTrackIds by remember { mutableStateOf(setOf<String>()) }
@@ -206,9 +212,9 @@ fun SongsScreen(
     }
 
     var filteredTracks by remember { mutableStateOf(emptyList<Track>()) }
-    LaunchedEffect(tracks, searchQuery, sortMode, hideUnavailableTracks, activeCoverArtFilter, artworkVersion) {
+    LaunchedEffect(tracks, debouncedQuery, sortMode, hideUnavailableTracks, activeCoverArtFilter, artworkVersion) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val q = searchQuery.trim().lowercase()
+            val q = debouncedQuery.trim().lowercase()
             val base = tracks.filter { track ->
                 val matchesAvailability = !hideUnavailableTracks || track.isAvailable
                 val matchesCoverArt = when (activeCoverArtFilter) {

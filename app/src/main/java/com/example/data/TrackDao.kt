@@ -9,8 +9,40 @@ import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
+
+data class AlbumSummary(
+    val album: String,
+    val albumArtist: String,
+    val artist: String,
+    val trackCount: Int,
+    val totalDurationSeconds: Int,
+    val year: Int,
+    val artworkCachePath: String?,
+    val artworkUrl: String?,
+    val artworkSource: String?,
+    val filePath: String
+)
+
 @Dao
 interface TrackDao {
+
+    @Query("SELECT * FROM tracks WHERE album = :album AND (albumArtist = :artist OR (albumArtist = '' AND artist = :artist)) ORDER BY discNumber ASC, CASE WHEN trackNumber > 0 THEN trackNumber ELSE 999999 END ASC, LOWER(title) ASC")
+    suspend fun getTracksForAlbum(album: String, artist: String): List<TrackEntity>
+
+    @Query("SELECT * FROM tracks WHERE id IN (SELECT trackId FROM track_artists WHERE artistId = :artistId) ORDER BY LOWER(title) ASC")
+    suspend fun getTracksForArtistId(artistId: String): List<TrackEntity>
+
+
+    @Query("""
+        SELECT album, albumArtist, artist, COUNT(id) as trackCount, SUM(durationSeconds) as totalDurationSeconds, 
+               MAX(releaseYear) as year, MAX(artworkCachePath) as artworkCachePath, MAX(artworkUrl) as artworkUrl, MAX(artworkSource) as artworkSource, MIN(filePath) as filePath
+        FROM tracks 
+        WHERE album != '' 
+        GROUP BY album, CASE WHEN albumArtist != '' THEN albumArtist ELSE artist END
+        ORDER BY album ASC
+    """)
+    fun observeAllAlbums(): Flow<List<AlbumSummary>>
+
     @Query("SELECT * FROM tracks ORDER BY dateAdded DESC")
     fun getAllTracks(): Flow<List<TrackEntity>>
 

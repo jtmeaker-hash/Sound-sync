@@ -107,6 +107,7 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
 
     private val db = AppDatabase.getDatabase(application)
     private val trackDao = db.trackDao()
+    private val artistDao = db.artistDao()
     private val trackEntityCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, com.example.model.Track>>()
     private val sourceFolderDao = db.sourceFolderDao()
     private val watchedFolderDao = db.watchedFolderDao()
@@ -885,104 +886,45 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     // Dynamically grouped Albums from Real indexed tracks with robust fault tolerance and unique key guarantees
-    val allAlbums: StateFlow<List<com.example.model.Album>> = allTracks.map { rawTracks ->
-        val startNs = System.nanoTime()
-        try {
-            val tracks = ArrayList(rawTracks)
-            if (tracks.isEmpty()) return@map emptyList<com.example.model.Album>()
+    val allAlbums: StateFlow<List<com.example.model.Album>> = trackDao.observeAllAlbums().map { summaries ->
+        summaries.map { summary ->
+            val albumTitle = summary.album.trim().ifBlank { "Single" }
+            val artistName = summary.albumArtist.trim().ifBlank {
+                summary.artist.trim().ifBlank { "Unknown Artist" }
+            }
+            val artistSlug = artistName.lowercase().replace(Regex("[^a-z0-9_-]"), "_").take(32)
+            val titleSlug = albumTitle.lowercase().replace(Regex("[^a-z0-9_-]"), "_").take(32)
+            val uniqueId = "album_${artistSlug}_${titleSlug}_${artistName.hashCode()}_${albumTitle.hashCode()}"
+            
+            val resolvedArtUri = summary.artworkCachePath?.takeIf { it.isNotBlank() }
+                ?: summary.artworkUrl?.takeIf { it.isNotBlank() }
+                ?: summary.filePath.takeIf { it.isNotBlank() }
 
-            val grouped = tracks.filter { it.album.isNotBlank() }
-                .groupBy { track ->
-                    val artistKey = if (track.albumArtist.isNotBlank()) {
-                        track.albumArtist.trim().lowercase()
-                    } else if (track.artist.isNotBlank()) {
-                        track.artist.trim().lowercase()
-                    } else {
-                        "unknown artist"
-                    }
-                    val albumKey = track.album.trim().lowercase()
-                    "${artistKey}:::${albumKey}"
-                }
-
-            val seenIds = mutableSetOf<String>()
-            val albums = grouped.mapNotNull { (groupKey, trackList) ->
-                if (trackList.isEmpty()) return@mapNotNull null
-                val albumTracks = trackList.sortedWith(
-                    compareBy<Track> { it.discNumber }
-                        .thenBy { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
-                        .thenBy { it.title.lowercase() }
-                )
-                val firstTrack = albumTracks.firstOrNull() ?: return@mapNotNull null
-                val albumTitle = firstTrack.album.trim().ifBlank { "Single" }
-                val artistName = firstTrack.albumArtist.trim().ifBlank {
-                    firstTrack.artist.trim().ifBlank { "Unknown Artist" }
-                }
-                val totalSec = albumTracks.sumOf { it.durationSeconds.coerceAtLeast(0) }
-
-                // Deterministic representative artwork selection:
-                // Fast path: find member track with valid cached or explicit artwork reference without blocking on file I/O
-                val trackWithArt = albumTracks.firstOrNull {
-                    !it.artworkCachePath.isNullOrBlank() ||
-                    !it.artworkUrl.isNullOrBlank() ||
-                    it.artworkSource in listOf("Embedded Tag", "Embedded", "Local Folder", "Apple iTunes", "TheAudioDB", "Manual Selection", "User Selected", "Custom")
-                } ?: albumTracks.firstOrNull {
-                    com.example.metadata.artwork.CanonicalArtworkDetector.hasArtwork(getApplication(), it)
-                }
-
-                val resolvedArtUri = if (trackWithArt != null) {
-                    trackWithArt.artworkCachePath?.takeIf { it.isNotBlank() }
-                        ?: trackWithArt.artworkUrl?.takeIf { it.isNotBlank() }
-                        ?: trackWithArt.filePath.takeIf { it.isNotBlank() }
-                } else null
-
-                // Stable unique composite ID derived from sanitized artist, title, and media/track ID
-                val artistSlug = artistName.lowercase().replace(Regex("[^a-z0-9_-]"), "_").take(32)
-                val titleSlug = albumTitle.lowercase().replace(Regex("[^a-z0-9_-]"), "_").take(32)
-                val baseId = "album_${artistSlug}_${titleSlug}_${artistName.hashCode()}_${albumTitle.hashCode()}"
-
-                var uniqueId = baseId
-                var disambiguation = 1
-                while (!seenIds.add(uniqueId)) {
-                    uniqueId = "${baseId}_${disambiguation++}"
-                }
-
-                com.example.model.Album(
-                    id = uniqueId,
-                    title = albumTitle,
-                    artist = artistName,
-                    trackCount = albumTracks.size,
-                    totalDurationSeconds = totalSec,
-                    tracks = albumTracks,
-                    year = albumTracks.mapNotNull { it.releaseYear }.firstOrNull { it > 0 } ?: 0,
-                    artworkUri = resolvedArtUri
-                )
-            }.sortedBy { it.title.lowercase() }
-
-            albums
-        } catch (t: Throwable) {
-            Log.e("MainDjViewModel", "Error in album grouping: ${t.message}", t)
-            emptyList()
+            com.example.model.Album(
+                id = uniqueId,
+                title = albumTitle,
+                artist = artistName,
+                trackCount = summary.trackCount,
+                totalDurationSeconds = summary.totalDurationSeconds,
+                year = summary.year,
+                artworkUri = resolvedArtUri,
+                tracks = emptyList() // Lazy load when opened!
+            )
         }
     }.flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // Dynamically grouped Artists splitting collaborations into individual artist entities
-    val allArtists: StateFlow<List<com.example.model.Artist>> = combine(allTracks, allAlbums) { tracks, albums ->
-        try {
-            val artists = com.example.metadata.artist.ArtistIndexManager.buildArtistsFromTracks(tracks, albums)
-            val seenIds = mutableSetOf<String>()
-            val uniqueArtists = artists.map { artist ->
-                var uniqueId = artist.id
-                var disambiguation = 1
-                while (!seenIds.add(uniqueId)) {
-                    uniqueId = "${artist.id}_${disambiguation++}"
-                }
-                if (uniqueId != artist.id) artist.copy(id = uniqueId) else artist
-            }
-            uniqueArtists
-        } catch (t: Throwable) {
-            Log.e("MainDjViewModel", "Error building artists: ${t.message}", t)
-            emptyList()
+    val allArtists: StateFlow<List<com.example.model.Artist>> = artistDao.observeAllArtists().map { entities ->
+        entities.map { entity ->
+            com.example.model.Artist(
+                id = entity.id,
+                name = entity.name,
+                albumCount = entity.albumCount,
+                songCount = entity.songCount,
+                totalDurationSeconds = entity.totalDurationSeconds,
+                albums = emptyList(), // Lazy load when opened!
+                songs = emptyList()   // Lazy load when opened!
+            )
         }
     }.flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -2350,7 +2292,11 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openAlbum(album: com.example.model.Album) {
-        _selectedAlbum.value = album
+        viewModelScope.launch(Dispatchers.IO) {
+            val trackEntities = trackDao.getTracksForAlbum(album.title, album.artist)
+            val tracks = trackEntities.map { it.toTrack() }
+            _selectedAlbum.value = album.copy(tracks = tracks)
+        }
     }
 
     fun closeAlbum() {
@@ -2361,7 +2307,15 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
     val openedArtistFromNowPlaying: StateFlow<Boolean> = _openedArtistFromNowPlaying.asStateFlow()
 
     fun openArtist(artist: com.example.model.Artist) {
-        _selectedArtist.value = artist
+        viewModelScope.launch(Dispatchers.IO) {
+            val trackEntities = trackDao.getTracksForArtistId(artist.id)
+            val tracks = trackEntities.map { it.toTrack() }
+            
+            // Re-build albums for this specific artist
+            val albums = com.example.metadata.artist.ArtistIndexManager.buildArtistsFromTracks(tracks).firstOrNull()?.albums ?: emptyList()
+            
+            _selectedArtist.value = artist.copy(songs = tracks, albums = albums)
+        }
     }
 
     fun openArtistFromNowPlaying(artistName: String, track: Track) {

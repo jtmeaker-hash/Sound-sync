@@ -65,11 +65,17 @@ fun AlbumsScreen(
     isScanning: Boolean = false
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var debouncedQuery by remember { mutableStateOf("") }
+
+    androidx.compose.runtime.LaunchedEffect(searchQuery) {
+        kotlinx.coroutines.delay(300L)
+        debouncedQuery = searchQuery
+    }
 
     var filteredAlbums by remember { mutableStateOf(emptyList<Album>()) }
-    LaunchedEffect(albums, searchQuery) {
+    LaunchedEffect(albums, debouncedQuery) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val q = searchQuery.trim().lowercase()
+            val q = debouncedQuery.trim().lowercase()
             val list = if (q.isBlank()) {
                 albums
             } else {

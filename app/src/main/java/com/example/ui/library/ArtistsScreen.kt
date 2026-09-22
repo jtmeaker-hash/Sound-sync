@@ -55,11 +55,17 @@ fun ArtistsScreen(
     onSelectArtist: (Artist) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var debouncedQuery by remember { mutableStateOf("") }
+
+    androidx.compose.runtime.LaunchedEffect(searchQuery) {
+        kotlinx.coroutines.delay(300L)
+        debouncedQuery = searchQuery
+    }
 
     var filteredArtists by remember { mutableStateOf(emptyList<Artist>()) }
-    LaunchedEffect(artists, searchQuery) {
+    LaunchedEffect(artists, debouncedQuery) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val q = searchQuery.trim().lowercase()
+            val q = debouncedQuery.trim().lowercase()
             filteredArtists = if (q.isBlank()) {
                 artists
             } else {
