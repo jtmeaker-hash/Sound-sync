@@ -15,6 +15,7 @@ enum class StorageSourceType(val displayName: String, val defaultPath: String, v
     CLOUD_VAULT("Cloud Sync Cache", "/storage/emulated/0/SoundSync/CloudCache", false)
 }
 
+@androidx.compose.runtime.Immutable
 data class StorageSource(
     val id: String,
     val type: StorageSourceType,
@@ -182,6 +183,7 @@ enum class AnalysisState {
     FAILED_PERMANENT
 }
 
+@androidx.compose.runtime.Immutable
 data class Track(
     val id: String,
     val title: String,
@@ -388,6 +390,7 @@ data class Artist(
     val songs: List<Track>
 )
 
+@androidx.compose.runtime.Immutable
 data class Playlist(
     val id: String,
     val name: String,
@@ -448,6 +451,7 @@ enum class FileOperationType(val label: String) {
     AUTO_TAG("Batch Tag")
 }
 
+@androidx.compose.runtime.Immutable
 data class OperationJournalItem(
     val id: String,
     val timestamp: Long = System.currentTimeMillis(),

@@ -160,7 +160,6 @@ fun MainDjScreen(
     val spectrogramData by viewModel.spectrogramData.collectAsState()
     val isSpectrogramLoading by viewModel.isSpectrogramLoading.collectAsState()
     val spectrogramErrorMessage by viewModel.spectrogramErrorMessage.collectAsState()
-    val analysisProgressPercent by viewModel.analysisProgressPercent.collectAsState()
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
     val showApiConfigDialog by viewModel.showApiConfigDialog.collectAsState()
     val inspectingTrackForProperties by viewModel.inspectingTrackForProperties.collectAsState()
@@ -609,7 +608,7 @@ fun MainDjScreen(
                                 },
                                 onLoadToDeck = { viewModel.playTrack(it) },
                                 isLoading = isSpectrogramLoading,
-                                analysisProgressPercent = analysisProgressPercent,
+                                analysisProgressFlow = viewModel.analysisProgressPercent,
                                 errorMessage = spectrogramErrorMessage,
                                 onRetryAnalysis = { viewModel.retrySpectrogramAnalysis() }
                             )
@@ -1207,13 +1206,13 @@ private fun PositionAwareMiniPlayer(
     onToggleDisplayMode: () -> Unit,
     onOpenNowPlaying: () -> Unit
 ) {
-    val currentPositionMs = audioEngine.currentPositionMs.collectAsState().value
+    val currentPositionState = audioEngine.currentPositionMs.collectAsState()
     DjMiniPlayer(
         track = track,
         displayMode = displayMode,
         waveformData = waveformData,
         isPlaying = isPlaying,
-        currentPositionMs = currentPositionMs,
+        currentPositionProvider = { currentPositionState.value },
         durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L,
         onTogglePlayPause = onTogglePlayPause,
         onPreviousTrack = onPreviousTrack,
@@ -1251,14 +1250,14 @@ private fun PositionAwareNowPlaying(
     onOpenSettings: () -> Unit, onOpenProperties: (com.example.model.Track) -> Unit,
     onOpenArtist: ((String) -> Unit)? = null
 ) {
-    val currentPositionMs = audioEngine.currentPositionMs.collectAsState().value
+    val currentPositionState = audioEngine.currentPositionMs.collectAsState()
     NowPlayingFullScreen(
         track = track,
         displayMode = displayMode,
         waveformData = waveformData,
         isWaveformLoading = isWaveformLoading,
         isPlaying = isPlaying,
-        currentPositionMs = currentPositionMs,
+        currentPositionProvider = { currentPositionState.value },
         durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L,
         waveformStyle = waveformStyle,
         onToggleWaveformStyle = onToggleWaveformStyle,
@@ -1293,19 +1292,20 @@ private fun PositionAwareSpectrogramTab(
     onSeekToRatio: (Float) -> Unit,
     onLoadToDeck: (com.example.model.Track) -> Unit,
     isLoading: Boolean,
-    analysisProgressPercent: Int,
+    analysisProgressFlow: kotlinx.coroutines.flow.StateFlow<Int>,
     errorMessage: String?,
     onRetryAnalysis: () -> Unit
 ) {
-    val currentPositionSec = audioEngine.currentPositionSec.collectAsState().value
-    val playbackProgress = audioEngine.playbackProgress.collectAsState().value
+    val currentPositionSecState = audioEngine.currentPositionSec.collectAsState()
+    val playbackProgressState = audioEngine.playbackProgress.collectAsState()
+    val analysisProgressPercent by analysisProgressFlow.collectAsState()
     SpectrogramAnalyzerView(
         analyzedTrack = analyzedTrack,
         spectrogramData = spectrogramData,
         allTracks = allTracks,
         isPlaying = isPlaying,
-        currentPositionSec = currentPositionSec,
-        playbackProgress = playbackProgress,
+        currentPositionSecProvider = { currentPositionSecState.value },
+        playbackProgressProvider = { playbackProgressState.value },
         onSelectTrack = onSelectTrack,
         onTogglePlayPause = onTogglePlayPause,
         onSeekToRatio = onSeekToRatio,

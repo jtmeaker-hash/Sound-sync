@@ -103,7 +103,7 @@ fun NowPlayingFullScreen(
     waveformData: WaveformData?,
     isWaveformLoading: Boolean,
     isPlaying: Boolean,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     // EQ parameters
     eqEnabled: Boolean = true,
@@ -153,7 +153,7 @@ fun NowPlayingFullScreen(
             waveformData = waveformData,
             isWaveformLoading = isWaveformLoading,
             isPlaying = isPlaying,
-            currentPositionMs = currentPositionMs,
+            currentPositionProvider = currentPositionProvider,
             durationMs = durationMs,
             isShuffleEnabled = isShuffleEnabled,
             repeatMode = repeatMode,
@@ -177,12 +177,12 @@ fun NowPlayingFullScreen(
     }
 
     val totalSec = if (durationMs > 0) (durationMs / 1000).toInt() else track.durationSeconds.coerceAtLeast(1)
-    val curSec = (currentPositionMs / 1000).toInt().coerceIn(0, totalSec)
+    val curSec = (currentPositionProvider() / 1000).toInt().coerceIn(0, totalSec)
     val remainingSec = (totalSec - curSec).coerceAtLeast(0)
 
     val curMin = curSec / 60
     val curS = curSec % 60
-    val curMsFrac = ((currentPositionMs % 1000) / 100).toInt()
+    val curMsFrac = ((currentPositionProvider() % 1000) / 100).toInt()
 
     val remMin = remainingSec / 60
     val remS = remainingSec % 60
@@ -390,7 +390,7 @@ fun NowPlayingFullScreen(
                                 track = track,
                                 waveformData = waveformData,
                                 isPlaying = isPlaying,
-                                currentPositionMs = currentPositionMs,
+                                currentPositionProvider = currentPositionProvider,
                                 durationMs = durationMs,
                                 onSeekToMs = onSeekToMs,
                                 isLoading = isWaveformLoading,
@@ -831,7 +831,7 @@ private fun ProNowPlayingFullScreenContent(
     waveformData: WaveformData?,
     isWaveformLoading: Boolean,
     isPlaying: Boolean,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     isShuffleEnabled: Boolean,
     repeatMode: com.example.ui.RepeatMode,
@@ -852,16 +852,16 @@ private fun ProNowPlayingFullScreenContent(
     modifier: Modifier = Modifier
 ) {
     val totalSec = if (durationMs > 0) (durationMs / 1000).toInt() else track.durationSeconds.coerceAtLeast(1)
-    val curSec = (currentPositionMs / 1000).toInt().coerceIn(0, totalSec)
+    val curSec = (currentPositionProvider() / 1000).toInt().coerceIn(0, totalSec)
     val remainingSec = (totalSec - curSec).coerceAtLeast(0)
 
     val curMin = curSec / 60
     val curS = curSec % 60
-    val curMsFrac = ((currentPositionMs % 1000) / 100).toInt()
+    val curMsFrac = ((currentPositionProvider() % 1000) / 100).toInt()
 
     val remMin = remainingSec / 60
     val remS = remainingSec % 60
-    val remMsFrac = (((totalSec * 1000L - currentPositionMs).coerceAtLeast(0) % 1000) / 100).toInt()
+    val remMsFrac = (((totalSec * 1000L - currentPositionProvider()).coerceAtLeast(0) % 1000) / 100).toInt()
 
     val theme = SoundSyncTheme.current
 
@@ -1211,7 +1211,7 @@ private fun ProNowPlayingFullScreenContent(
                                 track = track,
                                 waveformData = waveformData,
                                 isPlaying = isPlaying,
-                                currentPositionMs = currentPositionMs,
+                                currentPositionProvider = currentPositionProvider,
                                 durationMs = durationMs,
                                 onSeekToMs = onSeekToMs,
                                 isLoading = isWaveformLoading,

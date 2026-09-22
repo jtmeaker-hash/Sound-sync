@@ -891,7 +891,7 @@ fun SongsScreen(
                 verticalArrangement = if (isPro) Arrangement.spacedBy(0.dp) else Arrangement.spacedBy(6.dp),
                 contentPadding = PaddingValues(bottom = 96.dp)
             ) {
-                itemsIndexed(filteredTracks, key = { _, track -> track.id }) { index, track ->
+                itemsIndexed(filteredTracks, key = { _, track -> track.id }, contentType = { _, _ -> "track" }) { index, track ->
                     val isSelected = selectedTrackIds.contains(track.id)
                     SongTrackRow(
                         track = track,

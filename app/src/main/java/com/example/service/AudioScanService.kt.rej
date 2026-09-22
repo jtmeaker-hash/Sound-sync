@@ -1,0 +1,10 @@
+--- app/src/main/java/com/example/service/AudioScanService.kt
++++ app/src/main/java/com/example/service/AudioScanService.kt
+@@ -179,6 +179,7 @@
+ 
+                 suspend fun traverseDocumentFile(folder: DocumentFile, currentPath: String) {
+                     if (isCancelled.get()) return
++                    com.example.scheduling.AdaptiveWorkScheduler.yieldIfActive()
+                     
+                     while (isPaused.get()) {
+                         delay(500)

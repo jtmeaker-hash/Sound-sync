@@ -80,7 +80,7 @@ fun DjMiniPlayer(
     displayMode: NowPlayingDisplayMode,
     waveformData: WaveformData?,
     isPlaying: Boolean,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     onTogglePlayPause: () -> Unit,
     onPreviousTrack: () -> Unit = {},
@@ -96,7 +96,7 @@ fun DjMiniPlayer(
             displayMode = displayMode,
             waveformData = waveformData,
             isPlaying = isPlaying,
-            currentPositionMs = currentPositionMs,
+            currentPositionProvider = currentPositionProvider,
             durationMs = durationMs,
             onTogglePlayPause = onTogglePlayPause,
             onPreviousTrack = onPreviousTrack,
@@ -138,7 +138,7 @@ fun DjMiniPlayer(
             // Live Mini Waveform / Progress Strip
             MiniWaveformProgressStrip(
                 waveformData = waveformData,
-                currentPositionMs = currentPositionMs,
+                currentPositionProvider = currentPositionProvider,
                 durationMs = safeDurationMs,
                 onSeekFraction = { frac ->
                     onSeekToMs((safeDurationMs * frac).toLong())
@@ -219,7 +219,7 @@ fun DjMiniPlayer(
                         )
                         Text("•", color = TextMuted, fontSize = 9.sp)
                         MiniPlayerTimeDisplay(
-                            currentPositionMs = currentPositionMs,
+                            currentPositionProvider = currentPositionProvider,
                             durationMs = safeDurationMs,
                             color = DeckACyan
                         )
@@ -309,7 +309,7 @@ fun DjMiniPlayer(
 @Composable
 private fun MiniWaveformProgressStrip(
     waveformData: WaveformData?,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     onSeekFraction: (Float) -> Unit,
     modifier: Modifier = Modifier
@@ -336,7 +336,7 @@ private fun MiniWaveformProgressStrip(
             val width = size.width
             val height = size.height
             val centerY = height / 2f
-            val progress = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+            val progress = if (durationMs > 0) (currentPositionProvider().toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
             val playheadX = progress * width
 
             if (waveformData != null && waveformData.samplePoints > 0) {
@@ -395,7 +395,7 @@ private fun ProDjMiniPlayer(
     displayMode: NowPlayingDisplayMode,
     waveformData: WaveformData?,
     isPlaying: Boolean,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     onTogglePlayPause: () -> Unit,
     onPreviousTrack: () -> Unit = {},
@@ -427,7 +427,7 @@ private fun ProDjMiniPlayer(
             // Live Mini Waveform Strip (fixed 14dp height)
             MiniWaveformProgressStrip(
                 waveformData = waveformData,
-                currentPositionMs = currentPositionMs,
+                currentPositionProvider = currentPositionProvider,
                 durationMs = safeDurationMs,
                 onSeekFraction = { frac ->
                     onSeekToMs((safeDurationMs * frac).toLong())
@@ -508,7 +508,7 @@ private fun ProDjMiniPlayer(
                         )
                         Text("•", color = theme.textMuted, fontSize = 9.sp)
                         MiniPlayerTimeDisplay(
-                            currentPositionMs = currentPositionMs,
+                            currentPositionProvider = currentPositionProvider,
                             durationMs = safeDurationMs,
                             color = theme.accent
                         )
@@ -599,12 +599,12 @@ private fun ProDjMiniPlayer(
  */
 @Composable
 fun MiniPlayerTimeDisplay(
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     color: Color,
     modifier: Modifier = Modifier
 ) {
-    val curSec = (currentPositionMs / 1000).toInt()
+    val curSec = (currentPositionProvider() / 1000).toInt()
     val totalSec = (durationMs / 1000).toInt()
     val curM = curSec / 60
     val curS = curSec % 60

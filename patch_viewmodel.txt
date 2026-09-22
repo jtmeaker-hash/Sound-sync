@@ -1,0 +1,37 @@
+--- app/src/main/java/com/example/ui/MainDjViewModel.kt
++++ app/src/main/java/com/example/ui/MainDjViewModel.kt
+@@ -107,6 +107,7 @@
+     private val trackDao = appDatabase.trackDao()
+     private val playlistDao = appDatabase.playlistDao()
+     private val playlistTrackDao = appDatabase.playlistTrackDao()
++    private val trackEntityCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, com.example.model.Track>>()
+ 
+     private val songFindRepository = com.example.repository.SongFindRepository(appDatabase.songFindDao())
+ 
+@@ -865,8 +866,16 @@
+         trackDao.getAllTracks().throttleLatest(350L),
+         _storageRootAvailability
+     ) { entities, rootAvailability ->
+         val tracks = entities.map { entity ->
+-            val track = entity.toTrack()
++            val hash = entity.hashCode()
++            val cached = trackEntityCache[entity.id]
++            val track = if (cached != null && cached.first == hash) {
++                cached.second
++            } else {
++                val newTrack = entity.toTrack()
++                trackEntityCache[entity.id] = Pair(hash, newTrack)
++                newTrack
++            }
+             val isAvail = com.example.storage.StorageAvailabilityHelper.isTrackRootAvailable(track.filePath, rootAvailability)
+             if (track.isAvailable == isAvail) track else track.copy(isAvailable = isAvail)
+         }
++        if (entities.size < trackEntityCache.size - 100) {
++            val currentIds = entities.map { it.id }.toSet()
++            trackEntityCache.keys().toList().forEach { key ->
++                if (!currentIds.contains(key)) trackEntityCache.remove(key)
++            }
++        }
+         _isLibraryLoading.value = false
+         tracks
+     }.flowOn(Dispatchers.Default)

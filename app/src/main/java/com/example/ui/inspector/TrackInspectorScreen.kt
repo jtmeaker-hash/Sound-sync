@@ -179,7 +179,7 @@ fun TrackInspectorScreen(
 
     val isPlayingThisTrack = audioEngine.isPlaying.collectAsState().value &&
             audioEngine.currentTrack.collectAsState().value?.id == currentTrack.id
-    val currentPositionMs = audioEngine.currentPositionMs.collectAsState().value
+    val currentPositionState = audioEngine.currentPositionMs.collectAsState()
 
     val isPro = SoundSyncTheme.isPro
     val theme = SoundSyncTheme.current
@@ -423,7 +423,7 @@ fun TrackInspectorScreen(
                 waveformData = waveformData,
                 isLoading = isWaveformLoading,
                 isPlaying = isPlayingThisTrack,
-                currentPositionMs = if (isPlayingThisTrack) currentPositionMs else 0L,
+                currentPositionProvider = if (isPlayingThisTrack) { { currentPositionState.value } } else { { 0L } },
                 waveformStyle = viewModel.waveformStyle.collectAsState().value,
                 onToggleWaveformStyle = { viewModel.toggleWaveformStyle() },
                 onSeekToMs = { targetMs ->
@@ -1332,7 +1332,7 @@ private fun InspectorWaveformSection(
     waveformData: WaveformData?,
     isLoading: Boolean,
     isPlaying: Boolean,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onToggleWaveformStyle: (() -> Unit)? = null,
     onSeekToMs: (Long) -> Unit,
@@ -1367,7 +1367,7 @@ private fun InspectorWaveformSection(
                     track = track,
                     waveformData = waveformData,
                     isPlaying = isPlaying,
-                    currentPositionMs = currentPositionMs,
+                    currentPositionProvider = currentPositionProvider,
                     durationMs = (track.durationSeconds * 1000L).coerceAtLeast(1000L),
                     onSeekToMs = onSeekToMs,
                     isLoading = isLoading,

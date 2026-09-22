@@ -1,0 +1,10 @@
+--- app/src/main/java/com/example/ui/MainDjViewModel.kt
++++ app/src/main/java/com/example/ui/MainDjViewModel.kt
+@@ -107,6 +107,7 @@
+     private val trackDao = appDatabase.trackDao()
+     private val playlistDao = appDatabase.playlistDao()
+     private val playlistTrackDao = appDatabase.playlistTrackDao()
++    private val trackEntityCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, com.example.model.Track>>()
+ 
+     private val songFindRepository = com.example.repository.SongFindRepository(appDatabase.songFindDao())
+ 

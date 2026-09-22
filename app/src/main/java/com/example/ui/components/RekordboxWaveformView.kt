@@ -109,7 +109,7 @@ fun RekordboxWaveformView(
     track: Track,
     waveformData: WaveformData?,
     isPlaying: Boolean,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     onSeekToMs: (Long) -> Unit,
     isLoading: Boolean = false,
@@ -134,34 +134,32 @@ fun RekordboxWaveformView(
     val is3BandColoring = theme.is3BandColoring
 
     // High-resolution display refresh-rate animation and timeline synchronization
-    var anchorPositionMs by remember(track.id) { mutableFloatStateOf(currentPositionMs.toFloat()) }
+    var anchorPositionMs by remember(track.id) { mutableFloatStateOf(currentPositionProvider().toFloat()) }
     var anchorNanoTime by remember(track.id) { mutableLongStateOf(System.nanoTime()) }
-    var animatedPositionMs by remember(track.id) { mutableFloatStateOf(currentPositionMs.toFloat()) }
-
-    // Synchronize anchor with authoritative audio engine updates
-    LaunchedEffect(currentPositionMs, track.id) {
-        val incoming = currentPositionMs.toFloat()
-        val diff = abs(incoming - animatedPositionMs)
-        // If user sought, or playback paused, or drift is significant (> 120ms), snap directly
-        if (!isPlaying || diff > 120f) {
-            anchorPositionMs = incoming
-            anchorNanoTime = System.nanoTime()
-            animatedPositionMs = incoming
-        } else {
-            // Re-anchor to audio engine timestamp without jumping
-            anchorPositionMs = incoming
-            anchorNanoTime = System.nanoTime()
-        }
-    }
-
+    var animatedPositionMs by remember(track.id) { mutableFloatStateOf(currentPositionProvider().toFloat()) }
     // 60fps/120fps display refresh rate loop
+    var lastIncoming by remember(track.id) { mutableFloatStateOf(currentPositionProvider().toFloat()) }
     LaunchedEffect(isPlaying, track.id) {
         if (!isPlaying) {
-            animatedPositionMs = currentPositionMs.toFloat()
+            animatedPositionMs = currentPositionProvider().toFloat()
             return@LaunchedEffect
         }
         while (true) {
             withFrameNanos { frameNanos ->
+                val incoming = currentPositionProvider().toFloat()
+                if (incoming != lastIncoming) {
+                    val diff = kotlin.math.abs(incoming - animatedPositionMs)
+                    if (diff > 120f) {
+                        anchorPositionMs = incoming
+                        anchorNanoTime = frameNanos
+                        animatedPositionMs = incoming
+                    } else {
+                        anchorPositionMs = incoming
+                        anchorNanoTime = frameNanos
+                    }
+                    lastIncoming = incoming
+                }
+                
                 if (!isUserDragging) {
                     val elapsedSec = (frameNanos - anchorNanoTime) / 1_000_000_000f
                     val estimatedMs = anchorPositionMs + (elapsedSec * 1000f)
@@ -384,7 +382,7 @@ fun RekordboxWaveformView(
         // --- 3. WAVEFORM ZOOM & DECK METRICS TOOLBAR ---
         WaveformBottomToolbar(
             track = track,
-            currentPositionMs = effectivePositionMs,
+            currentPositionProvider = { effectivePositionMs.toLong() },
             durationMs = safeDurationMs,
             visibleWindowSeconds = visibleWindowSeconds,
             waveformStyle = waveformStyle,
@@ -657,12 +655,12 @@ private fun DrawScope.drawRetroScrollingWaveform(
 @Suppress("unused")
 private fun DrawScope.drawRekordboxScrollingWaveform(
     waveformData: WaveformData?,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     visibleWindowSeconds: Float,
     trackBpm: Double,
     textMeasurer: TextMeasurer
-) = drawRetroScrollingWaveform(waveformData, currentPositionMs.toFloat(), durationMs, visibleWindowSeconds, trackBpm, textMeasurer)
+) = drawRetroScrollingWaveform(waveformData, currentPositionProvider().toFloat(), durationMs, visibleWindowSeconds, trackBpm, textMeasurer)
 
 /**
  * Professional high-resolution 60fps Canvas renderer for Detailed Waveform Mode.
@@ -1157,7 +1155,7 @@ private fun FullTrackOverviewScrubber(
 @Composable
 private fun WaveformBottomToolbar(
     track: Track,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     visibleWindowSeconds: Float,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,

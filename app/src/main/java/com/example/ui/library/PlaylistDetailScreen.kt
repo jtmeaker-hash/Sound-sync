@@ -373,7 +373,7 @@ fun PlaylistDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 contentPadding = PaddingValues(bottom = 96.dp)
             ) {
-                itemsIndexed(playlist.tracks, key = { index, track -> "${track.id}_$index" }) { index, track ->
+                itemsIndexed(playlist.tracks, key = { index, track -> "${track.id}_$index" }, contentType = { _, _ -> "track" }) { index, track ->
                     PlaylistTrackRow(
                         position = index,
                         totalCount = playlist.tracks.size,

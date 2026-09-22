@@ -66,7 +66,7 @@ fun CarModeScreen(
     val isNightMode by carModeManager.isNightMode.collectAsState()
     val displayMode by carModeManager.displayMode.collectAsState()
     val smartShuffle by carModeManager.smartDrivingShuffle.collectAsState()
-    val currentPositionMs by audioEngine.currentPositionMs.collectAsState()
+    val currentPositionState = audioEngine.currentPositionMs.collectAsState()
     val durationMs = if ((currentTrack?.durationSeconds ?: 0) > 0) currentTrack!!.durationSeconds * 1000L else 0L
 
     var showQueuePreview by remember { mutableStateOf(false) }
@@ -102,7 +102,7 @@ fun CarModeScreen(
                 isPlaying = isPlaying,
                 waveformData = waveformData,
                 displayMode = displayMode,
-                currentPositionMs = currentPositionMs,
+                currentPositionProvider = { currentPositionState.value },
                 durationMs = durationMs,
                 isFavorite = isFavorite,
                 isShuffle = isShuffleEnabled,
@@ -142,7 +142,7 @@ fun CarModeScreen(
                 isPlaying = isPlaying,
                 waveformData = waveformData,
                 displayMode = displayMode,
-                currentPositionMs = currentPositionMs,
+                currentPositionProvider = { currentPositionState.value },
                 durationMs = durationMs,
                 isFavorite = isFavorite,
                 isShuffle = isShuffleEnabled,
@@ -223,7 +223,7 @@ private fun CarModePortraitLayout(
     isPlaying: Boolean,
     waveformData: WaveformData?,
     displayMode: CarDisplayMode,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     isFavorite: Boolean,
     isShuffle: Boolean,
@@ -381,7 +381,7 @@ private fun CarModePortraitLayout(
                                 RekordboxWaveformView(
                                     track = track,
                                     waveformData = waveformData,
-                                    currentPositionMs = currentPositionMs,
+                                    currentPositionProvider = currentPositionProvider,
                                     durationMs = durationMs,
                                     isPlaying = isPlaying,
                                     onSeekToMs = onSeekToMs,
@@ -422,7 +422,7 @@ private fun CarModePortraitLayout(
 
         // 4. Large progress / seek control + Elapsed & Duration
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-            val progress = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+            val progress = if (durationMs > 0) (currentPositionProvider().toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
             Slider(
                 value = progress,
                 onValueChange = { frac -> onSeekToMs((frac * durationMs).toLong()) },
@@ -437,7 +437,7 @@ private fun CarModePortraitLayout(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(formatTime(currentPositionMs), color = mutedColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                Text(formatTime(currentPositionProvider()), color = mutedColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
                 Text(formatTime(durationMs), color = mutedColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
             }
         }
@@ -600,7 +600,7 @@ private fun CarModeLandscapeLayout(
     isPlaying: Boolean,
     waveformData: WaveformData?,
     displayMode: CarDisplayMode,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     isFavorite: Boolean,
     isShuffle: Boolean,
@@ -696,7 +696,7 @@ private fun CarModeLandscapeLayout(
                             RekordboxWaveformView(
                                 track = track,
                                 waveformData = waveformData,
-                                currentPositionMs = currentPositionMs,
+                                currentPositionProvider = currentPositionProvider,
                                 durationMs = durationMs,
                                 isPlaying = isPlaying,
                                 onSeekToMs = onSeekToMs,
@@ -773,7 +773,7 @@ private fun CarModeLandscapeLayout(
 
             // Progress Slider
             Column(modifier = Modifier.fillMaxWidth()) {
-                val progress = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                val progress = if (durationMs > 0) (currentPositionProvider().toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
                 Slider(
                     value = progress,
                     onValueChange = { frac -> onSeekToMs((frac * durationMs).toLong()) },
@@ -784,7 +784,7 @@ private fun CarModeLandscapeLayout(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(formatTime(currentPositionMs), color = mutedColor, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    Text(formatTime(currentPositionProvider()), color = mutedColor, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                     Text(formatTime(durationMs), color = mutedColor, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 }
             }

@@ -103,8 +103,8 @@ fun SpectrogramAnalyzerView(
     spectrogramData: SpectrogramAnalysis?,
     allTracks: List<Track>,
     isPlaying: Boolean = false,
-    currentPositionSec: Int = 0,
-    playbackProgress: Float = 0f,
+    currentPositionSecProvider: () -> Int = { 0 },
+    playbackProgressProvider: () -> Float = { 0f },
     onSelectTrack: (Track) -> Unit,
     onTogglePlayPause: () -> Unit = {},
     onSeekToRatio: (Float) -> Unit = {},
@@ -300,7 +300,7 @@ fun SpectrogramAnalyzerView(
                 SpectrogramCanvasCard(
                     track = analyzedTrack,
                     analysis = spectrogramData,
-                    playbackProgress = playbackProgress,
+                    playbackProgressProvider = playbackProgressProvider,
                     zoomLevel = zoomLevel,
                     panRatio = panRatio,
                     onZoomChange = { newZoom ->
@@ -367,8 +367,8 @@ fun SpectrogramAnalyzerView(
                 SpectrogramPlaybackControls(
                     track = analyzedTrack,
                     isPlaying = isPlaying,
-                    currentPositionSec = currentPositionSec,
-                    playbackProgress = playbackProgress,
+                    currentPositionSecProvider = currentPositionSecProvider,
+                    playbackProgressProvider = playbackProgressProvider,
                     onTogglePlayPause = onTogglePlayPause,
                     onSeekToRatio = onSeekToRatio
                 )
@@ -463,7 +463,7 @@ fun SpectrogramAnalyzerView(
 private fun SpectrogramCanvasCard(
     track: Track,
     analysis: SpectrogramAnalysis,
-    playbackProgress: Float,
+    playbackProgressProvider: () -> Float,
     zoomLevel: Int,
     panRatio: Float,
     onZoomChange: (Int) -> Unit,
@@ -716,13 +716,13 @@ private fun SpectrogramCanvasCard(
                         )
 
                         // Draw Active Playback Cursor Line
-                        if (playbackProgress in 0f..1f) {
+                        if (playbackProgressProvider() in 0f..1f) {
                             val cursorX = if (zoomLevel > 1) {
                                 val window = 1.0f / zoomLevel
                                 val start = panRatio * (1.0f - window)
-                                ((playbackProgress - start) / window).coerceIn(-0.1f, 1.1f) * w
+                                ((playbackProgressProvider() - start) / window).coerceIn(-0.1f, 1.1f) * w
                             } else {
-                                playbackProgress * w
+                                playbackProgressProvider() * w
                             }
 
                             if (cursorX in 0f..w) {
@@ -833,8 +833,8 @@ private fun calculateFrequencyForYRatio(yRatio: Float): Float {
 private fun SpectrogramPlaybackControls(
     track: Track,
     isPlaying: Boolean,
-    currentPositionSec: Int,
-    playbackProgress: Float,
+    currentPositionSecProvider: () -> Int,
+    playbackProgressProvider: () -> Float,
     onTogglePlayPause: () -> Unit,
     onSeekToRatio: (Float) -> Unit
 ) {
@@ -867,8 +867,8 @@ private fun SpectrogramPlaybackControls(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val curM = currentPositionSec / 60
-                val curS = currentPositionSec % 60
+                val curM = currentPositionSecProvider() / 60
+                val curS = currentPositionSecProvider() % 60
                 val durM = track.durationSeconds / 60
                 val durS = track.durationSeconds % 60
 

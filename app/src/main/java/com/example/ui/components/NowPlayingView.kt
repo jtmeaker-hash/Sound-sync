@@ -95,7 +95,7 @@ fun NowPlayingView(
     waveformData: WaveformData?,
     isWaveformLoading: Boolean,
     isPlaying: Boolean,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     onTogglePlayPause: () -> Unit,
     onPreviousTrack: () -> Unit,
@@ -109,12 +109,12 @@ fun NowPlayingView(
     modifier: Modifier = Modifier
 ) {
     val totalSec = if (durationMs > 0) (durationMs / 1000).toInt() else track.durationSeconds.coerceAtLeast(1)
-    val curSec = (currentPositionMs / 1000).toInt().coerceIn(0, totalSec)
+    val curSec = (currentPositionProvider() / 1000).toInt().coerceIn(0, totalSec)
     val remainingSec = (totalSec - curSec).coerceAtLeast(0)
 
     val curMin = curSec / 60
     val curS = curSec % 60
-    val curMsFrac = ((currentPositionMs % 1000) / 100).toInt()
+    val curMsFrac = ((currentPositionProvider() % 1000) / 100).toInt()
 
     val remMin = remainingSec / 60
     val remS = remainingSec % 60
@@ -227,7 +227,7 @@ fun NowPlayingView(
                         track = track,
                         waveformData = waveformData,
                         isPlaying = isPlaying,
-                        currentPositionMs = currentPositionMs,
+                        currentPositionProvider = currentPositionProvider,
                         durationMs = durationMs,
                         onSeekToMs = onSeekToMs,
                         isLoading = isWaveformLoading,

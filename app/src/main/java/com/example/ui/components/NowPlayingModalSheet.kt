@@ -17,7 +17,7 @@ fun NowPlayingModalSheet(
     waveformData: WaveformData?,
     isWaveformLoading: Boolean,
     isPlaying: Boolean,
-    currentPositionMs: Long,
+    currentPositionProvider: () -> Long,
     durationMs: Long,
     // EQ parameters
     eqEnabled: Boolean = true,
@@ -54,7 +54,7 @@ fun NowPlayingModalSheet(
         waveformData = waveformData,
         isWaveformLoading = isWaveformLoading,
         isPlaying = isPlaying,
-        currentPositionMs = currentPositionMs,
+        currentPositionProvider = currentPositionProvider,
         durationMs = durationMs,
         eqEnabled = eqEnabled,
         eqLow = eqLow,

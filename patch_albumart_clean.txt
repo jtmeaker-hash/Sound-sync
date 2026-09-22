@@ -1,0 +1,185 @@
+--- app/src/main/java/com/example/util/AlbumArtHelper.kt
++++ app/src/main/java/com/example/util/AlbumArtHelper.kt
+@@ -16,6 +16,10 @@
+ import com.example.metadata.artwork.LocalArtworkFinder
+ import com.example.model.Album
+ import com.example.model.Track
++import kotlinx.coroutines.Deferred
++import kotlinx.coroutines.async
++import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.ensureActive
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.flow.MutableSharedFlow
+ import kotlinx.coroutines.flow.SharedFlow
+@@ -24,6 +28,7 @@
+ import kotlinx.coroutines.withContext
+ import java.io.File
+ import java.util.Locale
++import java.util.concurrent.ConcurrentHashMap
+ 
+ /**
+  * High-performance Artwork loading subsystem.
+@@ -58,6 +63,8 @@
+     private val _artworkInvalidationFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
+     val artworkInvalidationFlow: SharedFlow<String> = _artworkInvalidationFlow.asSharedFlow()
+ 
++    private val inFlightDecodes = ConcurrentHashMap<String, Deferred<Bitmap?>>()
++
+     fun computeCacheKey(track: Track, sizePx: Int): String {
+         val prefix = if (track.albumArtist.isNotBlank()) track.albumArtist else track.artist
+         return "${prefix}_${track.album}_${sizePx}".lowercase(Locale.ROOT)
+@@ -115,7 +122,23 @@
+         return null
+     }
+ 
+-    override suspend fun getArtworkForTrack(context: Context, track: Track, sizePx: Int): Bitmap = withContext(Dispatchers.IO) {
++    override suspend fun getArtworkForTrack(context: Context, track: Track, sizePx: Int): Bitmap = coroutineScope {
++        val cacheKey = computeCacheKey(track, sizePx)
++        memoryCache.get(cacheKey)?.let { return@coroutineScope it }
++        
++        val deferred = inFlightDecodes.getOrPut(cacheKey) {
++            async(Dispatchers.IO) { 
++                val bitmap = getArtworkForTrackInternal(context, track, sizePx)
++                if (bitmap != null) { memoryCache.put(cacheKey, bitmap) }
++                bitmap
++            }
++        }
++        val result = deferred.await()
++        inFlightDecodes.remove(cacheKey)
++        result ?: fallbackCache.get("fallback_${track.id}_$sizePx") ?: generateFallbackArtwork(track, sizePx).also { fallbackCache.put("fallback_${track.id}_$sizePx", it) }
++    }
++
++    private suspend fun getArtworkForTrackInternal(context: Context, track: Track, sizePx: Int): Bitmap? = withContext(Dispatchers.IO) {
+         val cacheKey = computeCacheKey(track, sizePx)
+         memoryCache.get(cacheKey)?.let { return@withContext it }
++        ensureActive()
+ 
+         // PRIORITY 1: User-Selected / Custom Artwork
+         if (track.userConfirmedMetadata || track.artworkSource in listOf("Manual Selection", "User Selected", "Custom")) {
+@@ -128,6 +151,7 @@
+                     if (file.exists() && file.canRead()) {
++                        ensureActive()
+                         decodeFileToBitmap(file, sizePx)?.let { decoded ->
+                             return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
+                         }
+@@ -143,6 +167,7 @@
+                 if (cachedFile.exists() && cachedFile.canRead()) {
++                    ensureActive()
+                     decodeFileToBitmap(cachedFile, sizePx)?.let { decoded ->
+                         return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
+                     }
+@@ -165,6 +190,7 @@
+                 if (cachedFile.exists() && cachedFile.canRead()) {
++                    ensureActive()
+                     decodeFileToBitmap(cachedFile, sizePx)?.let { decoded ->
+                         return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
+                     }
+@@ -176,14 +202,17 @@
+         }
+ 
+         // PRIORITY 4: Embedded Artwork in the Audio File (MP3, FLAC, M4A/AAC)
+         val resolvedUri = track.resolvedUri ?: track.filePath
++        ensureActive()
+         val embeddedBitmap = extractEmbeddedPicture(context, track.filePath, sizePx)
+             ?: (if (!track.resolvedUri.isNullOrBlank() && track.resolvedUri != track.filePath) extractEmbeddedPicture(context, track.resolvedUri, sizePx) else null)
+         if (embeddedBitmap != null) {
+@@ -214,6 +243,7 @@
+         try {
+             val embeddedMeta = AudioEmbeddedMetadataReader.read(context, track.filePath, includeArtworkBytes = true)
+             if (embeddedMeta.hasEmbeddedArtwork && embeddedMeta.embeddedArtworkBytes != null) {
++                ensureActive()
+                 decodeByteArrayToBitmap(embeddedMeta.embeddedArtworkBytes, sizePx)?.let { decoded ->
+                     return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
+                 }
+@@ -224,6 +254,7 @@
+         try {
+             val localFinder = LocalArtworkFinder(context)
+             val localResult = localFinder.findLocalArtwork(track)
+             if (localResult != null && localResult.file.exists() && localResult.file.length() > 0) {
++                ensureActive()
+                 decodeFileToBitmap(localResult.file, sizePx)?.let { decoded ->
+                     return@withContext cacheDecodedArtwork(track, cacheKey, decoded)
+                 }
+@@ -231,10 +262,7 @@
+         } catch (_: Exception) {}
+ 
+-        // PRIORITY 6: Deterministic Fallback Vinyl Placeholder
+-        val fallbackKey = "fallback_${track.id}_$sizePx"
+-        fallbackCache.get(fallbackKey)?.let { return@withContext it }
+-        val generated = generateFallbackArtwork(track, sizePx)
+-        fallbackCache.put(fallbackKey, generated)
+-        generated
++        null
+     }
+ 
+     private val albumArtworkSemaphore = kotlinx.coroutines.sync.Semaphore(3)
+ 
+-    override suspend fun getArtworkForAlbum(context: Context, album: Album, sizePx: Int): Bitmap = withContext(Dispatchers.IO) {
++    override suspend fun getArtworkForAlbum(context: Context, album: Album, sizePx: Int): Bitmap = coroutineScope {
++        val safeSize = sizePx.coerceIn(64, 512)
++        val cacheKey = computeAlbumCacheKey(album, safeSize)
++        memoryCache.get(cacheKey)?.let { return@coroutineScope it }
++        
++        val deferred = inFlightDecodes.getOrPut(cacheKey) {
++            async(Dispatchers.IO) { 
++                val bitmap = getArtworkForAlbumInternal(context, album, sizePx)
++                if (bitmap != null) { memoryCache.put(cacheKey, bitmap) }
++                bitmap
++            }
++        }
++        val result = deferred.await()
++        inFlightDecodes.remove(cacheKey)
++        result ?: fallbackCache.get("fallback_album_${album.id}_$safeSize") ?: generateFallbackArtwork(album.title, album.artist, album.id, safeSize).also { fallbackCache.put("fallback_album_${album.id}_$safeSize", it) }
++    }
++
++    private suspend fun getArtworkForAlbumInternal(context: Context, album: Album, sizePx: Int): Bitmap? = withContext(Dispatchers.IO) {
+         val safeSize = sizePx.coerceIn(64, 512)
+         val cacheKey = computeAlbumCacheKey(album, safeSize)
+         memoryCache.get(cacheKey)?.let { return@withContext it }
+ 
+         // Use a semaphore to bound concurrent artwork decoding across album grid items
+         albumArtworkSemaphore.acquire()
+         try {
+             // Re-check cache after acquiring semaphore
+             memoryCache.get(cacheKey)?.let { return@withContext it }
++            ensureActive()
+ 
+             // 1. Check explicit album.artworkUri if present
+             val artUri = album.artworkUri
+@@ -243,6 +271,7 @@
+                     val path = if (artUri.startsWith("file://")) Uri.parse(artUri).path else artUri
+                     if (path != null) {
+                         val file = File(path)
+                         if (file.exists() && file.canRead()) {
++                            ensureActive()
+                             decodeFileToBitmap(file, safeSize)?.let { decoded ->
+-                                memoryCache.put(cacheKey, decoded)
+                                 return@withContext decoded
+                             }
+@@ -252,6 +281,7 @@
+                     try {
+                         context.contentResolver.openInputStream(Uri.parse(artUri))?.use { stream ->
++                            ensureActive()
+                             decodeStreamToBitmap(stream, safeSize)?.let { decoded ->
+-                                memoryCache.put(cacheKey, decoded)
+                                 return@withContext decoded
+                             }
+@@ -270,6 +300,7 @@
+                     if (cachedFile != null && cachedFile.exists() && cachedFile.canRead()) {
++                        ensureActive()
+                         decodeFileToBitmap(cachedFile, safeSize)?.let { decoded ->
+-                            memoryCache.put(cacheKey, decoded)
+                             return@withContext decoded
+                         }
+@@ -285,14 +316,9 @@
+             } catch (_: Throwable) {}
+ 
+-            // 4. Deterministic Fallback Vinyl Placeholder
+-            val fallback = generateFallbackArtwork(album.title, album.artist, album.id, safeSize)
+-            fallbackCache.put(cacheKey, fallback)
+-            fallback
++            null
+         } finally {
+             albumArtworkSemaphore.release()
+         }
+     }
