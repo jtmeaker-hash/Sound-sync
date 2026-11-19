@@ -6,6 +6,13 @@ on:
       - main
       - debug
       - Debug
+      - 'fix/**'
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+      - debug
+      - Debug
   workflow_dispatch:
 
 permissions:
