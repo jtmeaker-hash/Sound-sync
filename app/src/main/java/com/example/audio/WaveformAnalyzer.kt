@@ -18,12 +18,12 @@ import kotlin.math.sin
 object WaveformAnalyzer {
 
     private const val TAG = "WaveformAnalyzer"
-    private const val MIN_BINS = 2400
-    private const val MAX_BINS = 16000
+    private const val MIN_BINS = 8000
+    private const val MAX_BINS = 65536
 
     /**
      * Asynchronously generates waveform peak data for [track].
-     * Returns cached data immediately if available.
+     * Returns cached data immediately if available and of adequate detailed resolution.
      */
     suspend fun analyze(
         context: Context,
@@ -32,19 +32,24 @@ object WaveformAnalyzer {
     ): WaveformData = withContext(Dispatchers.Default) {
         val startTime = System.currentTimeMillis()
         val cacheKey = WaveformCache.getCacheKey(track, context)
+        val durationSec = track.durationSeconds.coerceAtLeast(10)
+        val durationMs = durationSec * 1000L
 
         // 1. Check two-tier cache (Memory -> Disk)
         WaveformCache.get(cacheKey, context)?.let { cached ->
-            Log.d(TAG, "Waveform cache HIT for '${track.title}' (key='$cacheKey') in ${System.currentTimeMillis() - startTime}ms")
-            onProgress(100)
-            return@withContext cached
+            if (cached.isAdequateForDetailed(durationSec)) {
+                Log.d(TAG, "Waveform cache HIT for '${track.title}' (key='$cacheKey') in ${System.currentTimeMillis() - startTime}ms")
+                onProgress(100)
+                return@withContext cached
+            } else {
+                Log.d(TAG, "Cached waveform for '${track.title}' has inadequate resolution (${cached.samplePoints} bins), upgrading to high-res v8")
+            }
         }
 
         onProgress(10)
 
-        val durationSec = track.durationSeconds.coerceAtLeast(10)
-        val targetBins = (durationSec * 64).coerceIn(MIN_BINS, MAX_BINS)
-        val durationMs = durationSec * 1000L
+        // ~150 bins per second (~6.67ms per bin) provides true 1:1 sample-to-pixel density on high-DPI displays
+        val targetBins = (durationSec * 150).coerceIn(MIN_BINS, MAX_BINS)
 
         try {
             // 2. Decode raw PCM from audio file on background IO thread
@@ -129,14 +134,14 @@ object WaveformAnalyzer {
                 else -> 0.70f * (1.0f - (i - drop2End).toFloat() / (binCount - drop2End)).coerceAtLeast(0.05f)
             }
 
-            val noise = (random.nextFloat() - 0.5f) * 0.10f
-            val kickBoost = if (isKick && sectionBase > 0.35f) 0.25f else 0.0f
-            val hatBoost = if (isHiHat) 0.15f else 0.0f
+            val noise = (random.nextFloat() - 0.5f) * 0.08f
+            val kickBoost = if (isKick && sectionBase > 0.35f) 0.22f else 0.0f
+            val hatBoost = if (isHiHat) 0.16f else 0.0f
 
-            val totalPeak = (sectionBase + noise + kickBoost + hatBoost).coerceIn(0.0f, 1.0f)
-            val low = (if (isKick) sectionBase * 1.1f else sectionBase * 0.60f + noise).coerceIn(0.0f, 1.0f)
-            val mid = (sectionBase * 0.75f + noise * 0.5f).coerceIn(0.0f, 1.0f)
-            val high = (if (isHiHat) 0.85f else sectionBase * 0.5f + hatBoost).coerceIn(0.0f, 1.0f)
+            val totalPeak = (sectionBase * 0.90f + noise + kickBoost + hatBoost).coerceIn(0.0f, 1.0f)
+            val low = (if (isKick) sectionBase * 0.85f + 0.15f else sectionBase * 0.35f + noise * 0.5f).coerceIn(0.0f, 1.0f)
+            val mid = (sectionBase * 0.65f + noise * 0.6f).coerceIn(0.0f, 1.0f)
+            val high = (if (isHiHat) 0.75f else sectionBase * 0.40f + hatBoost).coerceIn(0.0f, 1.0f)
 
             peaks[i] = totalPeak
             lowBand[i] = low
@@ -144,8 +149,8 @@ object WaveformAnalyzer {
             highBand[i] = high
         }
 
-        val rms = FloatArray(binCount) { i -> (peaks[i] * 0.70f).coerceIn(0f, 1f) }
-        val minPeaks = FloatArray(binCount) { i -> peaks[i] }
+        val rms = FloatArray(binCount) { i -> (peaks[i] * 0.68f).coerceIn(0f, 1f) }
+        val minPeaks = FloatArray(binCount) { i -> (peaks[i] * 0.94f).coerceIn(0f, 1f) }
 
         return WaveformData(
             trackId = trackId,

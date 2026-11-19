@@ -90,6 +90,38 @@ import kotlin.math.min
 // Pre-allocated paths reused across 60fps/120fps render frames for zero heap allocation
 private val reusableTopPlayheadPath = Path()
 private val reusableBotPlayheadPath = Path()
+private val detailedHighPastPath = Path()
+private val detailedHighFuturePath = Path()
+private val detailedMidPastPath = Path()
+private val detailedMidFuturePath = Path()
+private val detailedLowPastPath = Path()
+private val detailedLowFuturePath = Path()
+
+// Pre-allocated column coordinate arrays for detailed waveform rendering
+private var cachedColumnCapacity = 2048
+private var colScreenX = FloatArray(cachedColumnCapacity)
+private var colHighTop = FloatArray(cachedColumnCapacity)
+private var colHighBot = FloatArray(cachedColumnCapacity)
+private var colMidTop = FloatArray(cachedColumnCapacity)
+private var colMidBot = FloatArray(cachedColumnCapacity)
+private var colLowTop = FloatArray(cachedColumnCapacity)
+private var colLowBot = FloatArray(cachedColumnCapacity)
+private var colIsTransient = BooleanArray(cachedColumnCapacity)
+
+private fun ensureColumnArrays(requiredSize: Int) {
+    if (requiredSize > cachedColumnCapacity) {
+        val newCap = max(requiredSize + 256, cachedColumnCapacity * 2)
+        colScreenX = FloatArray(newCap)
+        colHighTop = FloatArray(newCap)
+        colHighBot = FloatArray(newCap)
+        colMidTop = FloatArray(newCap)
+        colMidBot = FloatArray(newCap)
+        colLowTop = FloatArray(newCap)
+        colLowBot = FloatArray(newCap)
+        colIsTransient = BooleanArray(newCap)
+        cachedColumnCapacity = newCap
+    }
+}
 
 /**
  * SoundSync DJ Live Scrolling Waveform Display.
@@ -892,9 +924,9 @@ private fun DrawScope.drawDetailedScrollingWaveform(
         }
     }
 
-    // 2. HIGH-RESOLUTION MULTI-BAND DETAILED WAVEFORM
-    // Renders discrete needle-thin vertical peak strokes (step = 1.8f, strokeWidth = 1.3f)
-    // preserving genuine transients and peak envelopes across all zoom levels
+    // 2. HIGH-RESOLUTION MULTI-BAND DETAILED WAVEFORM (ANTIALIASED CONTINUOUS CONTOURS)
+    // Renders smooth, connected spectral envelope ribbons (High outer, Mid body, Low core)
+    // with subpixel coordinates and zero barcode / pixelation comb lines
     if (waveformData != null && waveformData.samplePoints > 0) {
         val peaks = waveformData.peaks
         val minPeaks = waveformData.minPeaks
@@ -905,10 +937,11 @@ private fun DrawScope.drawDetailedScrollingWaveform(
         val totalBins = peaks.size
         val msPerBin = durationMs.toFloat() / totalBins.toFloat()
 
-        val stepPixels = 1.8f
-        val strokeW = 1.3f
-        val halfStep = stepPixels * 0.5f
+        val stepPixels = 1.0f // 1-pixel continuous horizontal sampling (responsive to physical device density)
         val numCols = (width / stepPixels).toInt() + 1
+        ensureColumnArrays(numCols + 2)
+
+        val halfStep = stepPixels * 0.5f
 
         for (col in 0 until numCols) {
             val screenX = col * stepPixels
@@ -917,7 +950,18 @@ private fun DrawScope.drawDetailedScrollingWaveform(
             val tStartMs = sampleCenterMs - (halfStep * msPerPixel)
             val tEndMs = sampleCenterMs + (halfStep * msPerPixel)
 
-            if (tEndMs < 0f || tStartMs > durationMs.toFloat()) continue
+            colScreenX[col] = screenX
+
+            if (tEndMs < 0f || tStartMs > durationMs.toFloat()) {
+                colHighTop[col] = 0f
+                colHighBot[col] = 0f
+                colMidTop[col] = 0f
+                colMidBot[col] = 0f
+                colLowTop[col] = 0f
+                colLowBot[col] = 0f
+                colIsTransient[col] = false
+                continue
+            }
 
             val bStart = (tStartMs / msPerBin).toInt().coerceIn(0, totalBins - 1)
             val bEnd = (tEndMs / msPerBin).toInt().coerceIn(0, totalBins - 1)
@@ -927,14 +971,16 @@ private fun DrawScope.drawDetailedScrollingWaveform(
             var low: Float
             var mid: Float
             var high: Float
+            var rmsVal: Float
 
             if (bStart == bEnd) {
-                // High zoom: Individual bin resolution
+                // High zoom: Direct bin resolution
                 peak = peaks[bStart]
-                rawMinPeak = if (hasMinPeaks) kotlin.math.abs(minPeaks[bStart]) else peak
+                rawMinPeak = if (hasMinPeaks) abs(minPeaks[bStart]) else peak
                 low = lowBand[bStart]
                 mid = midBand[bStart]
                 high = highBand[bStart]
+                rmsVal = if (waveformData.rms.isNotEmpty() && bStart < waveformData.rms.size) waveformData.rms[bStart] else (peak * 0.70f)
             } else {
                 // Multiresolution peak envelope preservation: find peak values across bin range
                 val firstB = min(bStart, bEnd)
@@ -944,10 +990,11 @@ private fun DrawScope.drawDetailedScrollingWaveform(
                 low = 0.0f
                 mid = 0.0f
                 high = 0.0f
+                rmsVal = 0.0f
                 for (b in firstB..lastB) {
                     val p = peaks[b]
                     if (p > peak) peak = p
-                    val mp = if (hasMinPeaks) kotlin.math.abs(minPeaks[b]) else p
+                    val mp = if (hasMinPeaks) abs(minPeaks[b]) else p
                     if (mp > rawMinPeak) rawMinPeak = mp
                     val l = lowBand[b]
                     if (l > low) low = l
@@ -955,166 +1002,251 @@ private fun DrawScope.drawDetailedScrollingWaveform(
                     if (m > mid) mid = m
                     val h = highBand[b]
                     if (h > high) high = h
-                }
-            }
-
-            // Safe effective negative peak: supports bipolar signals and safely mirrors legacy/unipolar data
-            val effectiveMinPeak = if (rawMinPeak < 0.008f && peak >= 0.008f) {
-                peak * 0.92f
-            } else {
-                rawMinPeak
-            }
-
-            val isPast = sampleCenterMs < currentPositionMs
-            val alpha = if (isPast) 0.65f else 1.0f
-
-            val peakTop = if (peak < 0.008f) 0.5f else (peak * maxPeakHeight).coerceAtLeast(1.0f)
-            val midTop = min(peakTop, (mid * maxPeakHeight * 0.88f).coerceAtLeast(0.5f))
-            val lowTop = min(midTop, (low * maxPeakHeight * 0.65f).coerceAtLeast(0.5f))
-
-            // Frequency colors
-            val highColor = when (proVariant) {
-                ProDarkVariant.BLACK_WHITE -> {
-                    if (high > 0.60f) Color(0xFFFFFFFF).copy(alpha = alpha) else Color(0xFFE4E4E7).copy(alpha = alpha * 0.90f)
-                }
-                ProDarkVariant.BLACK_RED -> {
-                    if (high > 0.60f) Color(0xFFFFFFFF).copy(alpha = alpha) else Color(0xFFD4D4D8).copy(alpha = alpha * 0.90f)
-                }
-                null -> {
-                    if (is3BandProColoring) {
-                        Color(0xFF00E5FF).copy(alpha = alpha)
-                    } else {
-                        if (high > 0.60f) Color(0xFF00FFFF).copy(alpha = alpha) else Color(0xFF00C8FF).copy(alpha = alpha * 0.90f)
+                    if (waveformData.rms.isNotEmpty() && b < waveformData.rms.size) {
+                        val r = waveformData.rms[b]
+                        if (r > rmsVal) rmsVal = r
                     }
                 }
             }
 
-            val midColor = when (proVariant) {
-                ProDarkVariant.BLACK_WHITE -> {
-                    if (mid > 0.60f) Color(0xFFD4D4D8).copy(alpha = alpha * 0.95f) else Color(0xFFA1A1AA).copy(alpha = alpha * 0.85f)
-                }
-                ProDarkVariant.BLACK_RED -> {
-                    if (mid > 0.60f) Color(0xFFB7AAAC).copy(alpha = alpha * 0.95f) else Color(0xFF817477).copy(alpha = alpha * 0.85f)
-                }
-                null -> {
-                    if (is3BandProColoring) {
-                        Color(0xFFFFF6D6).copy(alpha = alpha * 0.95f)
-                    } else {
-                        Color(0xFF30D158).copy(alpha = alpha * 0.95f) // Green in RGB mode
-                    }
+            val effectiveMinPeak = if (rawMinPeak < 0.008f && peak >= 0.008f) peak * 0.92f else rawMinPeak
+
+            // Dynamic headroom scaling:
+            // High-energy masters retain 10-15% headroom at the top/bottom so dynamic transient spikes punch out clearly.
+            val peakTop = if (peak < 0.005f) 0.5f else {
+                val comp = (peak * 0.82f + (peak * peak) * 0.14f).coerceIn(0.0f, 0.95f)
+                (comp * maxPeakHeight).coerceAtLeast(0.5f)
+            }
+            val peakBot = if (isHalf) 0f else {
+                if (effectiveMinPeak < 0.005f) 0.5f else {
+                    val comp = (effectiveMinPeak * 0.82f + (effectiveMinPeak * effectiveMinPeak) * 0.14f).coerceIn(0.0f, 0.95f)
+                    (comp * maxPeakHeight).coerceAtLeast(0.5f)
                 }
             }
 
-            val bassColor = when (proVariant) {
-                ProDarkVariant.BLACK_WHITE -> {
-                    if (low > 0.65f) Color(0xFFA1A1AA).copy(alpha = alpha) else Color(0xFF71717A).copy(alpha = alpha * 0.92f)
-                }
-                ProDarkVariant.BLACK_RED -> {
-                    if (low > 0.65f) BloodRedPrimary.copy(alpha = alpha) else BloodRedPrimary.copy(alpha = alpha * 0.75f)
-                }
-                null -> {
-                    if (is3BandProColoring) {
-                        Color(0xFFFF6600).copy(alpha = alpha)
-                    } else {
-                        Color(0xFFFF3B30).copy(alpha = alpha) // Red in RGB mode
-                    }
+            // Mid Layer: Melodic, vocal, and snare body (fills inside High peak envelope)
+            val midVal = (mid * 0.82f + rmsVal * 0.18f).coerceIn(0f, 1f)
+            val midTop = if (peakTop <= 0.8f) 0.5f else {
+                val comp = (midVal * 0.76f + (midVal * midVal) * 0.12f).coerceIn(0.0f, 0.84f)
+                min(peakTop * 0.90f, (comp * maxPeakHeight).coerceAtLeast(0.5f))
+            }
+            val midBot = if (isHalf) 0f else {
+                if (peakBot <= 0.8f) 0.5f else {
+                    val comp = (midVal * 0.76f + (midVal * midVal) * 0.12f).coerceIn(0.0f, 0.84f)
+                    min(peakBot * 0.90f, (comp * maxPeakHeight).coerceAtLeast(0.5f))
                 }
             }
 
-            if (isHalf) {
-                // HALF MODE: Single-sided upward peaks rising from bottom baseline
-                // Layer 1: Outer Highs
-                drawLine(
-                    color = highColor,
-                    start = Offset(screenX, baselineY - peakTop),
-                    end = Offset(screenX, baselineY),
-                    strokeWidth = strokeW
-                )
-
-                // Layer 2: Mids Melodic / Vocal Body
-                if (midTop > 0.8f) {
-                    drawLine(
-                        color = midColor,
-                        start = Offset(screenX, baselineY - midTop),
-                        end = Offset(screenX, baselineY),
-                        strokeWidth = strokeW
-                    )
+            // Low Layer: Bass punch & sub-kick core (fills inside Mid envelope)
+            val lowTop = if (midTop <= 0.8f) 0.5f else {
+                val comp = (low * 0.70f + (low * low) * 0.12f).coerceIn(0.0f, 0.68f)
+                min(midTop * 0.85f, (comp * maxPeakHeight).coerceAtLeast(0.5f))
+            }
+            val lowBot = if (isHalf) 0f else {
+                if (midBot <= 0.8f) 0.5f else {
+                    val comp = (low * 0.70f + (low * low) * 0.12f).coerceIn(0.0f, 0.68f)
+                    min(midBot * 0.85f, (comp * maxPeakHeight).coerceAtLeast(0.5f))
                 }
+            }
 
-                // Layer 3: Inner Bass / Kick Core
-                if (lowTop > 0.8f) {
-                    drawLine(
-                        color = bassColor,
-                        start = Offset(screenX, baselineY - lowTop),
-                        end = Offset(screenX, baselineY),
-                        strokeWidth = strokeW
-                    )
-                }
+            colHighTop[col] = peakTop
+            colHighBot[col] = peakBot
+            colMidTop[col] = midTop
+            colMidBot[col] = midBot
+            colLowTop[col] = lowTop
+            colLowBot[col] = lowBot
+            colIsTransient[col] = (high > 0.52f && (peak - rmsVal) > 0.10f && peak > 0.30f)
+        }
 
-                // Sharp transient diamond tip for prominent percussion hits
-                if (high > 0.68f && peak > 0.35f) {
-                    val diamondColor = if (proVariant == ProDarkVariant.BLACK_RED) {
-                        BloodRedPrimary.copy(alpha = alpha * 0.95f)
-                    } else {
-                        Color.White.copy(alpha = alpha * 0.95f)
+        val centerCol = (centerX / stepPixels).toInt().coerceIn(0, numCols - 1)
+
+        // Construct continuous antialiased ribbons for Past (played) and Future (upcoming) audio
+        // Past Side (0 .. centerCol)
+        detailedHighPastPath.reset()
+        detailedMidPastPath.reset()
+        detailedLowPastPath.reset()
+
+        if (isHalf) {
+            // Half mode: upward from baselineY
+            detailedHighPastPath.moveTo(colScreenX[0], baselineY)
+            detailedMidPastPath.moveTo(colScreenX[0], baselineY)
+            detailedLowPastPath.moveTo(colScreenX[0], baselineY)
+
+            for (i in 0..centerCol) {
+                val sx = colScreenX[i]
+                detailedHighPastPath.lineTo(sx, baselineY - colHighTop[i])
+                detailedMidPastPath.lineTo(sx, baselineY - colMidTop[i])
+                detailedLowPastPath.lineTo(sx, baselineY - colLowTop[i])
+            }
+            detailedHighPastPath.lineTo(colScreenX[centerCol], baselineY)
+            detailedMidPastPath.lineTo(colScreenX[centerCol], baselineY)
+            detailedLowPastPath.lineTo(colScreenX[centerCol], baselineY)
+
+            detailedHighPastPath.close()
+            detailedMidPastPath.close()
+            detailedLowPastPath.close()
+        } else {
+            // Full mode: bipolar centered on centerY
+            detailedHighPastPath.moveTo(colScreenX[0], centerY - colHighTop[0])
+            detailedMidPastPath.moveTo(colScreenX[0], centerY - colMidTop[0])
+            detailedLowPastPath.moveTo(colScreenX[0], centerY - colLowTop[0])
+
+            for (i in 1..centerCol) {
+                val sx = colScreenX[i]
+                detailedHighPastPath.lineTo(sx, centerY - colHighTop[i])
+                detailedMidPastPath.lineTo(sx, centerY - colMidTop[i])
+                detailedLowPastPath.lineTo(sx, centerY - colLowTop[i])
+            }
+
+            detailedHighPastPath.lineTo(colScreenX[centerCol], centerY + colHighBot[centerCol])
+            detailedMidPastPath.lineTo(colScreenX[centerCol], centerY + colMidBot[centerCol])
+            detailedLowPastPath.lineTo(colScreenX[centerCol], centerY + colLowBot[centerCol])
+
+            for (i in centerCol - 1 downTo 0) {
+                val sx = colScreenX[i]
+                detailedHighPastPath.lineTo(sx, centerY + colHighBot[i])
+                detailedMidPastPath.lineTo(sx, centerY + colMidBot[i])
+                detailedLowPastPath.lineTo(sx, centerY + colLowBot[i])
+            }
+
+            detailedHighPastPath.close()
+            detailedMidPastPath.close()
+            detailedLowPastPath.close()
+        }
+
+        // Future Side (centerCol .. numCols - 1)
+        detailedHighFuturePath.reset()
+        detailedMidFuturePath.reset()
+        detailedLowFuturePath.reset()
+
+        if (isHalf) {
+            detailedHighFuturePath.moveTo(colScreenX[centerCol], baselineY)
+            detailedMidFuturePath.moveTo(colScreenX[centerCol], baselineY)
+            detailedLowFuturePath.moveTo(colScreenX[centerCol], baselineY)
+
+            for (i in centerCol until numCols) {
+                val sx = colScreenX[i]
+                detailedHighFuturePath.lineTo(sx, baselineY - colHighTop[i])
+                detailedMidFuturePath.lineTo(sx, baselineY - colMidTop[i])
+                detailedLowFuturePath.lineTo(sx, baselineY - colLowTop[i])
+            }
+            detailedHighFuturePath.lineTo(colScreenX[numCols - 1], baselineY)
+            detailedMidFuturePath.lineTo(colScreenX[numCols - 1], baselineY)
+            detailedLowFuturePath.lineTo(colScreenX[numCols - 1], baselineY)
+
+            detailedHighFuturePath.close()
+            detailedMidFuturePath.close()
+            detailedLowFuturePath.close()
+        } else {
+            detailedHighFuturePath.moveTo(colScreenX[centerCol], centerY - colHighTop[centerCol])
+            detailedMidFuturePath.moveTo(colScreenX[centerCol], centerY - colMidTop[centerCol])
+            detailedLowFuturePath.moveTo(colScreenX[centerCol], centerY - colLowTop[centerCol])
+
+            for (i in centerCol + 1 until numCols) {
+                val sx = colScreenX[i]
+                detailedHighFuturePath.lineTo(sx, centerY - colHighTop[i])
+                detailedMidFuturePath.lineTo(sx, centerY - colMidTop[i])
+                detailedLowFuturePath.lineTo(sx, centerY - colLowTop[i])
+            }
+
+            detailedHighFuturePath.lineTo(colScreenX[numCols - 1], centerY + colHighBot[numCols - 1])
+            detailedMidFuturePath.lineTo(colScreenX[numCols - 1], centerY + colMidBot[numCols - 1])
+            detailedLowFuturePath.lineTo(colScreenX[numCols - 1], centerY + colLowBot[numCols - 1])
+
+            for (i in numCols - 2 downTo centerCol) {
+                val sx = colScreenX[i]
+                detailedHighFuturePath.lineTo(sx, centerY + colHighBot[i])
+                detailedMidFuturePath.lineTo(sx, centerY + colMidBot[i])
+                detailedLowFuturePath.lineTo(sx, centerY + colLowBot[i])
+            }
+
+            detailedHighFuturePath.close()
+            detailedMidFuturePath.close()
+            detailedLowFuturePath.close()
+        }
+
+        // Color definitions for spectral bands
+        val highPastColor = when (proVariant) {
+            ProDarkVariant.BLACK_WHITE -> Color(0xFFFFFFFF).copy(alpha = 0.65f)
+            ProDarkVariant.BLACK_RED -> Color(0xFFFFFFFF).copy(alpha = 0.65f)
+            null -> if (is3BandProColoring) Color(0xFF00E5FF).copy(alpha = 0.68f) else Color(0xFF00C8FF).copy(alpha = 0.68f)
+        }
+        val highFutureColor = when (proVariant) {
+            ProDarkVariant.BLACK_WHITE -> Color(0xFFFFFFFF).copy(alpha = 1.0f)
+            ProDarkVariant.BLACK_RED -> Color(0xFFFFFFFF).copy(alpha = 1.0f)
+            null -> if (is3BandProColoring) Color(0xFF00E5FF) else Color(0xFF00C8FF)
+        }
+
+        val midPastColor = when (proVariant) {
+            ProDarkVariant.BLACK_WHITE -> Color(0xFFD4D4D8).copy(alpha = 0.65f)
+            ProDarkVariant.BLACK_RED -> Color(0xFFB7AAAC).copy(alpha = 0.65f)
+            null -> if (is3BandProColoring) Color(0xFFFFF6D6).copy(alpha = 0.70f) else Color(0xFF30D158).copy(alpha = 0.70f)
+        }
+        val midFutureColor = when (proVariant) {
+            ProDarkVariant.BLACK_WHITE -> Color(0xFFD4D4D8).copy(alpha = 0.95f)
+            ProDarkVariant.BLACK_RED -> Color(0xFFB7AAAC).copy(alpha = 0.95f)
+            null -> if (is3BandProColoring) Color(0xFFFFF6D6).copy(alpha = 0.95f) else Color(0xFF30D158).copy(alpha = 0.95f)
+        }
+
+        val lowPastColor = when (proVariant) {
+            ProDarkVariant.BLACK_WHITE -> Color(0xFFA1A1AA).copy(alpha = 0.65f)
+            ProDarkVariant.BLACK_RED -> BloodRedPrimary.copy(alpha = 0.65f)
+            null -> if (is3BandProColoring) Color(0xFFFF6600).copy(alpha = 0.72f) else Color(0xFFFF3B30).copy(alpha = 0.72f)
+        }
+        val lowFutureColor = when (proVariant) {
+            ProDarkVariant.BLACK_WHITE -> Color(0xFFA1A1AA).copy(alpha = 0.95f)
+            ProDarkVariant.BLACK_RED -> BloodRedPrimary.copy(alpha = 0.95f)
+            null -> if (is3BandProColoring) Color(0xFFFF6600).copy(alpha = 0.95f) else Color(0xFFFF3B30).copy(alpha = 0.95f)
+        }
+
+        // Draw Past (played) audio ribbons
+        drawPath(path = detailedHighPastPath, color = highPastColor)
+        drawPath(path = detailedMidPastPath, color = midPastColor)
+        drawPath(path = detailedLowPastPath, color = lowPastColor)
+
+        // Draw Future (upcoming) audio ribbons
+        drawPath(path = detailedHighFuturePath, color = highFutureColor)
+        drawPath(path = detailedMidFuturePath, color = midFutureColor)
+        drawPath(path = detailedLowFuturePath, color = lowFutureColor)
+
+        // Draw crisp transient accents at percussion and transient hits
+        val transientAccentColor = if (proVariant == ProDarkVariant.BLACK_RED) BloodRedPrimary else Color.White
+        for (i in 0 until numCols) {
+            if (colIsTransient[i]) {
+                val sx = colScreenX[i]
+                val tAlpha = if (sx < centerX) 0.50f else 0.85f
+                if (isHalf) {
+                    val tTop = baselineY - colHighTop[i]
+                    val tBot = baselineY - colMidTop[i]
+                    if (tBot - tTop > 2f) {
+                        drawLine(
+                            color = transientAccentColor.copy(alpha = tAlpha),
+                            start = Offset(sx, tTop),
+                            end = Offset(sx, tBot),
+                            strokeWidth = 1.0f
+                        )
                     }
-                    drawCircle(
-                        color = diamondColor,
-                        radius = 0.9f,
-                        center = Offset(screenX, baselineY - peakTop)
-                    )
-                }
-            } else {
-                // FULL MODE: Vertically centred bipolar waveform across center axis
-                val peakBot = if (effectiveMinPeak < 0.008f) 0.5f else (effectiveMinPeak * maxPeakHeight).coerceAtLeast(1.0f)
-                val midBot = min(peakBot, (mid * maxPeakHeight * 0.88f).coerceAtLeast(0.5f))
-                val lowBot = min(midBot, (low * maxPeakHeight * 0.65f).coerceAtLeast(0.5f))
-
-                // Layer 1: Outer Highs (Cyan transients)
-                drawLine(
-                    color = highColor,
-                    start = Offset(screenX, centerY - peakTop),
-                    end = Offset(screenX, centerY + peakBot),
-                    strokeWidth = strokeW
-                )
-
-                // Layer 2: Mids Melodic / Vocal Body
-                if (midTop > 0.8f || midBot > 0.8f) {
-                    drawLine(
-                        color = midColor,
-                        start = Offset(screenX, centerY - midTop),
-                        end = Offset(screenX, centerY + midBot),
-                        strokeWidth = strokeW
-                    )
-                }
-
-                // Layer 3: Inner Bass / Kick Core
-                if (lowTop > 0.8f || lowBot > 0.8f) {
-                    drawLine(
-                        color = bassColor,
-                        start = Offset(screenX, centerY - lowTop),
-                        end = Offset(screenX, centerY + lowBot),
-                        strokeWidth = strokeW
-                    )
-                }
-
-                // Sharp transient diamond tips
-                if (high > 0.68f && peak > 0.35f) {
-                    val diamondColor = if (proVariant == ProDarkVariant.BLACK_RED) {
-                        BloodRedPrimary.copy(alpha = alpha * 0.95f)
-                    } else {
-                        Color.White.copy(alpha = alpha * 0.95f)
+                } else {
+                    val tTop = centerY - colHighTop[i]
+                    val tMidTop = centerY - colMidTop[i]
+                    if (tMidTop - tTop > 2f) {
+                        drawLine(
+                            color = transientAccentColor.copy(alpha = tAlpha),
+                            start = Offset(sx, tTop),
+                            end = Offset(sx, tMidTop),
+                            strokeWidth = 1.0f
+                        )
                     }
-                    drawCircle(
-                        color = diamondColor,
-                        radius = 0.9f,
-                        center = Offset(screenX, centerY - peakTop)
-                    )
-                    drawCircle(
-                        color = diamondColor,
-                        radius = 0.9f,
-                        center = Offset(screenX, centerY + peakBot)
-                    )
+                    val tBot = centerY + colHighBot[i]
+                    val tMidBot = centerY + colMidBot[i]
+                    if (tBot - tMidBot > 2f) {
+                        drawLine(
+                            color = transientAccentColor.copy(alpha = tAlpha),
+                            start = Offset(sx, tMidBot),
+                            end = Offset(sx, tBot),
+                            strokeWidth = 1.0f
+                        )
+                    }
                 }
             }
         }
@@ -1283,7 +1415,10 @@ private fun FullTrackOverviewScrubber(
                 val lowBand = waveformData.lowBand
                 val midBand = waveformData.midBand
                 val highBand = waveformData.highBand
-                val step = max(1f, width / peaks.size.toFloat())
+                val totalOverviewBins = peaks.size
+                val numOverviewCols = min(totalOverviewBins, width.toInt().coerceAtLeast(1))
+                val binsPerCol = totalOverviewBins.toFloat() / numOverviewCols.toFloat()
+                val step = width / numOverviewCols.toFloat()
                 val progressFrac = if (durationMs > 0) (currentPositionFloatMs / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
                 val playheadX = progressFrac * width
 
@@ -1296,12 +1431,25 @@ private fun FullTrackOverviewScrubber(
 
                 val colWidth = max(1f, step - 0.2f)
 
-                for (i in peaks.indices) {
-                    val x = i * step
-                    val peak = peaks[i].coerceIn(0f, 1f)
-                    val low = lowBand.getOrElse(i) { 0f }.coerceIn(0f, 1f)
-                    val mid = midBand.getOrElse(i) { 0f }.coerceIn(0f, 1f)
-                    val high = highBand.getOrElse(i) { 0f }.coerceIn(0f, 1f)
+                for (col in 0 until numOverviewCols) {
+                    val x = col * step
+                    val bStart = (col * binsPerCol).toInt().coerceIn(0, totalOverviewBins - 1)
+                    val bEnd = ((col + 1) * binsPerCol).toInt().coerceIn(0, totalOverviewBins - 1)
+
+                    var peak = 0f
+                    var low = 0f
+                    var mid = 0f
+                    var high = 0f
+                    for (b in bStart..bEnd) {
+                        val p = peaks[b]
+                        if (p > peak) peak = p
+                        val l = lowBand.getOrElse(b) { 0f }
+                        if (l > low) low = l
+                        val m = midBand.getOrElse(b) { 0f }
+                        if (m > mid) mid = m
+                        val h = highBand.getOrElse(b) { 0f }
+                        if (h > high) high = h
+                    }
 
                     val barH = if (peak < 0.012f) 0.5f else (peak * (centerY * 0.88f)).coerceAtLeast(1.0f)
                     val isPast = x <= playheadX

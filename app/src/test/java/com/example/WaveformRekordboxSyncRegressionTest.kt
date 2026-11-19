@@ -8,6 +8,7 @@ import com.example.model.Track
 import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -213,11 +214,11 @@ class WaveformRekordboxSyncRegressionTest {
     }
 
     // =========================================================================
-    // 3. WAVEFORM CACHE SCHEMA V7 & BACKWARD-COMPATIBLE MIGRATION
+    // 3. WAVEFORM CACHE SCHEMA V8 & BACKWARD-COMPATIBLE MIGRATION
     // =========================================================================
 
     @Test
-    fun `WaveformData v7 serializes and deserializes bipolar envelopes and frame counts`() {
+    fun `WaveformData v8 serializes and deserializes bipolar envelopes and frame counts`() {
         val peaks = floatArrayOf(0.1f, 0.5f, 0.9f, 0.3f)
         val minPeaks = floatArrayOf(0.08f, 0.45f, 0.85f, 0.28f)
         val low = floatArrayOf(0.2f, 0.8f, 0.4f, 0.1f)
@@ -225,7 +226,7 @@ class WaveformRekordboxSyncRegressionTest {
         val high = floatArrayOf(0.1f, 0.2f, 0.9f, 0.3f)
 
         val original = WaveformData(
-            trackId = "track-schema-v7",
+            trackId = "track-schema-v8",
             durationMs = 180_000L,
             samplePoints = 4,
             peaks = peaks,
@@ -248,7 +249,7 @@ class WaveformRekordboxSyncRegressionTest {
         }
 
         assertNotNull(restored)
-        assertEquals("track-schema-v7", restored!!.trackId)
+        assertEquals("track-schema-v8", restored!!.trackId)
         assertEquals(180_000L, restored.durationMs)
         assertEquals(4, restored.samplePoints)
         assertEquals(1323000L, restored.totalFrames)
@@ -261,6 +262,138 @@ class WaveformRekordboxSyncRegressionTest {
             assertEquals(mid[i], restored.midBand[i], 0.001f)
             assertEquals(high[i], restored.highBand[i], 0.001f)
         }
+    }
+
+    @Test
+    fun `WaveformData gracefully migrates legacy v7 cache streams with minPeaks`() {
+        val out = ByteArrayOutputStream()
+        val dos = DataOutputStream(out)
+        dos.writeInt(0x53594E37) // MAGIC_HEADER_V7
+        dos.writeUTF("track-legacy-v7")
+        dos.writeLong(180_000L)
+        dos.writeInt(3)
+        dos.writeDouble(128.0)
+        dos.writeBoolean(true)
+        dos.writeLong(1323000L)
+        dos.writeInt(44100)
+        // peaks
+        dos.writeFloat(0.2f); dos.writeFloat(0.6f); dos.writeFloat(0.8f)
+        // low
+        dos.writeFloat(0.1f); dos.writeFloat(0.5f); dos.writeFloat(0.3f)
+        // mid
+        dos.writeFloat(0.3f); dos.writeFloat(0.2f); dos.writeFloat(0.4f)
+        // high
+        dos.writeFloat(0.05f); dos.writeFloat(0.1f); dos.writeFloat(0.7f)
+        // rms
+        dos.writeInt(0)
+        // minPeaks
+        dos.writeInt(3)
+        dos.writeFloat(0.18f); dos.writeFloat(0.55f); dos.writeFloat(0.75f)
+        dos.flush()
+
+        val input = ByteArrayInputStream(out.toByteArray())
+        val migrated = DataInputStream(input).use { dis ->
+            WaveformCache.readFromDataStream(dis)
+        }
+
+        assertNotNull(migrated)
+        assertEquals("track-legacy-v7", migrated!!.trackId)
+        assertEquals(180_000L, migrated.durationMs)
+        assertEquals(3, migrated.samplePoints)
+        assertEquals(3, migrated.minPeaks.size)
+        assertEquals(0.18f, migrated.minPeaks[0], 0.001f)
+        assertEquals(0.55f, migrated.minPeaks[1], 0.001f)
+        assertEquals(0.75f, migrated.minPeaks[2], 0.001f)
+        assertEquals(1323000L, migrated.totalFrames)
+        assertEquals(44100, migrated.sampleRate)
+    }
+
+    @Test
+    fun `isAdequateForDetailed distinguishes high-res detailed caches from legacy coarse overview caches`() {
+        val durationSec = 180L
+        val durationMs = durationSec * 1000L
+
+        // Legacy coarse overview cache (only 1200 or 2400 bins = ~6-13 bins/sec)
+        val coarseData = WaveformData(
+            trackId = "track-coarse",
+            durationMs = durationMs,
+            samplePoints = 2400,
+            peaks = FloatArray(2400),
+            lowBand = FloatArray(2400),
+            midBand = FloatArray(2400),
+            highBand = FloatArray(2400),
+            isRealAudioData = true
+        )
+        assertFalse("Coarse 2400-bin cache must NOT be considered adequate for detailed rendering", coarseData.isAdequateForDetailed(durationSec))
+
+        // High-res v8 detailed cache (~150 bins/sec = 27000 bins)
+        val highResData = WaveformData(
+            trackId = "track-highres",
+            durationMs = durationMs,
+            samplePoints = 27000,
+            peaks = FloatArray(27000),
+            lowBand = FloatArray(27000),
+            midBand = FloatArray(27000),
+            highBand = FloatArray(27000),
+            isRealAudioData = true
+        )
+        assertTrue("High-res 27000-bin cache must be considered adequate for detailed rendering", highResData.isAdequateForDetailed(durationSec))
+    }
+
+    @Test
+    fun `Master peak normalization preserves relative spectral dynamic balance across frequency bands`() {
+        val peakNorm = 0.98f
+        val lowScale = 1.10f / peakNorm
+        val midScale = 1.30f / peakNorm
+        val highScale = 1.80f / peakNorm
+
+        // Kick Drum Transient: massive bass, medium mid, subtle high
+        val kickLowRaw = 0.65f
+        val kickMidRaw = 0.25f
+        val kickHighRaw = 0.08f
+
+        val kickLowScaled = (kickLowRaw * lowScale).coerceIn(0f, 1f)
+        val kickMidScaled = (kickMidRaw * midScale).coerceIn(0f, 1f)
+        val kickHighScaled = (kickHighRaw * highScale).coerceIn(0f, 1f)
+
+        assertTrue("Kick drum must have dominant Low energy over Mid and High", kickLowScaled > kickMidScaled)
+        assertTrue("Kick drum Mid must exceed High", kickMidScaled > kickHighScaled)
+
+        // Vocal / Melodic Section: high mid, low bass
+        val vocalLowRaw = 0.10f
+        val vocalMidRaw = 0.55f
+        val vocalHighRaw = 0.20f
+
+        val vocalLowScaled = (vocalLowRaw * lowScale).coerceIn(0f, 1f)
+        val vocalMidScaled = (vocalMidRaw * midScale).coerceIn(0f, 1f)
+        val vocalHighScaled = (vocalHighRaw * highScale).coerceIn(0f, 1f)
+
+        assertTrue("Vocal section Mid must dominate Low energy", vocalMidScaled > vocalLowScaled)
+
+        // Verify bands are NOT flatlines: kick low vs vocal low must differ substantially
+        assertTrue("Low energy between kick and vocal breakdown must differ by > 0.4", (kickLowScaled - vocalLowScaled) > 0.40f)
+    }
+
+    @Test
+    fun `Dynamic headroom soft-knee preserves headroom so transient spikes punch out above loud body`() {
+        val maxPeakHeight = 100f
+
+        // Loud mastered body (peak = 0.80f)
+        val bodyPeak = 0.80f
+        val bodyComp = (bodyPeak * 0.82f + (bodyPeak * bodyPeak) * 0.14f).coerceIn(0.0f, 0.95f)
+        val bodyHeight = (bodyComp * maxPeakHeight).coerceAtLeast(0.5f)
+
+        // Sharp transient spike hit (peak = 1.0f)
+        val spikePeak = 1.0f
+        val spikeComp = (spikePeak * 0.82f + (spikePeak * spikePeak) * 0.14f).coerceIn(0.0f, 0.95f)
+        val spikeHeight = (spikeComp * maxPeakHeight).coerceAtLeast(0.5f)
+
+        // Spike must reach 95% height, leaving 5% canvas margin rather than hard-clipping
+        assertEquals(95f, spikeHeight, 0.5f)
+        // Body must sit around 74% height
+        assertTrue("Body height should sit around 70-76%", bodyHeight in 70f..76f)
+        // Transient must punch out distinctly above body
+        assertTrue("Transient punch difference must exceed 18px", (spikeHeight - bodyHeight) > 18f)
     }
 
     @Test

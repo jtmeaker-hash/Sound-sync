@@ -218,7 +218,7 @@ object AudioDecoder {
             val totalDurationUs = if (durationUs > 0) durationUs else (track.durationSeconds.coerceAtLeast(10) * 1_000_000L)
             val durationMs = totalDurationUs / 1000L
 
-            val binCount = targetBins.coerceIn(800, 16000)
+            val binCount = targetBins.coerceIn(800, 65536)
 
             // Accumulator arrays for all bins (Memory footprint ~48 KB)
             val maxPeakInBin = FloatArray(binCount)
@@ -407,20 +407,22 @@ object AudioDecoder {
                 }
             }
 
-            // Normalize: quiet sections remain quiet, loud sections hit near 1.0, silence approaches 0.0
+            // Reference master peak normalization with calibrated psychoacoustic band scaling
+            // Preserves relative spectral dynamics: kick drum has heavy bass and modest mid/high,
+            // vocals have strong mid and light bass, hi-hats have crisp high and no bass.
             val peakNorm = if (globalMaxPeak > 0.0001f) globalMaxPeak else 1.0f
-            val lowNorm = if (globalMaxLow > 0.0001f) globalMaxLow else 1.0f
-            val midNorm = if (globalMaxMid > 0.0001f) globalMaxMid else 1.0f
-            val highNorm = if (globalMaxHigh > 0.0001f) globalMaxHigh else 1.0f
-            val rmsNorm = if (globalMaxRms > 0.0001f) globalMaxRms else 1.0f
+            val lowScale = 1.10f / peakNorm
+            val midScale = 1.30f / peakNorm
+            val highScale = 1.80f / peakNorm
+            val rmsScale = 1.0f / peakNorm
 
             for (b in 0 until binCount) {
                 peaks[b] = (peaks[b] / peakNorm).coerceIn(0.0f, 1.0f)
                 minPeaks[b] = (abs(minPeaks[b]) / peakNorm).coerceIn(0.0f, 1.0f)
-                lowBand[b] = (lowBand[b] / lowNorm).coerceIn(0.0f, 1.0f)
-                midBand[b] = (midBand[b] / midNorm).coerceIn(0.0f, 1.0f)
-                highBand[b] = (highBand[b] / highNorm).coerceIn(0.0f, 1.0f)
-                rmsBand[b] = (rmsBand[b] / rmsNorm).coerceIn(0.0f, 1.0f)
+                lowBand[b] = (lowBand[b] * lowScale).coerceIn(0.0f, 1.0f)
+                midBand[b] = (midBand[b] * midScale).coerceIn(0.0f, 1.0f)
+                highBand[b] = (highBand[b] * highScale).coerceIn(0.0f, 1.0f)
+                rmsBand[b] = (rmsBand[b] * rmsScale).coerceIn(0.0f, 1.0f)
             }
 
             val trueDecodedDurationMs = (decodedFrames * 1000L) / sampleRate
@@ -470,7 +472,7 @@ object AudioDecoder {
         targetBins: Int,
         onProgress: (percent: Int) -> Unit
     ): WaveformData? {
-        val binCount = targetBins.coerceIn(800, 16000)
+        val binCount = targetBins.coerceIn(800, 65536)
         val maxPeakInBin = FloatArray(binCount)
         val minPeakInBin = FloatArray(binCount)
         val absPeakInBin = FloatArray(binCount)
@@ -596,19 +598,20 @@ object AudioDecoder {
             }
         }
 
+        // Reference master peak normalization with calibrated psychoacoustic band scaling
         val peakNorm = if (globalMaxPeak > 0f) globalMaxPeak else 1.0f
-        val lowNorm = if (globalMaxLow > 0f) globalMaxLow else 1.0f
-        val midNorm = if (globalMaxMid > 0f) globalMaxMid else 1.0f
-        val highNorm = if (globalMaxHigh > 0f) globalMaxHigh else 1.0f
-        val rmsNorm = if (globalMaxRms > 0f) globalMaxRms else 1.0f
+        val lowScale = 1.10f / peakNorm
+        val midScale = 1.30f / peakNorm
+        val highScale = 1.80f / peakNorm
+        val rmsScale = 1.0f / peakNorm
 
         for (b in 0 until binCount) {
             peaks[b] = (peaks[b] / peakNorm).coerceIn(0.0f, 1.0f)
             minPeaks[b] = (abs(minPeaks[b]) / peakNorm).coerceIn(0.0f, 1.0f)
-            lowBand[b] = (lowBand[b] / lowNorm).coerceIn(0.0f, 1.0f)
-            midBand[b] = (midBand[b] / midNorm).coerceIn(0.0f, 1.0f)
-            highBand[b] = (highBand[b] / highNorm).coerceIn(0.0f, 1.0f)
-            rmsBand[b] = (rmsBand[b] / rmsNorm).coerceIn(0.0f, 1.0f)
+            lowBand[b] = (lowBand[b] * lowScale).coerceIn(0.0f, 1.0f)
+            midBand[b] = (midBand[b] * midScale).coerceIn(0.0f, 1.0f)
+            highBand[b] = (highBand[b] * highScale).coerceIn(0.0f, 1.0f)
+            rmsBand[b] = (rmsBand[b] * rmsScale).coerceIn(0.0f, 1.0f)
         }
 
         val trueDecodedDurationMs = (decodedFrames * 1000L) / sampleRate

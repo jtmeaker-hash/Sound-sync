@@ -39,6 +39,18 @@ data class WaveformData(
     /** Sampling rate of decoded audio */
     val sampleRate: Int = 44100
 ) {
+    /**
+     * Determines whether this cached waveform has adequate resolution (at least ~80 bins/sec)
+     * for high-resolution detailed scrolling rendering without barcode / plateau artifacts.
+     */
+    fun isAdequateForDetailed(durationSec: Long = durationMs / 1000L): Boolean {
+        val dur = if (durationSec > 0) durationSec else (durationMs / 1000L).coerceAtLeast(10)
+        val minBinsRequired = (dur * 80).coerceIn(4000L, 24000L)
+        return samplePoints >= minBinsRequired && isRealAudioData
+    }
+
+    fun isAdequateForDetailed(durationSec: Int): Boolean = isAdequateForDetailed(durationSec.toLong())
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -65,9 +77,10 @@ data class WaveformData(
  */
 object WaveformCache {
     private const val TAG = "WaveformCache"
-    const val WAVEFORM_ANALYSIS_VERSION = 7
+    const val WAVEFORM_ANALYSIS_VERSION = 8
     private const val MAGIC_HEADER_V6 = 0x53594E43 // "SYNC"
     private const val MAGIC_HEADER_V7 = 0x53594E37 // "SYN7"
+    private const val MAGIC_HEADER_V8 = 0x53594E38 // "SYN8"
 
     // Memory LRU Cache (up to 100 waveform objects in RAM ~5MB max)
     private val memoryCache = LruCache<String, WaveformData>(100)
@@ -111,6 +124,7 @@ object WaveformCache {
 
     /**
      * Retrieves waveform data from memory cache, or falls back to fast disk cache.
+     * Prevents low-resolution legacy caches from masquerading as high-res detailed data.
      */
     fun get(cacheKey: String, context: Context? = null): WaveformData? {
         // 1. Check Memory Cache
@@ -124,22 +138,6 @@ object WaveformCache {
             if (diskData != null) {
                 memoryCache.put(cacheKey, diskData)
                 return diskData
-            }
-
-            // Backward compatibility fallback: check for previous version 6 or 5 cache
-            if (cacheKey.contains("_v$WAVEFORM_ANALYSIS_VERSION")) {
-                val v6Key = cacheKey.replace("_v$WAVEFORM_ANALYSIS_VERSION", "_v6")
-                val v6Data = readFromDisk(v6Key, context)
-                if (v6Data != null) {
-                    memoryCache.put(cacheKey, v6Data)
-                    return v6Data
-                }
-                val v5Key = cacheKey.replace("_v$WAVEFORM_ANALYSIS_VERSION", "_v5")
-                val v5Data = readFromDisk(v5Key, context)
-                if (v5Data != null) {
-                    memoryCache.put(cacheKey, v5Data)
-                    return v5Data
-                }
             }
         }
 
@@ -197,7 +195,7 @@ object WaveformCache {
     }
 
     internal fun writeToDataStream(out: DataOutputStream, data: WaveformData) {
-        out.writeInt(MAGIC_HEADER_V7)
+        out.writeInt(MAGIC_HEADER_V8)
         out.writeUTF(data.trackId)
         out.writeLong(data.durationMs)
         out.writeInt(data.samplePoints)
@@ -223,8 +221,8 @@ object WaveformCache {
 
     internal fun readFromDataStream(inStream: DataInputStream): WaveformData? {
         val magic = inStream.readInt()
-        if (magic != MAGIC_HEADER_V7 && magic != MAGIC_HEADER_V6) return null
-        val isV7 = (magic == MAGIC_HEADER_V7)
+        if (magic != MAGIC_HEADER_V8 && magic != MAGIC_HEADER_V7 && magic != MAGIC_HEADER_V6) return null
+        val isV7OrV8 = (magic == MAGIC_HEADER_V8 || magic == MAGIC_HEADER_V7)
 
         val trackId = inStream.readUTF()
         val durationMs = inStream.readLong()
@@ -232,8 +230,8 @@ object WaveformCache {
         val bpm = inStream.readDouble()
         val isReal = inStream.readBoolean()
 
-        val totalFrames = if (isV7) inStream.readLong() else 0L
-        val sampleRate = if (isV7) inStream.readInt() else 44100
+        val totalFrames = if (isV7OrV8) inStream.readLong() else 0L
+        val sampleRate = if (isV7OrV8) inStream.readInt() else 44100
 
         val peaks = FloatArray(samplePoints) { inStream.readFloat() }
         val lowBand = FloatArray(samplePoints) { inStream.readFloat() }
@@ -247,7 +245,7 @@ object WaveformCache {
             } else FloatArray(0)
         } else FloatArray(0)
 
-        val minPeaks = if (isV7 && inStream.available() >= 4) {
+        val minPeaks = if (isV7OrV8 && inStream.available() >= 4) {
             val minCount = inStream.readInt()
             if (minCount in 1..samplePoints && inStream.available() >= minCount * 4) {
                 FloatArray(minCount) { inStream.readFloat() }
