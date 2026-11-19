@@ -3,6 +3,7 @@ package com.example.state
 import com.example.carmode.CarDisplayMode
 import com.example.model.ExplorerSortOption
 import com.example.model.Track
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import com.example.player.QueueRepeatMode
 import com.example.player.SmartContinueMode
@@ -65,6 +66,7 @@ data class PersistentAppearanceSession(
     val proDarkVariant: ProDarkVariant = ProDarkVariant.BLACK_WHITE,
     val libraryDensity: ProLibraryDensity = ProLibraryDensity.COMPACT,
     val waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
+    val waveformShape: WaveformShape = WaveformShape.FULL,
     val isTrackGridView: Boolean = false,
     val isCarModeActive: Boolean = false,
     val carModeKeepAwake: Boolean = true,

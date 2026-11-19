@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import com.example.ui.RepeatMode
 import com.example.ui.theme.DeckACyan
@@ -64,6 +65,8 @@ fun PlaybackSettingsScreen(
     onToggleShuffle: () -> Unit,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onSetWaveformStyle: (WaveformStyle) -> Unit = {},
+    waveformShape: WaveformShape = WaveformShape.FULL,
+    onSetWaveformShape: (WaveformShape) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -337,6 +340,106 @@ fun PlaybackSettingsScreen(
                                 )
                                 Text(
                                     "Classic chunky pixel-style visual aesthetic",
+                                    color = TextSecondary,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Waveform Display Shape (Half vs Full) Card
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("playback_waveform_shape_card"),
+                colors = CardDefaults.cardColors(containerColor = DjSurfaceDark),
+                shape = RoundedCornerShape(10.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = "Waveform Shape",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = "Choose between Full bipolar centred waveform or Half single-sided waveform rising from the bottom baseline",
+                            color = TextMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Full shape button
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSetWaveformShape(WaveformShape.FULL) }
+                                .testTag("playback_waveform_full"),
+                            color = if (waveformShape == WaveformShape.FULL) DeckACyan.copy(alpha = 0.16f) else DjSurfaceElevated,
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (waveformShape == WaveformShape.FULL) DeckACyan else DjSurfaceBorder
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Full",
+                                    color = if (waveformShape == WaveformShape.FULL) DeckACyan else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    "Vertically centred bipolar waveform utilizing upper and lower halves",
+                                    color = TextSecondary,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+
+                        // Half shape button
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSetWaveformShape(WaveformShape.HALF) }
+                                .testTag("playback_waveform_half"),
+                            color = if (waveformShape == WaveformShape.HALF) NeonAmber.copy(alpha = 0.16f) else DjSurfaceElevated,
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (waveformShape == WaveformShape.HALF) NeonAmber else DjSurfaceBorder
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Half",
+                                    color = if (waveformShape == WaveformShape.HALF) NeonAmber else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    "Single-sided waveform rising upward from bottom baseline",
                                     color = TextSecondary,
                                     fontSize = 10.sp
                                 )

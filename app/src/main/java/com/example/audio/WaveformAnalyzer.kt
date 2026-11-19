@@ -18,8 +18,8 @@ import kotlin.math.sin
 object WaveformAnalyzer {
 
     private const val TAG = "WaveformAnalyzer"
-    private const val MIN_BINS = 1200
-    private const val MAX_BINS = 7200
+    private const val MIN_BINS = 2400
+    private const val MAX_BINS = 16000
 
     /**
      * Asynchronously generates waveform peak data for [track].
@@ -43,7 +43,7 @@ object WaveformAnalyzer {
         onProgress(10)
 
         val durationSec = track.durationSeconds.coerceAtLeast(10)
-        val targetBins = (durationSec * 32).coerceIn(MIN_BINS, MAX_BINS)
+        val targetBins = (durationSec * 64).coerceIn(MIN_BINS, MAX_BINS)
         val durationMs = durationSec * 1000L
 
         try {
@@ -145,7 +145,7 @@ object WaveformAnalyzer {
         }
 
         val rms = FloatArray(binCount) { i -> (peaks[i] * 0.70f).coerceIn(0f, 1f) }
-        val minPeaks = FloatArray(binCount) { i -> -peaks[i] }
+        val minPeaks = FloatArray(binCount) { i -> peaks[i] }
 
         return WaveformData(
             trackId = trackId,

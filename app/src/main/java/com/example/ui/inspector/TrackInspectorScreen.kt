@@ -46,6 +46,7 @@ import com.example.data.TrackPlaybackStats
 import com.example.model.AudioQualityRating
 import com.example.model.SpectrogramAnalysis
 import com.example.model.Track
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import com.example.metadata.MetadataFileWriteQueue
 import com.example.metadata.MetadataWriteResult
@@ -426,6 +427,8 @@ fun TrackInspectorScreen(
                 currentPositionProvider = if (isPlayingThisTrack) { { currentPositionState.value } } else { { 0L } },
                 waveformStyle = viewModel.waveformStyle.collectAsState().value,
                 onToggleWaveformStyle = { viewModel.toggleWaveformStyle() },
+                waveformShape = viewModel.waveformShape.collectAsState().value,
+                onToggleWaveformShape = { viewModel.toggleWaveformShape() },
                 onSeekToMs = { targetMs ->
                     if (isPlayingThisTrack) {
                         audioEngine.seekToMs(targetMs)
@@ -1335,6 +1338,8 @@ private fun InspectorWaveformSection(
     currentPositionProvider: () -> Long,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onToggleWaveformStyle: (() -> Unit)? = null,
+    waveformShape: WaveformShape = WaveformShape.FULL,
+    onToggleWaveformShape: (() -> Unit)? = null,
     onSeekToMs: (Long) -> Unit,
     onReanalyse: () -> Unit
 ) {
@@ -1373,6 +1378,8 @@ private fun InspectorWaveformSection(
                     isLoading = isLoading,
                     waveformStyle = waveformStyle,
                     onToggleWaveformStyle = onToggleWaveformStyle,
+                    waveformShape = waveformShape,
+                    onToggleWaveformShape = onToggleWaveformShape,
                     modifier = Modifier.fillMaxSize()
                 )
             }

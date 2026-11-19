@@ -7,6 +7,7 @@ import com.example.carmode.CarDisplayMode
 import com.example.data.TrackDao
 import com.example.model.ExplorerSortOption
 import com.example.model.Track
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import com.example.player.QueueRepeatMode
 import com.example.player.SmartContinueMode
@@ -211,6 +212,7 @@ class PersistentSessionManager(
         proDarkVariant: ProDarkVariant? = null,
         libraryDensity: ProLibraryDensity? = null,
         waveformStyle: WaveformStyle? = null,
+        waveformShape: WaveformShape? = null,
         isTrackGridView: Boolean? = null,
         isCarModeActive: Boolean? = null,
         carModeKeepAwake: Boolean? = null,
@@ -226,6 +228,7 @@ class PersistentSessionManager(
             proDarkVariant = proDarkVariant ?: curApp.proDarkVariant,
             libraryDensity = libraryDensity ?: curApp.libraryDensity,
             waveformStyle = waveformStyle ?: curApp.waveformStyle,
+            waveformShape = waveformShape ?: curApp.waveformShape,
             isTrackGridView = isTrackGridView ?: curApp.isTrackGridView,
             isCarModeActive = isCarModeActive ?: curApp.isCarModeActive,
             carModeKeepAwake = carModeKeepAwake ?: curApp.carModeKeepAwake,
@@ -577,6 +580,7 @@ class PersistentSessionManager(
                 put("proDarkVariant", session.appearance.proDarkVariant.name)
                 put("libraryDensity", session.appearance.libraryDensity.name)
                 put("waveformStyle", session.appearance.waveformStyle.name)
+                put("waveformShape", session.appearance.waveformShape.name)
                 put("isTrackGridView", session.appearance.isTrackGridView)
                 put("isCarModeActive", session.appearance.isCarModeActive)
                 put("carModeKeepAwake", session.appearance.carModeKeepAwake)
@@ -712,6 +716,7 @@ class PersistentSessionManager(
                 proDarkVariant = runCatching { ProDarkVariant.valueOf(appObj.optString("proDarkVariant", "BLACK_WHITE")) }.getOrDefault(ProDarkVariant.BLACK_WHITE),
                 libraryDensity = runCatching { ProLibraryDensity.valueOf(appObj.optString("libraryDensity", "COMPACT")) }.getOrDefault(ProLibraryDensity.COMPACT),
                 waveformStyle = runCatching { WaveformStyle.valueOf(appObj.optString("waveformStyle", "DETAILED")) }.getOrDefault(WaveformStyle.DETAILED),
+                waveformShape = runCatching { WaveformShape.valueOf(appObj.optString("waveformShape", "FULL")) }.getOrDefault(WaveformShape.FULL),
                 isTrackGridView = appObj.optBoolean("isTrackGridView", false),
                 isCarModeActive = appObj.optBoolean("isCarModeActive", false),
                 carModeKeepAwake = appObj.optBoolean("carModeKeepAwake", true),

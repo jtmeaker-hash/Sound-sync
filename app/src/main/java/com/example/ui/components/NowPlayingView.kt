@@ -72,6 +72,7 @@ import kotlinx.coroutines.withContext
 import com.example.audio.WaveformData
 import com.example.model.NowPlayingDisplayMode
 import com.example.model.Track
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import com.example.ui.theme.SoundSyncTheme
 import com.example.ui.theme.DjMonoBpm
@@ -105,6 +106,8 @@ fun NowPlayingView(
     onSetDisplayMode: (NowPlayingDisplayMode) -> Unit,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onToggleWaveformStyle: (() -> Unit)? = null,
+    waveformShape: WaveformShape = WaveformShape.FULL,
+    onToggleWaveformShape: (() -> Unit)? = null,
     onCueJump: (Int) -> Unit = {},
     currentPositionFloatProvider: (() -> Float)? = null,
     playbackTimeline: com.example.audio.PlaybackTimeline? = null,
@@ -236,6 +239,8 @@ fun NowPlayingView(
                         isLoading = isWaveformLoading,
                         waveformStyle = waveformStyle,
                         onToggleWaveformStyle = onToggleWaveformStyle,
+                        waveformShape = waveformShape,
+                        onToggleWaveformShape = onToggleWaveformShape,
                         currentPositionFloatProvider = currentPositionFloatProvider,
                         playbackTimeline = playbackTimeline,
                         modifier = Modifier.fillMaxWidth()

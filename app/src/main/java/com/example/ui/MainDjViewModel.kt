@@ -35,6 +35,7 @@ import com.example.model.FileOperationType
 import com.example.model.FolderItem
 import com.example.model.MusicPlatform
 import com.example.model.NowPlayingDisplayMode
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import com.example.model.OperationJournalItem
 import com.example.model.SpectrogramAnalysis
@@ -835,6 +836,35 @@ class MainDjViewModel(application: Application) : AndroidViewModel(application) 
             WaveformStyle.DETAILED
         }
         setWaveformStyle(next)
+    }
+
+    // Waveform Display Shape (Half vs Full) with persistent SharedPreferences
+    private val _waveformShape = MutableStateFlow(
+        try {
+            val savedShape = prefs.getString("waveform_shape", WaveformShape.FULL.name)
+            WaveformShape.fromString(savedShape)
+        } catch (e: Exception) {
+            WaveformShape.FULL
+        }
+    )
+    val waveformShape: StateFlow<WaveformShape> = _waveformShape.asStateFlow()
+
+    fun setWaveformShape(shape: WaveformShape) {
+        _waveformShape.value = shape
+        try {
+            prefs.edit().putString("waveform_shape", shape.name).apply()
+        } catch (e: Exception) {
+            Log.w("MainDjViewModel", "Failed to persist waveform shape: ${e.message}")
+        }
+    }
+
+    fun toggleWaveformShape() {
+        val next = if (_waveformShape.value == WaveformShape.FULL) {
+            WaveformShape.HALF
+        } else {
+            WaveformShape.FULL
+        }
+        setWaveformShape(next)
     }
 
     // Expanded Now Playing Sheet / Panel State

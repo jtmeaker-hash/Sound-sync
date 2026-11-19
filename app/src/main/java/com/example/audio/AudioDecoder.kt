@@ -218,7 +218,7 @@ object AudioDecoder {
             val totalDurationUs = if (durationUs > 0) durationUs else (track.durationSeconds.coerceAtLeast(10) * 1_000_000L)
             val durationMs = totalDurationUs / 1000L
 
-            val binCount = targetBins.coerceIn(600, 7200)
+            val binCount = targetBins.coerceIn(800, 16000)
 
             // Accumulator arrays for all bins (Memory footprint ~48 KB)
             val maxPeakInBin = FloatArray(binCount)
@@ -416,7 +416,7 @@ object AudioDecoder {
 
             for (b in 0 until binCount) {
                 peaks[b] = (peaks[b] / peakNorm).coerceIn(0.0f, 1.0f)
-                minPeaks[b] = (minPeaks[b] / peakNorm).coerceIn(-1.0f, 0.0f)
+                minPeaks[b] = (abs(minPeaks[b]) / peakNorm).coerceIn(0.0f, 1.0f)
                 lowBand[b] = (lowBand[b] / lowNorm).coerceIn(0.0f, 1.0f)
                 midBand[b] = (midBand[b] / midNorm).coerceIn(0.0f, 1.0f)
                 highBand[b] = (highBand[b] / highNorm).coerceIn(0.0f, 1.0f)
@@ -470,7 +470,7 @@ object AudioDecoder {
         targetBins: Int,
         onProgress: (percent: Int) -> Unit
     ): WaveformData? {
-        val binCount = targetBins.coerceIn(600, 7200)
+        val binCount = targetBins.coerceIn(800, 16000)
         val maxPeakInBin = FloatArray(binCount)
         val minPeakInBin = FloatArray(binCount)
         val absPeakInBin = FloatArray(binCount)
@@ -604,7 +604,7 @@ object AudioDecoder {
 
         for (b in 0 until binCount) {
             peaks[b] = (peaks[b] / peakNorm).coerceIn(0.0f, 1.0f)
-            minPeaks[b] = (minPeaks[b] / peakNorm).coerceIn(-1.0f, 0.0f)
+            minPeaks[b] = (abs(minPeaks[b]) / peakNorm).coerceIn(0.0f, 1.0f)
             lowBand[b] = (lowBand[b] / lowNorm).coerceIn(0.0f, 1.0f)
             midBand[b] = (midBand[b] / midNorm).coerceIn(0.0f, 1.0f)
             highBand[b] = (highBand[b] / highNorm).coerceIn(0.0f, 1.0f)

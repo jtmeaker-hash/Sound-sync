@@ -38,6 +38,7 @@ import com.example.ui.theme.TextSecondary
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import com.example.ui.theme.NeonAmber
 import com.example.ui.theme.DjSurfaceElevated
@@ -50,6 +51,8 @@ fun NowPlayingSettingsSheet(
     onCrossfadeSecondsChange: (Int) -> Unit,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onSetWaveformStyle: (WaveformStyle) -> Unit = {},
+    waveformShape: WaveformShape = WaveformShape.FULL,
+    onSetWaveformShape: (WaveformShape) -> Unit = {},
     // EQ state
     eqEnabled: Boolean = true,
     eqLow: Float = 1f,
@@ -276,6 +279,85 @@ fun NowPlayingSettingsSheet(
                                     fontSize = 12.sp
                                 )
                                 Text("Classic chunky nostalgic pixel styling", color = TextSecondary, fontSize = 9.5.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Waveform Display Shape (Half / Full) ───────────────────────
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("now_playing_waveform_shape_section"),
+                color = DjObsidian,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DjSurfaceBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Column {
+                        Text("Waveform Display Shape", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("Choose between Full vertically-centred waveform or Half single-sided upward waveform", color = TextMuted, fontSize = 11.sp)
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                .clickable { onSetWaveformShape(WaveformShape.FULL) }
+                                .testTag("sheet_waveform_full"),
+                            color = if (waveformShape == WaveformShape.FULL) DeckACyan.copy(alpha = 0.16f) else DjSurfaceElevated,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (waveformShape == WaveformShape.FULL) DeckACyan else DjSurfaceBorder
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Full",
+                                    color = if (waveformShape == WaveformShape.FULL) DeckACyan else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text("Bipolar vertically centred across center axis", color = TextSecondary, fontSize = 9.5.sp)
+                            }
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                .clickable { onSetWaveformShape(WaveformShape.HALF) }
+                                .testTag("sheet_waveform_half"),
+                            color = if (waveformShape == WaveformShape.HALF) NeonAmber.copy(alpha = 0.16f) else DjSurfaceElevated,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (waveformShape == WaveformShape.HALF) NeonAmber else DjSurfaceBorder
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Half",
+                                    color = if (waveformShape == WaveformShape.HALF) NeonAmber else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text("Single-sided peaks rising from bottom baseline", color = TextSecondary, fontSize = 9.5.sp)
                             }
                         }
                     }

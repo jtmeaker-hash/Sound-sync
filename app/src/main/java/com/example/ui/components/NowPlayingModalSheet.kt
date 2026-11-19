@@ -5,6 +5,7 @@ import androidx.compose.ui.Modifier
 import com.example.audio.WaveformData
 import com.example.model.NowPlayingDisplayMode
 import com.example.model.Track
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 
 /**
@@ -44,6 +45,8 @@ fun NowPlayingModalSheet(
     onSetDisplayMode: (NowPlayingDisplayMode) -> Unit,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onToggleWaveformStyle: (() -> Unit)? = null,
+    waveformShape: WaveformShape = WaveformShape.FULL,
+    onToggleWaveformShape: (() -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
     onOpenProperties: (Track) -> Unit = {},
     currentPositionFloatProvider: (() -> Float)? = null,
@@ -81,6 +84,8 @@ fun NowPlayingModalSheet(
         onSetDisplayMode = onSetDisplayMode,
         waveformStyle = waveformStyle,
         onToggleWaveformStyle = onToggleWaveformStyle,
+        waveformShape = waveformShape,
+        onToggleWaveformShape = onToggleWaveformShape,
         onOpenSettings = onOpenSettings,
         onOpenProperties = onOpenProperties,
         currentPositionFloatProvider = currentPositionFloatProvider,

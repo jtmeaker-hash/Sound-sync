@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import com.example.audio.WaveformData
 import com.example.model.NowPlayingDisplayMode
 import com.example.model.Track
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
@@ -136,6 +137,8 @@ fun NowPlayingFullScreen(
     onSetDisplayMode: (NowPlayingDisplayMode) -> Unit,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onToggleWaveformStyle: (() -> Unit)? = null,
+    waveformShape: WaveformShape = WaveformShape.FULL,
+    onToggleWaveformShape: (() -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
     onOpenProperties: (Track) -> Unit = {},
     onOpenArtist: ((String) -> Unit)? = null,
@@ -170,6 +173,8 @@ fun NowPlayingFullScreen(
             onSetDisplayMode = onSetDisplayMode,
             waveformStyle = waveformStyle,
             onToggleWaveformStyle = onToggleWaveformStyle,
+            waveformShape = waveformShape,
+            onToggleWaveformShape = onToggleWaveformShape,
             onOpenSettings = onOpenSettings,
             onOpenProperties = onOpenProperties,
             onOpenArtist = onOpenArtist,
@@ -401,6 +406,8 @@ fun NowPlayingFullScreen(
                                 isLoading = isWaveformLoading,
                                 waveformStyle = waveformStyle,
                                 onToggleWaveformStyle = onToggleWaveformStyle,
+                                waveformShape = waveformShape,
+                                onToggleWaveformShape = onToggleWaveformShape,
                                 currentPositionFloatProvider = currentPositionFloatProvider,
                                 playbackTimeline = playbackTimeline,
                                 modifier = Modifier.fillMaxWidth()
@@ -853,6 +860,8 @@ private fun ProNowPlayingFullScreenContent(
     onSetDisplayMode: (NowPlayingDisplayMode) -> Unit,
     waveformStyle: WaveformStyle,
     onToggleWaveformStyle: (() -> Unit)?,
+    waveformShape: WaveformShape = WaveformShape.FULL,
+    onToggleWaveformShape: (() -> Unit)? = null,
     onOpenSettings: () -> Unit,
     onOpenProperties: (Track) -> Unit,
     onOpenArtist: ((String) -> Unit)? = null,
@@ -1227,6 +1236,8 @@ private fun ProNowPlayingFullScreenContent(
                                 isLoading = isWaveformLoading,
                                 waveformStyle = waveformStyle,
                                 onToggleWaveformStyle = onToggleWaveformStyle,
+                                waveformShape = waveformShape,
+                                onToggleWaveformShape = onToggleWaveformShape,
                                 currentPositionFloatProvider = currentPositionFloatProvider,
                                 playbackTimeline = playbackTimeline,
                                 modifier = Modifier.fillMaxWidth()

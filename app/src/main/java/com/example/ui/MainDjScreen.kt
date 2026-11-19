@@ -117,6 +117,7 @@ import com.example.ui.components.SpectrogramAnalyzerView
 import com.example.ui.components.StreamingView
 import com.example.ui.library.LocalLibraryScreen
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import com.example.model.WaveformShape
 import com.example.ui.theme.DeckACyan
 import com.example.ui.theme.DeckBPink
 import com.example.ui.theme.DjObsidian
@@ -238,6 +239,7 @@ fun MainDjScreen(
     val waveformData by viewModel.waveformData.collectAsState()
     val isWaveformLoading by viewModel.isWaveformLoading.collectAsState()
     val waveformStyle by viewModel.waveformStyle.collectAsState()
+    val waveformShape by viewModel.waveformShape.collectAsState()
     val themeMode by viewModel.themeMode.collectAsState()
     val crossfadeSeconds by viewModel.crossfadeSeconds.collectAsState()
     val bulkEditingTracks by viewModel.bulkEditingTracks.collectAsState()
@@ -487,6 +489,7 @@ fun MainDjScreen(
                         haasBalance = haasBalance,
                         haasOutputCompDb = haasOutputCompDb,
                         waveformStyle = waveformStyle,
+                        waveformShape = waveformShape,
                         onPickSafFolder = onPickSafFolder,
                         onPickAudioFiles = onPickAudioFiles,
                         onClose = { activeSideDestination = null },
@@ -742,6 +745,8 @@ fun MainDjScreen(
                         isPlaying = isPlaying,
                         waveformStyle = waveformStyle,
                         onToggleWaveformStyle = { viewModel.toggleWaveformStyle() },
+                        waveformShape = waveformShape,
+                        onToggleWaveformShape = { viewModel.toggleWaveformShape() },
                         audioEngine = viewModel.audioEngine,
                         eqEnabled = eqEnabled,
                         eqLow = eqLow,
@@ -827,6 +832,8 @@ fun MainDjScreen(
                     onCrossfadeSecondsChange = { viewModel.setCrossfadeSeconds(it) },
                     waveformStyle = waveformStyle,
                     onSetWaveformStyle = { viewModel.setWaveformStyle(it) },
+                    waveformShape = waveformShape,
+                    onSetWaveformShape = { viewModel.setWaveformShape(it) },
                     eqEnabled = eqEnabled,
                     eqLow = eqLow,
                     eqMid = eqMid,
@@ -1232,6 +1239,8 @@ private fun PositionAwareNowPlaying(
     isPlaying: Boolean,
     waveformStyle: com.example.model.WaveformStyle = com.example.model.WaveformStyle.DETAILED,
     onToggleWaveformStyle: (() -> Unit)? = null,
+    waveformShape: com.example.model.WaveformShape = com.example.model.WaveformShape.FULL,
+    onToggleWaveformShape: (() -> Unit)? = null,
     audioEngine: com.example.audio.DjAudioEngine,
     eqEnabled: Boolean, eqLow: Float, eqMid: Float, eqHigh: Float,
     onSetEqEnabled: (Boolean) -> Unit, onSetEqLow: (Float) -> Unit,
@@ -1263,6 +1272,8 @@ private fun PositionAwareNowPlaying(
         durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L,
         waveformStyle = waveformStyle,
         onToggleWaveformStyle = onToggleWaveformStyle,
+        waveformShape = waveformShape,
+        onToggleWaveformShape = onToggleWaveformShape,
         eqEnabled = eqEnabled, eqLow = eqLow, eqMid = eqMid, eqHigh = eqHigh,
         onSetEqEnabled = onSetEqEnabled, onSetEqLow = onSetEqLow,
         onSetEqMid = onSetEqMid, onSetEqHigh = onSetEqHigh,
@@ -1354,6 +1365,7 @@ private fun SideDestinationScreen(
     haasBalance: Float = HaasSurroundEffect.DEFAULT_BALANCE,
     haasOutputCompDb: Float = HaasSurroundEffect.DEFAULT_OUTPUT_COMP_DB,
     waveformStyle: com.example.model.WaveformStyle = com.example.model.WaveformStyle.DETAILED,
+    waveformShape: com.example.model.WaveformShape = com.example.model.WaveformShape.FULL,
     onPickSafFolder: () -> Unit,
     onPickAudioFiles: () -> Unit,
     onClose: () -> Unit,
@@ -1510,7 +1522,9 @@ private fun SideDestinationScreen(
                         isShuffleEnabled = isShuffleEnabled,
                         onToggleShuffle = { viewModel.toggleShuffle() },
                         waveformStyle = waveformStyle,
-                        onSetWaveformStyle = { viewModel.setWaveformStyle(it) }
+                        onSetWaveformStyle = { viewModel.setWaveformStyle(it) },
+                        waveformShape = waveformShape,
+                        onSetWaveformShape = { viewModel.setWaveformShape(it) }
                     )
                 }
                 SideMenuDestination.LibrarySettings -> {
@@ -1607,7 +1621,9 @@ private fun SideDestinationScreen(
                         libraryDensity = libraryDensity,
                         onSetLibraryDensity = { viewModel.setLibraryDensity(it) },
                         waveformStyle = waveformStyle,
-                        onSetWaveformStyle = { viewModel.setWaveformStyle(it) }
+                        onSetWaveformStyle = { viewModel.setWaveformStyle(it) },
+                        waveformShape = waveformShape,
+                        onSetWaveformShape = { viewModel.setWaveformShape(it) }
                     )
                 }
                 SideMenuDestination.BackupRestore -> {

@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import com.example.ui.theme.BloodRedPrimary
 import com.example.ui.theme.DeckACyan
@@ -49,6 +50,8 @@ fun AppearanceSettingsScreen(
     onSetLibraryDensity: (ProLibraryDensity) -> Unit = {},
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onSetWaveformStyle: (WaveformStyle) -> Unit = {},
+    waveformShape: WaveformShape = WaveformShape.FULL,
+    onSetWaveformShape: (WaveformShape) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val theme = SoundSyncTheme.current
@@ -259,6 +262,54 @@ fun AppearanceSettingsScreen(
                         onClick = { onSetWaveformStyle(WaveformStyle.RETRO) },
                         modifier = Modifier.weight(1f),
                         testTag = "waveform_style_option_retro"
+                    )
+                }
+            }
+        }
+
+        // Waveform Display Shape (Half vs Full) Card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("waveform_shape_section_card"),
+            colors = CardDefaults.cardColors(containerColor = theme.surface),
+            shape = RoundedCornerShape(theme.cornerMedium),
+            border = androidx.compose.foundation.BorderStroke(1.dp, theme.divider)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Waveform Display Shape", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    "Choose between Full vertically-centred bipolar waveform or Half single-sided waveform rising from the bottom baseline.",
+                    color = theme.textSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    AppearanceOptionTile(
+                        title = "Full Waveform",
+                        description = "Vertically centred bipolar waveform utilizing upper and lower halves",
+                        selected = waveformShape == WaveformShape.FULL,
+                        accent = if (isPro) theme.accent else DeckACyan,
+                        onClick = { onSetWaveformShape(WaveformShape.FULL) },
+                        modifier = Modifier.weight(1f),
+                        testTag = "waveform_shape_option_full"
+                    )
+
+                    AppearanceOptionTile(
+                        title = "Half Waveform",
+                        description = "Single-sided waveform rising upward from bottom baseline",
+                        selected = waveformShape == WaveformShape.HALF,
+                        accent = NeonAmber,
+                        onClick = { onSetWaveformShape(WaveformShape.HALF) },
+                        modifier = Modifier.weight(1f),
+                        testTag = "waveform_shape_option_half"
                     )
                 }
             }

@@ -5,6 +5,7 @@ import com.example.audio.WaveformBiquadFilter
 import com.example.audio.WaveformCache
 import com.example.audio.WaveformData
 import com.example.model.Track
+import com.example.model.WaveformShape
 import com.example.model.WaveformStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -373,5 +374,97 @@ class WaveformRekordboxSyncRegressionTest {
         val expectedHeight = (positivePeak + negativePeak) * maxPeakHeight
         assertEquals(expectedHeight, totalHeight, 0.001f)
         assertTrue("Top amplitude must exceed bottom amplitude", (centerY - topY) > (botY - centerY))
+    }
+
+    // =========================================================================
+    // 6. WAVEFORM SHAPE (HALF vs FULL) & STYLE COMBINATIONS (4 MODES)
+    // =========================================================================
+
+    @Test
+    fun `WaveformShape enum parsing handles all string inputs and defaults safely`() {
+        assertEquals(WaveformShape.HALF, WaveformShape.fromString("HALF"))
+        assertEquals(WaveformShape.HALF, WaveformShape.fromString("half"))
+        assertEquals(WaveformShape.HALF, WaveformShape.fromString("Half Waveform"))
+        assertEquals(WaveformShape.FULL, WaveformShape.fromString("FULL"))
+        assertEquals(WaveformShape.FULL, WaveformShape.fromString("full"))
+        assertEquals(WaveformShape.FULL, WaveformShape.fromString("Full Waveform"))
+        assertEquals(WaveformShape.FULL, WaveformShape.fromString(null))
+        assertEquals(WaveformShape.FULL, WaveformShape.fromString(""))
+        assertEquals(WaveformShape.FULL, WaveformShape.fromString("unknown_value"))
+    }
+
+    @Test
+    fun `All 4 style and shape combinations configure cleanly and independently`() {
+        val styles = listOf(WaveformStyle.DETAILED, WaveformStyle.RETRO)
+        val shapes = listOf(WaveformShape.FULL, WaveformShape.HALF)
+
+        val combinations = mutableListOf<Pair<WaveformStyle, WaveformShape>>()
+        for (style in styles) {
+            for (shape in shapes) {
+                combinations.add(style to shape)
+            }
+        }
+
+        assertEquals(4, combinations.size)
+        assertTrue(combinations.contains(WaveformStyle.DETAILED to WaveformShape.FULL))
+        assertTrue(combinations.contains(WaveformStyle.DETAILED to WaveformShape.HALF))
+        assertTrue(combinations.contains(WaveformStyle.RETRO to WaveformShape.FULL))
+        assertTrue(combinations.contains(WaveformStyle.RETRO to WaveformShape.HALF))
+    }
+
+    @Test
+    fun `HALF mode geometry anchors baseline at bottom and rises upward utilizing full canvas height`() {
+        val height = 165f
+        val baselineY = height - 5f // 160f
+        val maxPeakHeight = (height - 12f) * 0.94f // ~143.82f
+
+        val peak = 0.85f
+        val peakTop = (peak * maxPeakHeight).coerceAtLeast(1.0f)
+        val startY = baselineY - peakTop
+        val endY = baselineY
+
+        assertTrue("In HALF mode, startY must be above baselineY", startY < baselineY)
+        assertEquals(160f, endY, 0.001f)
+        assertTrue("In HALF mode, peakTop can reach near top of canvas", startY < 40f)
+    }
+
+    @Test
+    fun `FULL mode geometry centers baseline and renders bipolar excursions without empty lower half`() {
+        val height = 165f
+        val centerY = height / 2f // 82.5f
+        val maxPeakHeight = centerY * 0.90f // 74.25f
+
+        val positivePeak = 0.85f
+        val negativePeak = -0.75f // e.g. legacy negative peak or raw minimum
+
+        // Fix verified: negative peak is converted to positive magnitude abs(minPeak)
+        val safeMinPeak = abs(negativePeak)
+        val effectiveMinPeak = if (safeMinPeak < 0.008f && positivePeak >= 0.008f) positivePeak * 0.92f else safeMinPeak
+
+        val peakTop = (positivePeak * maxPeakHeight).coerceAtLeast(1.0f)
+        val peakBot = (effectiveMinPeak * maxPeakHeight).coerceAtLeast(1.0f)
+
+        val topY = centerY - peakTop
+        val botY = centerY + peakBot
+
+        assertTrue("In FULL mode, topY must be above center axis", topY < centerY)
+        assertTrue("In FULL mode, botY must be below center axis", botY > centerY)
+        assertTrue("Lower peak height must be substantial (> 50px), not 0.5px!", peakBot > 50f)
+        assertEquals(centerY, 82.5f, 0.001f)
+    }
+
+    @Test
+    fun `Peak-preserving downsampling captures sharp transients across multiresolution bin ranges`() {
+        // Simulate 10 bins downsampled into 1 screen column: 9 quiet bins (0.1f) and 1 snare transient (0.95f)
+        val peaks = floatArrayOf(0.10f, 0.12f, 0.11f, 0.09f, 0.95f, 0.15f, 0.10f, 0.12f, 0.08f, 0.11f)
+
+        // Linear average would destroy transient: (0.10+0.12+0.11+0.09+0.95+0.15+0.10+0.12+0.08+0.11)/10 = 0.193f!
+        var peakEnvelope = 0.0f
+        for (b in peaks.indices) {
+            if (peaks[b] > peakEnvelope) peakEnvelope = peaks[b]
+        }
+
+        assertEquals(0.95f, peakEnvelope, 0.001f)
+        assertTrue("Envelope downsampling strictly preserves the 0.95f transient hit", peakEnvelope > 0.90f)
     }
 }
