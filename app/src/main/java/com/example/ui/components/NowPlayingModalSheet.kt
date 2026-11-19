@@ -46,6 +46,8 @@ fun NowPlayingModalSheet(
     onToggleWaveformStyle: (() -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
     onOpenProperties: (Track) -> Unit = {},
+    currentPositionFloatProvider: (() -> Float)? = null,
+    playbackTimeline: com.example.audio.PlaybackTimeline? = null,
     modifier: Modifier = Modifier
 ) {
     NowPlayingFullScreen(
@@ -81,6 +83,8 @@ fun NowPlayingModalSheet(
         onToggleWaveformStyle = onToggleWaveformStyle,
         onOpenSettings = onOpenSettings,
         onOpenProperties = onOpenProperties,
+        currentPositionFloatProvider = currentPositionFloatProvider,
+        playbackTimeline = playbackTimeline,
         modifier = modifier
     )
 }

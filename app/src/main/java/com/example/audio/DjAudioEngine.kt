@@ -336,6 +336,9 @@ class DjAudioEngine(val context: Context) {
     private val _currentPositionMs = MutableStateFlow(0L)
     val currentPositionMs = _currentPositionMs.asStateFlow()
 
+    val audioClock = AudioClock()
+    val timeline: PlaybackTimeline get() = audioClock
+
     private val _waveformData = MutableStateFlow<WaveformData?>(null)
     val waveformData = _waveformData.asStateFlow()
 
@@ -532,6 +535,8 @@ class DjAudioEngine(val context: Context) {
             _waveformData.value = null
             _isWaveformLoading.value = false
             activeCueSeconds = 0
+            audioClock.onPlayStateChanged(false)
+            audioClock.unbindAudioTrack()
             return
         }
 
@@ -552,6 +557,10 @@ class DjAudioEngine(val context: Context) {
         lastPublishedSecond = initialSec
         activeCueSeconds = 0
         pendingSeekMs = if (initialMs > 0) initialMs else null
+        audioClock.onTrackChanged(track, initialMs, session)
+        if (autoPlay) {
+            audioClock.onPlayStateChanged(true)
+        }
 
         // If track is explicitly marked unplayable (e.g. disconnected USB drive), trigger skip callback immediately
         if (!track.isAvailable) {
@@ -643,6 +652,7 @@ class DjAudioEngine(val context: Context) {
         if (activeLoopSessionId == session && decoderRunning && decoderShouldPause && activeAudioTrack != null) {
             _isPlaying.value = true
             decoderShouldPause = false
+            audioClock.onPlayStateChanged(true)
             runCatching { activeAudioTrack?.play() }
             pauseLock.withLock { pauseCondition.signalAll() }
             onTrackStartedCallback?.invoke(track)
@@ -653,11 +663,13 @@ class DjAudioEngine(val context: Context) {
         // If already playing for this session, idempotent
         if (activeLoopSessionId == session && decoderRunning && !decoderShouldPause) {
             _isPlaying.value = true
+            audioClock.onPlayStateChanged(true)
             return
         }
 
         _isPlaying.value = true
         decoderShouldPause = false
+        audioClock.onPlayStateChanged(true)
         onTrackStartedCallback?.invoke(track)
 
         try { com.example.service.MediaPlaybackService.startService(context) } catch (_: Exception) {}
@@ -698,6 +710,7 @@ class DjAudioEngine(val context: Context) {
         _isPlaying.value = false
         completionInFlight = false
         decoderShouldPause = true
+        audioClock.onPlayStateChanged(false)
         // Wake the decoder so it can enter the paused state
         pauseLock.withLock { pauseCondition.signalAll() }
         activeAudioTrack?.let { t ->
@@ -746,9 +759,10 @@ class DjAudioEngine(val context: Context) {
     }
 
     fun applyPitchAndKeyLock(track: AudioTrack? = activeAudioTrack) {
+        val speed = (1f + _pitchPercent.value / 100f).coerceIn(0.5f, 2.0f)
+        audioClock.onPlaybackSpeedChanged(speed)
         track?.let { at ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val speed = (1f + _pitchPercent.value / 100f).coerceIn(0.5f, 2.0f)
                 val pitch = if (_keyLockEnabled.value) 1.0f else speed
                 val params = android.media.PlaybackParams().apply {
                     this.speed = speed
@@ -1018,6 +1032,7 @@ class DjAudioEngine(val context: Context) {
         _currentPositionSec.value = clampedSec
         _playbackProgress.value = if (durationMs > 0) clampedMs.toFloat() / durationMs.toFloat() else 0f
         internalPositionMs = clampedMs
+        audioClock.onSeekResolved(clampedMs, audioTrackFlushed = false)
 
         // Queue the seek for the active session's decoder loop
         if (decoderRunning) {
@@ -1165,6 +1180,7 @@ class DjAudioEngine(val context: Context) {
             activeAudioTrack = at
             activeSampleRate = sampleRate
             activeChannelCount = chCount
+            audioClock.bindAudioTrack(at, sampleRate)
 
             at.play()
 
@@ -1241,16 +1257,25 @@ class DjAudioEngine(val context: Context) {
                 pendingSeekMs?.let { seekMs ->
                     pendingSeekMs = null
                     val target = seekMs.coerceIn(0L, durationMs)
+                    runCatching {
+                        if (at.playState == AudioTrack.PLAYSTATE_PLAYING) at.pause()
+                        at.flush()
+                    }
                     ex.seekTo(target * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                     dec.flush()
                     inputEos = false
                     outputEos = false
-                    renderedPositionUs = target * 1000L
-                    internalPositionMs = target
+                    val resolvedPtsUs = if (ex.sampleTime >= 0) ex.sampleTime else (target * 1000L)
+                    renderedPositionUs = resolvedPtsUs
+                    internalPositionMs = resolvedPtsUs / 1000L
+                    audioClock.onSeekResolved(internalPositionMs, audioTrackFlushed = true)
                     if (generationGate.isCurrent(session)) {
-                        publishThrottledPosition(target, durationMs, force = true)
+                        publishThrottledPosition(internalPositionMs, durationMs, force = true)
                     }
                     haasEffect.reset()
+                    if (_isPlaying.value && !decoderShouldPause) {
+                        runCatching { at.play() }
+                    }
                 }
 
                 // ── Feed input buffers ──────────────────────────────────
@@ -1425,6 +1450,7 @@ class DjAudioEngine(val context: Context) {
                                 // ── Write PCM if still active session ──
                                 if (generationGate.isCurrent(session)) {
                                     writePcmBlocking(at, pcmStereo, filled * 2, session)
+                                    audioClock.recordFramesWritten(filled)
                                     renderedPositionUs += (filled.toLong()) * 1_000_000L / sampleRate
 
                                     // ── Pitch / playback rate / Key Lock ──────────
@@ -1630,6 +1656,7 @@ class DjAudioEngine(val context: Context) {
             activeAudioTrack = at
             activeSampleRate = sampleRate
             activeChannelCount = chCount
+            audioClock.bindAudioTrack(at, sampleRate)
 
             at.play()
 
@@ -1699,13 +1726,21 @@ class DjAudioEngine(val context: Context) {
                 pendingSeekMs?.let { seekMs ->
                     pendingSeekMs = null
                     val target = seekMs.coerceIn(0L, durationMs)
+                    runCatching {
+                        if (at.playState == AudioTrack.PLAYSTATE_PLAYING) at.pause()
+                        at.flush()
+                    }
                     pcmReader.seekToMs(target)
                     renderedPositionUs = target * 1000L
                     internalPositionMs = target
+                    audioClock.onSeekResolved(target, audioTrackFlushed = true)
                     if (generationGate.isCurrent(session)) {
                         publishThrottledPosition(target, durationMs, force = true)
                     }
                     haasEffect.reset()
+                    if (_isPlaying.value && !decoderShouldPause) {
+                        runCatching { at.play() }
+                    }
                 }
 
                 val framesToRead = pcmStereo.size / 2
@@ -1828,6 +1863,7 @@ class DjAudioEngine(val context: Context) {
 
                     if (generationGate.isCurrent(session)) {
                         writePcmBlocking(at, pcmStereo, filled * 2, session)
+                        audioClock.recordFramesWritten(filled)
                         renderedPositionUs += (filled.toLong()) * 1_000_000L / sampleRate
 
                         // ── Pitch / playback rate / Key Lock ──────────
@@ -1983,6 +2019,7 @@ class DjAudioEngine(val context: Context) {
         lastPublishedPositionMs = positionMs
 
         _currentPositionMs.value = positionMs
+        audioClock.updatePublishedPosition(positionMs)
 
         val newSec = (positionMs / 1000).toInt()
         if (newSec != lastPublishedSecond) {
@@ -1998,6 +2035,7 @@ class DjAudioEngine(val context: Context) {
     private fun stopPlaybackImmediately() {
         decoderShouldPause = true
         _isPlaying.value = false
+        audioClock.onPlayStateChanged(false)
         completionInFlight = false
         // Wake decoder so any waiting loop immediately detects session change and exits
         pauseLock.withLock { pauseCondition.signalAll() }
@@ -2008,6 +2046,7 @@ class DjAudioEngine(val context: Context) {
                 at.flush()
             }
         }
+        audioClock.unbindAudioTrack()
         activePfd?.let { runCatching { it.close() } }
         activePfd = null
         activeAfd?.let { runCatching { it.close() } }
@@ -2040,6 +2079,7 @@ class DjAudioEngine(val context: Context) {
                 at.release()
             }
         }
+        audioClock.unbindAudioTrack()
         activeAudioTrack = null
         activeDecoderName = null
         activeMimeType = null
@@ -2121,6 +2161,7 @@ class DjAudioEngine(val context: Context) {
 
             synthesisAudioTrack = localTrack
             activeAudioTrack = localTrack
+            audioClock.bindAudioTrack(localTrack, sampleRate)
             localTrack.play()
 
             val monoBuffer = ShortArray(bufferSize / 2)

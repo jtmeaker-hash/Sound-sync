@@ -106,10 +106,13 @@ fun NowPlayingView(
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onToggleWaveformStyle: (() -> Unit)? = null,
     onCueJump: (Int) -> Unit = {},
+    currentPositionFloatProvider: (() -> Float)? = null,
+    playbackTimeline: com.example.audio.PlaybackTimeline? = null,
     modifier: Modifier = Modifier
 ) {
     val totalSec = if (durationMs > 0) (durationMs / 1000).toInt() else track.durationSeconds.coerceAtLeast(1)
-    val curSec = (currentPositionProvider() / 1000).toInt().coerceIn(0, totalSec)
+    val curPosMs = currentPositionFloatProvider?.invoke()?.toLong() ?: currentPositionProvider()
+    val curSec = (curPosMs / 1000).toInt().coerceIn(0, totalSec)
     val remainingSec = (totalSec - curSec).coerceAtLeast(0)
 
     val curMin = curSec / 60
@@ -233,6 +236,8 @@ fun NowPlayingView(
                         isLoading = isWaveformLoading,
                         waveformStyle = waveformStyle,
                         onToggleWaveformStyle = onToggleWaveformStyle,
+                        currentPositionFloatProvider = currentPositionFloatProvider,
+                        playbackTimeline = playbackTimeline,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }

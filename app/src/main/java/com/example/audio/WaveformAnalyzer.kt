@@ -145,6 +145,7 @@ object WaveformAnalyzer {
         }
 
         val rms = FloatArray(binCount) { i -> (peaks[i] * 0.70f).coerceIn(0f, 1f) }
+        val minPeaks = FloatArray(binCount) { i -> -peaks[i] }
 
         return WaveformData(
             trackId = trackId,
@@ -156,7 +157,10 @@ object WaveformAnalyzer {
             highBand = highBand,
             bpm = safeBpm,
             isRealAudioData = false,
-            rms = rms
+            rms = rms,
+            minPeaks = minPeaks,
+            totalFrames = (durationMs * 44100L / 1000L),
+            sampleRate = 44100
         )
     }
 }

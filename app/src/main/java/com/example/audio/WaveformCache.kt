@@ -22,16 +22,22 @@ data class WaveformData(
     val samplePoints: Int,
     /** Primary peak amplitudes [0.0f .. 1.0f] */
     val peaks: FloatArray,
-    /** Low frequency / Bass energy [0.0f .. 1.0f] (Rekordbox Blue band) */
+    /** Low frequency / Bass energy [0.0f .. 1.0f] (Rekordbox Amber/Orange band) */
     val lowBand: FloatArray,
-    /** Mid frequency energy [0.0f .. 1.0f] (Rekordbox Amber/Orange band) */
+    /** Mid frequency energy [0.0f .. 1.0f] (Rekordbox Cream/White band) */
     val midBand: FloatArray,
-    /** High frequency energy [0.0f .. 1.0f] (Rekordbox White/Cyan band) */
+    /** High frequency energy [0.0f .. 1.0f] (Rekordbox Blue/Cyan band) */
     val highBand: FloatArray,
     val bpm: Double = 126.0,
     val isRealAudioData: Boolean = true,
     /** RMS / body power per bin [0.0f .. 1.0f] */
-    val rms: FloatArray = FloatArray(0)
+    val rms: FloatArray = FloatArray(0),
+    /** Negative peak amplitudes [-1.0f .. 0.0f] for true bipolar mirrored rendering */
+    val minPeaks: FloatArray = FloatArray(0),
+    /** Total decoded PCM frames for exact sample-accurate duration */
+    val totalFrames: Long = 0L,
+    /** Sampling rate of decoded audio */
+    val sampleRate: Int = 44100
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -59,8 +65,9 @@ data class WaveformData(
  */
 object WaveformCache {
     private const val TAG = "WaveformCache"
-    const val WAVEFORM_ANALYSIS_VERSION = 6
-    private const val MAGIC_HEADER = 0x53594E43 // "SYNC"
+    const val WAVEFORM_ANALYSIS_VERSION = 7
+    private const val MAGIC_HEADER_V6 = 0x53594E43 // "SYNC"
+    private const val MAGIC_HEADER_V7 = 0x53594E37 // "SYN7"
 
     // Memory LRU Cache (up to 100 waveform objects in RAM ~5MB max)
     private val memoryCache = LruCache<String, WaveformData>(100)
@@ -119,8 +126,14 @@ object WaveformCache {
                 return diskData
             }
 
-            // Backward compatibility fallback: check for previous version 5 cache
+            // Backward compatibility fallback: check for previous version 6 or 5 cache
             if (cacheKey.contains("_v$WAVEFORM_ANALYSIS_VERSION")) {
+                val v6Key = cacheKey.replace("_v$WAVEFORM_ANALYSIS_VERSION", "_v6")
+                val v6Data = readFromDisk(v6Key, context)
+                if (v6Data != null) {
+                    memoryCache.put(cacheKey, v6Data)
+                    return v6Data
+                }
                 val v5Key = cacheKey.replace("_v$WAVEFORM_ANALYSIS_VERSION", "_v5")
                 val v5Data = readFromDisk(v5Key, context)
                 if (v5Data != null) {
@@ -183,27 +196,87 @@ object WaveformCache {
         return File(getCacheDir(context, version), safeFileName)
     }
 
+    internal fun writeToDataStream(out: DataOutputStream, data: WaveformData) {
+        out.writeInt(MAGIC_HEADER_V7)
+        out.writeUTF(data.trackId)
+        out.writeLong(data.durationMs)
+        out.writeInt(data.samplePoints)
+        out.writeDouble(data.bpm)
+        out.writeBoolean(data.isRealAudioData)
+        out.writeLong(data.totalFrames)
+        out.writeInt(data.sampleRate)
+
+        // Write arrays
+        for (i in 0 until data.samplePoints) out.writeFloat(data.peaks.getOrElse(i) { 0f })
+        for (i in 0 until data.samplePoints) out.writeFloat(data.lowBand.getOrElse(i) { 0f })
+        for (i in 0 until data.samplePoints) out.writeFloat(data.midBand.getOrElse(i) { 0f })
+        for (i in 0 until data.samplePoints) out.writeFloat(data.highBand.getOrElse(i) { 0f })
+
+        // Write rms array
+        out.writeInt(data.rms.size)
+        for (i in 0 until data.rms.size) out.writeFloat(data.rms[i])
+
+        // Write minPeaks array
+        out.writeInt(data.minPeaks.size)
+        for (i in 0 until data.minPeaks.size) out.writeFloat(data.minPeaks[i])
+    }
+
+    internal fun readFromDataStream(inStream: DataInputStream): WaveformData? {
+        val magic = inStream.readInt()
+        if (magic != MAGIC_HEADER_V7 && magic != MAGIC_HEADER_V6) return null
+        val isV7 = (magic == MAGIC_HEADER_V7)
+
+        val trackId = inStream.readUTF()
+        val durationMs = inStream.readLong()
+        val samplePoints = inStream.readInt()
+        val bpm = inStream.readDouble()
+        val isReal = inStream.readBoolean()
+
+        val totalFrames = if (isV7) inStream.readLong() else 0L
+        val sampleRate = if (isV7) inStream.readInt() else 44100
+
+        val peaks = FloatArray(samplePoints) { inStream.readFloat() }
+        val lowBand = FloatArray(samplePoints) { inStream.readFloat() }
+        val midBand = FloatArray(samplePoints) { inStream.readFloat() }
+        val highBand = FloatArray(samplePoints) { inStream.readFloat() }
+
+        val rms = if (inStream.available() >= 4) {
+            val rmsCount = inStream.readInt()
+            if (rmsCount in 1..samplePoints && inStream.available() >= rmsCount * 4) {
+                FloatArray(rmsCount) { inStream.readFloat() }
+            } else FloatArray(0)
+        } else FloatArray(0)
+
+        val minPeaks = if (isV7 && inStream.available() >= 4) {
+            val minCount = inStream.readInt()
+            if (minCount in 1..samplePoints && inStream.available() >= minCount * 4) {
+                FloatArray(minCount) { inStream.readFloat() }
+            } else peaks.copyOf()
+        } else peaks.copyOf()
+
+        return WaveformData(
+            trackId = trackId,
+            durationMs = durationMs,
+            samplePoints = samplePoints,
+            peaks = peaks,
+            lowBand = lowBand,
+            midBand = midBand,
+            highBand = highBand,
+            bpm = bpm,
+            isRealAudioData = isReal,
+            rms = rms,
+            minPeaks = minPeaks,
+            totalFrames = totalFrames,
+            sampleRate = sampleRate
+        )
+    }
+
     private fun writeToDisk(cacheKey: String, data: WaveformData, context: Context) {
         try {
             val file = getDiskFile(cacheKey, context)
             val tmpFile = File(file.parentFile, "${file.name}.tmp")
             DataOutputStream(BufferedOutputStream(tmpFile.outputStream())).use { out ->
-                out.writeInt(MAGIC_HEADER)
-                out.writeUTF(data.trackId)
-                out.writeLong(data.durationMs)
-                out.writeInt(data.samplePoints)
-                out.writeDouble(data.bpm)
-                out.writeBoolean(data.isRealAudioData)
-
-                // Write arrays
-                for (i in 0 until data.samplePoints) out.writeFloat(data.peaks.getOrElse(i) { 0f })
-                for (i in 0 until data.samplePoints) out.writeFloat(data.lowBand.getOrElse(i) { 0f })
-                for (i in 0 until data.samplePoints) out.writeFloat(data.midBand.getOrElse(i) { 0f })
-                for (i in 0 until data.samplePoints) out.writeFloat(data.highBand.getOrElse(i) { 0f })
-
-                // Write rms array
-                out.writeInt(data.rms.size)
-                for (i in 0 until data.rms.size) out.writeFloat(data.rms[i])
+                writeToDataStream(out, data)
             }
             if (tmpFile.renameTo(file)) {
                 // success
@@ -221,38 +294,7 @@ object WaveformCache {
         if (!file.exists() || file.length() < 32) return null
         return try {
             DataInputStream(BufferedInputStream(file.inputStream())).use { inStream ->
-                val magic = inStream.readInt()
-                if (magic != MAGIC_HEADER) return null
-                val trackId = inStream.readUTF()
-                val durationMs = inStream.readLong()
-                val samplePoints = inStream.readInt()
-                val bpm = inStream.readDouble()
-                val isReal = inStream.readBoolean()
-
-                val peaks = FloatArray(samplePoints) { inStream.readFloat() }
-                val lowBand = FloatArray(samplePoints) { inStream.readFloat() }
-                val midBand = FloatArray(samplePoints) { inStream.readFloat() }
-                val highBand = FloatArray(samplePoints) { inStream.readFloat() }
-
-                val rms = if (inStream.available() >= 4) {
-                    val rmsCount = inStream.readInt()
-                    if (rmsCount in 1..samplePoints && inStream.available() >= rmsCount * 4) {
-                        FloatArray(rmsCount) { inStream.readFloat() }
-                    } else FloatArray(0)
-                } else FloatArray(0)
-
-                WaveformData(
-                    trackId = trackId,
-                    durationMs = durationMs,
-                    samplePoints = samplePoints,
-                    peaks = peaks,
-                    lowBand = lowBand,
-                    midBand = midBand,
-                    highBand = highBand,
-                    bpm = bpm,
-                    isRealAudioData = isReal,
-                    rms = rms
-                )
+                readFromDataStream(inStream)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed reading waveform from disk cache: ${e.message}")

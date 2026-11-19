@@ -1258,6 +1258,8 @@ private fun PositionAwareNowPlaying(
         isWaveformLoading = isWaveformLoading,
         isPlaying = isPlaying,
         currentPositionProvider = { currentPositionState.value },
+        currentPositionFloatProvider = { audioEngine.timeline.getCurrentPositionFloatMs() },
+        playbackTimeline = audioEngine.timeline,
         durationMs = if (track.durationSeconds > 0) track.durationSeconds * 1000L else 0L,
         waveformStyle = waveformStyle,
         onToggleWaveformStyle = onToggleWaveformStyle,

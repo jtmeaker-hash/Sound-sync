@@ -64,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.audio.PlaybackTimeline
 import com.example.audio.WaveformData
 import com.example.model.Track
 import com.example.model.WaveformStyle
@@ -115,12 +116,16 @@ fun RekordboxWaveformView(
     isLoading: Boolean = false,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
     onToggleWaveformStyle: (() -> Unit)? = null,
+    currentPositionFloatProvider: (() -> Float)? = null,
+    playbackTimeline: PlaybackTimeline? = null,
+    showDebugSyncOverlay: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     // Zoom factor: visible window in seconds (e.g. 6s = zoomed in DJ view, 12s = standard, 24s = wide)
     var visibleWindowSeconds by remember { mutableFloatStateOf(8.0f) }
     var isUserDragging by remember { mutableStateOf(false) }
     var dragPositionMs by remember { mutableFloatStateOf(0f) }
+    var isDebugHudVisible by remember { mutableStateOf(false) }
 
     val textMeasurer = rememberTextMeasurer()
 
@@ -133,37 +138,20 @@ fun RekordboxWaveformView(
     val isPro = theme.isPro
     val is3BandColoring = theme.is3BandColoring
 
-    // High-resolution display refresh-rate animation and timeline synchronization
-    var anchorPositionMs by remember(track.id) { mutableFloatStateOf(currentPositionProvider().toFloat()) }
-    var anchorNanoTime by remember(track.id) { mutableLongStateOf(System.nanoTime()) }
-    var animatedPositionMs by remember(track.id) { mutableFloatStateOf(currentPositionProvider().toFloat()) }
-    // 60fps/120fps display refresh rate loop
-    var lastIncoming by remember(track.id) { mutableFloatStateOf(currentPositionProvider().toFloat()) }
+    // Authoritative timeline provider: Query real AudioClock / PlaybackTimeline
+    val activeFloatProvider = currentPositionFloatProvider ?: { currentPositionProvider().toFloat() }
+    var animatedPositionMs by remember(track.id) { mutableFloatStateOf(activeFloatProvider()) }
+
+    // 60fps/120fps display refresh rate loop: Reads authoritative audio time on each vsync frame
     LaunchedEffect(isPlaying, track.id) {
         if (!isPlaying) {
-            animatedPositionMs = currentPositionProvider().toFloat()
+            animatedPositionMs = activeFloatProvider().coerceIn(0f, safeDurationMs.toFloat())
             return@LaunchedEffect
         }
         while (true) {
-            withFrameNanos { frameNanos ->
-                val incoming = currentPositionProvider().toFloat()
-                if (incoming != lastIncoming) {
-                    val diff = kotlin.math.abs(incoming - animatedPositionMs)
-                    if (diff > 120f) {
-                        anchorPositionMs = incoming
-                        anchorNanoTime = frameNanos
-                        animatedPositionMs = incoming
-                    } else {
-                        anchorPositionMs = incoming
-                        anchorNanoTime = frameNanos
-                    }
-                    lastIncoming = incoming
-                }
-                
+            withFrameNanos { _ ->
                 if (!isUserDragging) {
-                    val elapsedSec = (frameNanos - anchorNanoTime) / 1_000_000_000f
-                    val estimatedMs = anchorPositionMs + (elapsedSec * 1000f)
-                    animatedPositionMs = estimatedMs.coerceIn(0f, safeDurationMs.toFloat())
+                    animatedPositionMs = activeFloatProvider().coerceIn(0f, safeDurationMs.toFloat())
                 }
             }
         }
@@ -188,6 +176,7 @@ fun RekordboxWaveformView(
             currentPositionFloatMs = effectivePositionFloatMs,
             durationMs = safeDurationMs,
             waveformStyle = waveformStyle,
+            visibleWindowSeconds = visibleWindowSeconds,
             is3BandProColoring = is3BandColoring,
             isPro = isPro,
             proVariant = proVariant,
@@ -263,7 +252,7 @@ fun RekordboxWaveformView(
                             visibleWindowSeconds = visibleWindowSeconds,
                             trackBpm = track.bpm,
                             textMeasurer = textMeasurer,
-                            is3BandProColoring = is3BandColoring,
+                            is3BandProColoring = true,
                             proVariant = proVariant
                         )
                     }
@@ -275,7 +264,7 @@ fun RekordboxWaveformView(
                             visibleWindowSeconds = visibleWindowSeconds,
                             trackBpm = track.bpm,
                             textMeasurer = textMeasurer,
-                            is3BandProColoring = true,
+                            is3BandProColoring = false,
                             proVariant = proVariant
                         )
                     }
@@ -328,6 +317,59 @@ fun RekordboxWaveformView(
 
             // Fixed Center Playhead
             CenterPlayheadOverlay(isPro = isPro, proVariant = proVariant, accent = theme.accent)
+
+            // Optional DEBUG Waveform Sync HUD Overlay
+            if (showDebugSyncOverlay || isDebugHudVisible) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp),
+                    color = Color(0xDD000000),
+                    shape = RoundedCornerShape(4.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f))
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                        Text(
+                            text = "SYNC DEBUG HUD",
+                            color = Color(0xFF00E5FF),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        val engineMs = currentPositionProvider()
+                        val waveMs = effectivePositionFloatMs
+                        val discrepancyMs = waveMs - engineMs.toFloat()
+                        val discColor = if (kotlin.math.abs(discrepancyMs) <= 50f) Color(0xFF00FF66) else Color(0xFFFF3B30)
+                        Text(
+                            text = String.format(Locale.US, "Eng: %d ms", engineMs),
+                            color = Color.White,
+                            fontSize = 8.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = String.format(Locale.US, "Wave: %.1f ms", waveMs),
+                            color = Color.White,
+                            fontSize = 8.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = String.format(Locale.US, "Δ: %+.1f ms", discrepancyMs),
+                            color = discColor,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        playbackTimeline?.let { tl ->
+                            Text(
+                                text = String.format(Locale.US, "Rate: %.2fx", tl.playbackSpeed),
+                                color = Color(0xFFFFD600),
+                                fontSize = 8.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
 
             // Loading / Analyzing overlay
             if (isLoading && waveformData == null) {
@@ -390,6 +432,7 @@ fun RekordboxWaveformView(
             isPro = isPro,
             proVariant = proVariant,
             accent = theme.accent,
+            onToggleDebugHud = { isDebugHudVisible = !isDebugHudVisible },
             onZoomIn = {
                 visibleWindowSeconds = (visibleWindowSeconds * 0.7f).coerceAtLeast(3.0f)
             },
@@ -798,6 +841,8 @@ private fun DrawScope.drawDetailedScrollingWaveform(
     // 2. HIGH-RESOLUTION MULTI-BAND DETAILED WAVEFORM
     if (waveformData != null && waveformData.samplePoints > 0) {
         val peaks = waveformData.peaks
+        val minPeaks = waveformData.minPeaks
+        val hasMinPeaks = minPeaks.isNotEmpty()
         val lowBand = waveformData.lowBand
         val midBand = waveformData.midBand
         val highBand = waveformData.highBand
@@ -819,19 +864,24 @@ private fun DrawScope.drawDetailedScrollingWaveform(
                 val t = binFloat - b0
 
                 val peak = peaks[b0] * (1f - t) + peaks[b1] * t
+                val minPeak = if (hasMinPeaks) (minPeaks[b0] * (1f - t) + minPeaks[b1] * t) else peak
                 val low = lowBand[b0] * (1f - t) + lowBand[b1] * t
                 val mid = midBand[b0] * (1f - t) + midBand[b1] * t
                 val high = highBand[b0] * (1f - t) + highBand[b1] * t
 
-                // Preserve dynamics: quiet sections are distinct, silence drops to 0.5px
-                val peakHeight = if (peak < 0.008f) 0.5f else (peak * maxPeakHeight).coerceAtLeast(1.0f)
+                // Asymmetric bipolar envelopes: acoustic fidelity for positive and negative signal swings
+                val peakTop = if (peak < 0.008f) 0.5f else (peak * maxPeakHeight).coerceAtLeast(1.0f)
+                val peakBot = if (minPeak < 0.008f) 0.5f else (minPeak * maxPeakHeight).coerceAtLeast(1.0f)
                 val isPast = sampleTimeMs < currentPositionMs
                 val alpha = if (isPast) 0.65f else 1.0f
 
-                val midDrawHeight = min(peakHeight, (mid * maxPeakHeight * 0.88f).coerceAtLeast(0.5f))
-                val lowDrawHeight = min(midDrawHeight, (low * maxPeakHeight * 0.65f).coerceAtLeast(0.5f))
+                val midTop = min(peakTop, (mid * maxPeakHeight * 0.88f).coerceAtLeast(0.5f))
+                val midBot = min(peakBot, (mid * maxPeakHeight * 0.88f).coerceAtLeast(0.5f))
 
-                // Outer high transient needle (Cymbals, hi-hats, percussive click)
+                val lowTop = min(midTop, (low * maxPeakHeight * 0.65f).coerceAtLeast(0.5f))
+                val lowBot = min(midBot, (low * maxPeakHeight * 0.65f).coerceAtLeast(0.5f))
+
+                // Layer 1: Outer Highs (Electric cyan transients: hi-hats, percussive click, air)
                 val highColor = when (proVariant) {
                     ProDarkVariant.BLACK_WHITE -> {
                         if (high > 0.60f) Color(0xFFFFFFFF).copy(alpha = alpha) else Color(0xFFE4E4E7).copy(alpha = alpha * 0.90f)
@@ -841,7 +891,7 @@ private fun DrawScope.drawDetailedScrollingWaveform(
                     }
                     null -> {
                         if (is3BandProColoring) {
-                            if (high > 0.60f) Color(0xFF00E5FF).copy(alpha = alpha) else Color(0xFF0A84FF).copy(alpha = alpha * 0.90f)
+                            Color(0xFF00E5FF).copy(alpha = alpha)
                         } else {
                             if (high > 0.60f) Color(0xFF00FFFF).copy(alpha = alpha) else Color(0xFF00C8FF).copy(alpha = alpha * 0.90f)
                         }
@@ -849,13 +899,13 @@ private fun DrawScope.drawDetailedScrollingWaveform(
                 }
                 drawLine(
                     color = highColor,
-                    start = Offset(screenX, centerY - peakHeight),
-                    end = Offset(screenX, centerY + peakHeight),
+                    start = Offset(screenX, centerY - peakTop),
+                    end = Offset(screenX, centerY + peakBot),
                     strokeWidth = 1.0f
                 )
 
-                // Mid vocal/melody/snare body layer (Vocals, snare body, synths)
-                if (midDrawHeight > 1.0f) {
+                // Layer 2: Mids Melodic / Vocal Body (Warm cream / off-white in 3Band Pro)
+                if (midTop > 0.8f || midBot > 0.8f) {
                     val midColor = when (proVariant) {
                         ProDarkVariant.BLACK_WHITE -> {
                             if (mid > 0.60f) Color(0xFFD4D4D8).copy(alpha = alpha * 0.95f) else Color(0xFFA1A1AA).copy(alpha = alpha * 0.85f)
@@ -865,22 +915,22 @@ private fun DrawScope.drawDetailedScrollingWaveform(
                         }
                         null -> {
                             if (is3BandProColoring) {
-                                if (mid > 0.60f) Color(0xFF30D158).copy(alpha = alpha * 0.95f) else Color(0xFF24A148).copy(alpha = alpha * 0.85f)
+                                Color(0xFFFFF6D6).copy(alpha = alpha * 0.95f)
                             } else {
-                                Color(0xFFFF9500).copy(alpha = alpha * 0.92f)
+                                Color(0xFF30D158).copy(alpha = alpha * 0.95f) // Green in RGB mode
                             }
                         }
                     }
                     drawLine(
                         color = midColor,
-                        start = Offset(screenX, centerY - midDrawHeight),
-                        end = Offset(screenX, centerY + midDrawHeight),
+                        start = Offset(screenX, centerY - midTop),
+                        end = Offset(screenX, centerY + midBot),
                         strokeWidth = 1.0f
                     )
                 }
 
-                // Inner bass / kick fundamental core (Low frequencies, kicks, sub-bass)
-                if (lowDrawHeight > 1.0f) {
+                // Layer 3: Inner Bass / Kick Core (Warm amber / orange in 3Band Pro)
+                if (lowTop > 0.8f || lowBot > 0.8f) {
                     val bassColor = when (proVariant) {
                         ProDarkVariant.BLACK_WHITE -> {
                             if (low > 0.65f) Color(0xFFA1A1AA).copy(alpha = alpha) else Color(0xFF71717A).copy(alpha = alpha * 0.92f)
@@ -890,16 +940,16 @@ private fun DrawScope.drawDetailedScrollingWaveform(
                         }
                         null -> {
                             if (is3BandProColoring) {
-                                if (low > 0.65f) Color(0xFFFF3B30).copy(alpha = alpha) else Color(0xFFE53935).copy(alpha = alpha * 0.92f)
+                                Color(0xFFFF6600).copy(alpha = alpha)
                             } else {
-                                Color(0xFF1E6CFF).copy(alpha = alpha * 0.95f)
+                                Color(0xFFFF3B30).copy(alpha = alpha) // Red in RGB mode
                             }
                         }
                     }
                     drawLine(
                         color = bassColor,
-                        start = Offset(screenX, centerY - lowDrawHeight),
-                        end = Offset(screenX, centerY + lowDrawHeight),
+                        start = Offset(screenX, centerY - lowTop),
+                        end = Offset(screenX, centerY + lowBot),
                         strokeWidth = 1.0f
                     )
                 }
@@ -914,12 +964,12 @@ private fun DrawScope.drawDetailedScrollingWaveform(
                     drawCircle(
                         color = diamondColor,
                         radius = 0.9f,
-                        center = Offset(screenX, centerY - peakHeight)
+                        center = Offset(screenX, centerY - peakTop)
                     )
                     drawCircle(
                         color = diamondColor,
                         radius = 0.9f,
-                        center = Offset(screenX, centerY + peakHeight)
+                        center = Offset(screenX, centerY + peakBot)
                     )
                 }
             }
@@ -1040,6 +1090,7 @@ private fun FullTrackOverviewScrubber(
     currentPositionFloatMs: Float,
     durationMs: Long,
     waveformStyle: WaveformStyle = WaveformStyle.DETAILED,
+    visibleWindowSeconds: Float = 8.0f,
     is3BandProColoring: Boolean = false,
     isPro: Boolean = false,
     proVariant: ProDarkVariant? = null,
@@ -1049,7 +1100,7 @@ private fun FullTrackOverviewScrubber(
     val bgColor = if (isPro) {
         SoundSyncTheme.current.surfaceSunken
     } else {
-        Color(0xFF0D1017)
+        Color(0xFF0A0A0C)
     }
     Box(
         modifier = modifier
@@ -1076,61 +1127,128 @@ private fun FullTrackOverviewScrubber(
 
             if (waveformData != null && waveformData.samplePoints > 0) {
                 val peaks = waveformData.peaks
+                val lowBand = waveformData.lowBand
+                val midBand = waveformData.midBand
+                val highBand = waveformData.highBand
                 val step = max(1f, width / peaks.size.toFloat())
                 val progressFrac = if (durationMs > 0) (currentPositionFloatMs / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
                 val playheadX = progressFrac * width
 
+                // Viewport window overlay bounds (8s visible window relative to full track duration)
+                val windowWidthMs = visibleWindowSeconds * 1000f
+                val windowFrac = if (durationMs > 0) (windowWidthMs / durationMs.toFloat()).coerceIn(0.01f, 1.0f) else 0.1f
+                val windowWidthPx = (windowFrac * width).coerceAtLeast(14f)
+                val windowLeft = (playheadX - windowWidthPx / 2f).coerceIn(0f, (width - windowWidthPx).coerceAtLeast(0f))
+                val windowRight = windowLeft + windowWidthPx
+
+                val colWidth = max(1f, step - 0.2f)
+
                 for (i in peaks.indices) {
                     val x = i * step
-                    val peak = peaks[i]
-                    val barH = if (peak < 0.015f) 0.5f else (peak * (centerY * 0.85f)).coerceAtLeast(1.0f)
-                    val isPast = x <= playheadX
+                    val peak = peaks[i].coerceIn(0f, 1f)
+                    val low = lowBand.getOrElse(i) { 0f }.coerceIn(0f, 1f)
+                    val mid = midBand.getOrElse(i) { 0f }.coerceIn(0f, 1f)
+                    val high = highBand.getOrElse(i) { 0f }.coerceIn(0f, 1f)
 
-                    val color = when (proVariant) {
-                        ProDarkVariant.BLACK_WHITE -> {
-                            if (isPast) Color(0xFFFFFFFF).copy(alpha = 0.90f) else Color(0xFF52525B).copy(alpha = 0.60f)
+                    val barH = if (peak < 0.012f) 0.5f else (peak * (centerY * 0.88f)).coerceAtLeast(1.0f)
+                    val isPast = x <= playheadX
+                    val alpha = if (isPast) 1.0f else 0.45f
+
+                    // Continuous Rekordbox-grade 3-band layering (No discrete barcode striping!)
+                    if (waveformStyle == WaveformStyle.RETRO) {
+                        // Retro overview mode
+                        val retroColor = when (proVariant) {
+                            ProDarkVariant.BLACK_WHITE -> if (isPast) Color(0xFFFFFFFF) else Color(0xFF52525B)
+                            ProDarkVariant.BLACK_RED -> if (isPast) BloodRedPrimary else Color(0xFF554A4D)
+                            null -> if (isPast) DeckACyan else Color(0xFF2A364F)
                         }
-                        ProDarkVariant.BLACK_RED -> {
-                            if (isPast) BloodRedPrimary.copy(alpha = 0.90f) else Color(0xFF554A4D).copy(alpha = 0.55f)
+                        drawLine(
+                            color = retroColor.copy(alpha = alpha),
+                            start = Offset(x, centerY - barH),
+                            end = Offset(x, centerY + barH),
+                            strokeWidth = colWidth
+                        )
+                    } else {
+                        // Continuous stacked 3Band overview: High outer, Mid body, Low bass core
+                        val midH = (barH * (0.35f + 0.60f * mid)).coerceIn(0.5f, barH)
+                        val lowH = (barH * (0.25f + 0.55f * low)).coerceIn(0.5f, midH)
+
+                        val highColor = when (proVariant) {
+                            ProDarkVariant.BLACK_WHITE -> Color(0xFFFFFFFF).copy(alpha = alpha)
+                            ProDarkVariant.BLACK_RED -> Color(0xFFFFFFFF).copy(alpha = alpha)
+                            null -> if (waveformStyle == WaveformStyle.FREQUENCY_COLOURED) Color(0xFF00E5FF).copy(alpha = alpha) else Color(0xFF00E5FF).copy(alpha = alpha)
                         }
-                        null -> {
-                            if (waveformStyle == WaveformStyle.DETAILED) {
-                                val low = waveformData.lowBand.getOrElse(i) { 0f }
-                                val mid = waveformData.midBand.getOrElse(i) { 0f }
-                                val high = waveformData.highBand.getOrElse(i) { 0f }
-                                val alpha = if (isPast) 0.95f else 0.40f
-                                when {
-                                    high > 0.60f -> Color(0xFF00E5FF).copy(alpha = alpha)
-                                    low > 0.50f -> Color(0xFF1E6CFF).copy(alpha = alpha)
-                                    mid > 0.40f -> Color(0xFFFF9500).copy(alpha = alpha)
-                                    else -> Color(0xFF00B4D8).copy(alpha = alpha)
-                                }
-                            } else {
-                                if (isPast) DeckACyan.copy(alpha = 0.9f) else Color(0xFF2A364F)
+                        drawLine(
+                            color = highColor,
+                            start = Offset(x, centerY - barH),
+                            end = Offset(x, centerY + barH),
+                            strokeWidth = colWidth
+                        )
+
+                        if (midH > 0.8f) {
+                            val midColor = when (proVariant) {
+                                ProDarkVariant.BLACK_WHITE -> Color(0xFFD4D4D8).copy(alpha = alpha * 0.95f)
+                                ProDarkVariant.BLACK_RED -> Color(0xFFB7AAAC).copy(alpha = alpha * 0.95f)
+                                null -> if (waveformStyle == WaveformStyle.FREQUENCY_COLOURED) Color(0xFF30D158).copy(alpha = alpha * 0.95f) else Color(0xFFFFF6D6).copy(alpha = alpha * 0.95f)
                             }
+                            drawLine(
+                                color = midColor,
+                                start = Offset(x, centerY - midH),
+                                end = Offset(x, centerY + midH),
+                                strokeWidth = colWidth
+                            )
+                        }
+
+                        if (lowH > 0.8f) {
+                            val lowColor = when (proVariant) {
+                                ProDarkVariant.BLACK_WHITE -> Color(0xFFA1A1AA).copy(alpha = alpha)
+                                ProDarkVariant.BLACK_RED -> BloodRedPrimary.copy(alpha = alpha)
+                                null -> if (waveformStyle == WaveformStyle.FREQUENCY_COLOURED) Color(0xFFFF3B30).copy(alpha = alpha) else Color(0xFFFF6600).copy(alpha = alpha)
+                            }
+                            drawLine(
+                                color = lowColor,
+                                start = Offset(x, centerY - lowH),
+                                end = Offset(x, centerY + lowH),
+                                strokeWidth = colWidth
+                            )
                         }
                     }
-
-                    drawLine(
-                        color = color,
-                        start = Offset(x, centerY - barH),
-                        end = Offset(x, centerY + barH),
-                        strokeWidth = max(1f, step - 0.5f)
-                    )
                 }
 
+                // Viewport Zoom Window Overlay (Semi-transparent highlighted box)
+                drawRect(
+                    color = Color(0x24FFFFFF),
+                    topLeft = Offset(windowLeft, 0f),
+                    size = Size(windowRight - windowLeft, height)
+                )
+                drawRect(
+                    color = Color(0x66FFFFFF),
+                    topLeft = Offset(windowLeft, 0f),
+                    size = Size(windowRight - windowLeft, height),
+                    style = Stroke(width = 1f)
+                )
+
+                // Authoritative Playhead Needle
                 val playheadColor = when (proVariant) {
                     ProDarkVariant.BLACK_WHITE -> Color.White
                     ProDarkVariant.BLACK_RED -> BloodRedPrimary
                     null -> Color(0xFFFF0055)
                 }
-                // Playhead needle
                 drawLine(
                     color = playheadColor,
                     start = Offset(playheadX, 0f),
                     end = Offset(playheadX, height),
                     strokeWidth = 2f
                 )
+                // Top pointer chevron
+                reusableTopPlayheadPath.apply {
+                    rewind()
+                    moveTo(playheadX - 3.5f, 0f)
+                    lineTo(playheadX + 3.5f, 0f)
+                    lineTo(playheadX, 4.5f)
+                    close()
+                }
+                drawPath(reusableTopPlayheadPath, playheadColor)
             } else {
                 // Flat baseline
                 val baselineColor = when (proVariant) {
@@ -1163,6 +1281,7 @@ private fun WaveformBottomToolbar(
     isPro: Boolean = false,
     proVariant: ProDarkVariant? = null,
     accent: Color = DeckACyan,
+    onToggleDebugHud: (() -> Unit)? = null,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit
 ) {
@@ -1269,7 +1388,14 @@ private fun WaveformBottomToolbar(
                     color = TextMuted,
                     fontSize = 9.sp,
                     fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.then(
+                        if (onToggleDebugHud != null) {
+                            Modifier.pointerInput(Unit) {
+                                detectTapGestures(onLongPress = { onToggleDebugHud() })
+                            }
+                        } else Modifier
+                    )
                 )
 
                 Surface(

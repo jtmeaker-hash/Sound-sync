@@ -139,6 +139,8 @@ fun NowPlayingFullScreen(
     onOpenSettings: () -> Unit = {},
     onOpenProperties: (Track) -> Unit = {},
     onOpenArtist: ((String) -> Unit)? = null,
+    currentPositionFloatProvider: (() -> Float)? = null,
+    playbackTimeline: com.example.audio.PlaybackTimeline? = null,
     modifier: Modifier = Modifier
 ) {
     // Intercept back button to smoothly close the full-screen page
@@ -171,18 +173,21 @@ fun NowPlayingFullScreen(
             onOpenSettings = onOpenSettings,
             onOpenProperties = onOpenProperties,
             onOpenArtist = onOpenArtist,
+            currentPositionFloatProvider = currentPositionFloatProvider,
+            playbackTimeline = playbackTimeline,
             modifier = modifier
         )
         return
     }
 
     val totalSec = if (durationMs > 0) (durationMs / 1000).toInt() else track.durationSeconds.coerceAtLeast(1)
-    val curSec = (currentPositionProvider() / 1000).toInt().coerceIn(0, totalSec)
+    val curPosMs = currentPositionFloatProvider?.invoke()?.toLong() ?: currentPositionProvider()
+    val curSec = (curPosMs / 1000).toInt().coerceIn(0, totalSec)
     val remainingSec = (totalSec - curSec).coerceAtLeast(0)
 
     val curMin = curSec / 60
     val curS = curSec % 60
-    val curMsFrac = ((currentPositionProvider() % 1000) / 100).toInt()
+    val curMsFrac = ((curPosMs % 1000) / 100).toInt()
 
     val remMin = remainingSec / 60
     val remS = remainingSec % 60
@@ -396,6 +401,8 @@ fun NowPlayingFullScreen(
                                 isLoading = isWaveformLoading,
                                 waveformStyle = waveformStyle,
                                 onToggleWaveformStyle = onToggleWaveformStyle,
+                                currentPositionFloatProvider = currentPositionFloatProvider,
+                                playbackTimeline = playbackTimeline,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
@@ -849,19 +856,22 @@ private fun ProNowPlayingFullScreenContent(
     onOpenSettings: () -> Unit,
     onOpenProperties: (Track) -> Unit,
     onOpenArtist: ((String) -> Unit)? = null,
+    currentPositionFloatProvider: (() -> Float)? = null,
+    playbackTimeline: com.example.audio.PlaybackTimeline? = null,
     modifier: Modifier = Modifier
 ) {
     val totalSec = if (durationMs > 0) (durationMs / 1000).toInt() else track.durationSeconds.coerceAtLeast(1)
-    val curSec = (currentPositionProvider() / 1000).toInt().coerceIn(0, totalSec)
+    val curPosMs = currentPositionFloatProvider?.invoke()?.toLong() ?: currentPositionProvider()
+    val curSec = (curPosMs / 1000).toInt().coerceIn(0, totalSec)
     val remainingSec = (totalSec - curSec).coerceAtLeast(0)
 
     val curMin = curSec / 60
     val curS = curSec % 60
-    val curMsFrac = ((currentPositionProvider() % 1000) / 100).toInt()
+    val curMsFrac = ((curPosMs % 1000) / 100).toInt()
 
     val remMin = remainingSec / 60
     val remS = remainingSec % 60
-    val remMsFrac = (((totalSec * 1000L - currentPositionProvider()).coerceAtLeast(0) % 1000) / 100).toInt()
+    val remMsFrac = (((totalSec * 1000L - curPosMs).coerceAtLeast(0) % 1000) / 100).toInt()
 
     val theme = SoundSyncTheme.current
 
@@ -1217,6 +1227,8 @@ private fun ProNowPlayingFullScreenContent(
                                 isLoading = isWaveformLoading,
                                 waveformStyle = waveformStyle,
                                 onToggleWaveformStyle = onToggleWaveformStyle,
+                                currentPositionFloatProvider = currentPositionFloatProvider,
+                                playbackTimeline = playbackTimeline,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }

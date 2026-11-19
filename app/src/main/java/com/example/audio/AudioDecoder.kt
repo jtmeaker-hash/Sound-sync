@@ -20,6 +20,63 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
+ * Second-order Biquad filter for sample-rate-independent 3-band spectral separation.
+ * Standard Butterworth Q=0.7071 for clean cutoffs with zero phase distortion artifacts.
+ */
+internal class WaveformBiquadFilter {
+    private var b0 = 0.0f
+    private var b1 = 0.0f
+    private var b2 = 0.0f
+    private var a1 = 0.0f
+    private var a2 = 0.0f
+    private var x1 = 0.0f
+    private var x2 = 0.0f
+    private var y1 = 0.0f
+    private var y2 = 0.0f
+
+    fun configureLowPass(sampleRate: Int, cutoffHz: Float = 250.0f, q: Float = 0.7071f) {
+        val sr = if (sampleRate > 0) sampleRate.toDouble() else 44100.0
+        val omega = (2.0 * Math.PI * cutoffHz.toDouble() / sr).coerceIn(0.0001, Math.PI - 0.0001)
+        val alpha = Math.sin(omega) / (2.0 * q.toDouble())
+        val cosw = Math.cos(omega)
+        val a0 = 1.0 + alpha
+        b0 = ((1.0 - cosw) / (2.0 * a0)).toFloat()
+        b1 = ((1.0 - cosw) / a0).toFloat()
+        b2 = b0
+        a1 = ((-2.0 * cosw) / a0).toFloat()
+        a2 = ((1.0 - alpha) / a0).toFloat()
+        reset()
+    }
+
+    fun configureHighPass(sampleRate: Int, cutoffHz: Float = 4000.0f, q: Float = 0.7071f) {
+        val sr = if (sampleRate > 0) sampleRate.toDouble() else 44100.0
+        val omega = (2.0 * Math.PI * cutoffHz.toDouble() / sr).coerceIn(0.0001, Math.PI - 0.0001)
+        val alpha = Math.sin(omega) / (2.0 * q.toDouble())
+        val cosw = Math.cos(omega)
+        val a0 = 1.0 + alpha
+        b0 = ((1.0 + cosw) / (2.0 * a0)).toFloat()
+        b1 = (-(1.0 + cosw) / a0).toFloat()
+        b2 = b0
+        a1 = ((-2.0 * cosw) / a0).toFloat()
+        a2 = ((1.0 - alpha) / a0).toFloat()
+        reset()
+    }
+
+    fun process(x: Float): Float {
+        val y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+        x2 = x1
+        x1 = x
+        y2 = y1
+        y1 = y
+        return y
+    }
+
+    fun reset() {
+        x1 = 0f; x2 = 0f; y1 = 0f; y2 = 0f
+    }
+}
+
+/**
  * Decodes audio tracks into raw 16-bit PCM samples and computes high-resolution
  * waveform amplitude peaks and 3-band (Low, Mid, High) frequency energies.
  *
@@ -163,8 +220,10 @@ object AudioDecoder {
 
             val binCount = targetBins.coerceIn(600, 7200)
 
-            // Accumulator arrays for all bins (Memory footprint ~40 KB)
+            // Accumulator arrays for all bins (Memory footprint ~48 KB)
             val maxPeakInBin = FloatArray(binCount)
+            val minPeakInBin = FloatArray(binCount)
+            val absPeakInBin = FloatArray(binCount)
             val sumSqInBin = FloatArray(binCount)
             val lowSumSqInBin = FloatArray(binCount)
             val midSumSqInBin = FloatArray(binCount)
@@ -181,9 +240,9 @@ object AudioDecoder {
             var isOutputEOS = false
             var decodedFrames = 0L
 
-            // 3-band simple IIR filter states for frequency separation
-            var lowFilterState = 0.0f
-            var midFilterState = 0.0f
+            // 3-band calibrated Biquad IIR filter states for precise sample-rate-independent frequency separation
+            val lowFilter = WaveformBiquadFilter().apply { configureLowPass(sampleRate, 250f) }
+            val highFilter = WaveformBiquadFilter().apply { configureHighPass(sampleRate, 4000f) }
 
             val timePerSampleUs = 1_000_000.0 / sampleRate
             val estimatedBuffers = ((totalDurationUs / 1000L) / 15L).toInt()
@@ -242,23 +301,18 @@ object AudioDecoder {
                             val mono = (sum / channelCount.toFloat()) / 32768.0f // [-1.0 .. 1.0]
                             val absS = abs(mono)
 
-                            // 3-Band DSP separation
-                            // Low-pass (~300Hz)
-                            lowFilterState += 0.08f * (mono - lowFilterState)
-                            val lowSample = lowFilterState
-
-                            // Band-pass (~300Hz - 3kHz)
-                            midFilterState += 0.25f * (mono - midFilterState)
-                            val midSample = midFilterState - lowFilterState
-
-                            // High-pass (> 3kHz)
-                            val highSample = mono - midFilterState
+                            // 3-Band DSP separation: Low (<=250Hz), High (>=4000Hz), Mid = (mono - low - high)
+                            val lowSample = lowFilter.process(mono)
+                            val highSample = highFilter.process(mono)
+                            val midSample = mono - lowSample - highSample
 
                             val currentSampleTimeUs = presentationTimeUs + (frameInBuf * timePerSampleUs).toLong()
                             val bin = ((currentSampleTimeUs.toDouble() / totalDurationUs.toDouble()) * binCount)
                                 .toInt().coerceIn(0, binCount - 1)
 
-                            if (absS > maxPeakInBin[bin]) maxPeakInBin[bin] = absS
+                            if (mono > maxPeakInBin[bin]) maxPeakInBin[bin] = mono
+                            if (mono < minPeakInBin[bin]) minPeakInBin[bin] = mono
+                            if (absS > absPeakInBin[bin]) absPeakInBin[bin] = absS
                             sumSqInBin[bin] += mono * mono
                             lowSumSqInBin[bin] += lowSample * lowSample
                             midSumSqInBin[bin] += midSample * midSample
@@ -289,8 +343,9 @@ object AudioDecoder {
                 return@withContext null
             }
 
-            // 4. Compute final RMS and peak amplitude per bin
+            // 4. Compute final bipolar peaks, frequency bands, and RMS
             val peaks = FloatArray(binCount)
+            val minPeaks = FloatArray(binCount)
             val lowBand = FloatArray(binCount)
             val midBand = FloatArray(binCount)
             val highBand = FloatArray(binCount)
@@ -306,21 +361,20 @@ object AudioDecoder {
                 val count = sampleCountInBin[b]
                 if (count > 0) {
                     val rms = sqrt(sumSqInBin[b] / count)
-                    val maxPeak = maxPeakInBin[b]
-                    // Preserve small transients (kicks, snares, hi-hats, percussive peaks)
-                    // while maintaining musical dynamics and body
-                    val transientPeak = max(rms * 0.55f + maxPeak * 0.45f, maxPeak * 0.85f)
+                    val peak = absPeakInBin[b]
+                    val minP = minPeakInBin[b]
                     val low = sqrt(lowSumSqInBin[b] / count)
                     val mid = sqrt(midSumSqInBin[b] / count)
                     val high = sqrt(highSumSqInBin[b] / count)
 
-                    peaks[b] = transientPeak
+                    peaks[b] = peak
+                    minPeaks[b] = minP
                     rmsBand[b] = rms
                     lowBand[b] = low
                     midBand[b] = mid
                     highBand[b] = high
 
-                    if (transientPeak > globalMaxPeak) globalMaxPeak = transientPeak
+                    if (peak > globalMaxPeak) globalMaxPeak = peak
                     if (rms > globalMaxRms) globalMaxRms = rms
                     if (low > globalMaxLow) globalMaxLow = low
                     if (mid > globalMaxMid) globalMaxMid = mid
@@ -330,6 +384,7 @@ object AudioDecoder {
 
             // Interpolate any unpopulated bins (e.g. from presentation time alignment)
             var lastValidPeak = 0.0f
+            var lastValidMin = 0.0f
             var lastValidLow = 0.0f
             var lastValidMid = 0.0f
             var lastValidHigh = 0.0f
@@ -337,12 +392,14 @@ object AudioDecoder {
             for (b in 0 until binCount) {
                 if (sampleCountInBin[b] == 0) {
                     peaks[b] = lastValidPeak * 0.9f
+                    minPeaks[b] = lastValidMin * 0.9f
                     lowBand[b] = lastValidLow * 0.9f
                     midBand[b] = lastValidMid * 0.9f
                     highBand[b] = lastValidHigh * 0.9f
                     rmsBand[b] = lastValidRms * 0.9f
                 } else {
                     lastValidPeak = peaks[b]
+                    lastValidMin = minPeaks[b]
                     lastValidLow = lowBand[b]
                     lastValidMid = midBand[b]
                     lastValidHigh = highBand[b]
@@ -359,15 +416,21 @@ object AudioDecoder {
 
             for (b in 0 until binCount) {
                 peaks[b] = (peaks[b] / peakNorm).coerceIn(0.0f, 1.0f)
+                minPeaks[b] = (minPeaks[b] / peakNorm).coerceIn(-1.0f, 0.0f)
                 lowBand[b] = (lowBand[b] / lowNorm).coerceIn(0.0f, 1.0f)
                 midBand[b] = (midBand[b] / midNorm).coerceIn(0.0f, 1.0f)
                 highBand[b] = (highBand[b] / highNorm).coerceIn(0.0f, 1.0f)
                 rmsBand[b] = (rmsBand[b] / rmsNorm).coerceIn(0.0f, 1.0f)
             }
 
+            val trueDecodedDurationMs = (decodedFrames * 1000L) / sampleRate
+            val resolvedDurationMs = if (durationMs <= 0 || abs(trueDecodedDurationMs - durationMs) > 2000L) {
+                trueDecodedDurationMs
+            } else durationMs
+
             WaveformData(
                 trackId = track.id,
-                durationMs = durationMs,
+                durationMs = resolvedDurationMs,
                 samplePoints = binCount,
                 peaks = peaks,
                 lowBand = lowBand,
@@ -375,7 +438,10 @@ object AudioDecoder {
                 highBand = highBand,
                 bpm = if (track.bpm > 0) track.bpm else 126.0,
                 isRealAudioData = true,
-                rms = rmsBand
+                rms = rmsBand,
+                minPeaks = minPeaks,
+                totalFrames = decodedFrames,
+                sampleRate = sampleRate
             )
         } catch (e: CancellationException) {
             Log.d(TAG, "decodeRealWaveformPcm cancelled for '${track.title}'")
@@ -406,6 +472,8 @@ object AudioDecoder {
     ): WaveformData? {
         val binCount = targetBins.coerceIn(600, 7200)
         val maxPeakInBin = FloatArray(binCount)
+        val minPeakInBin = FloatArray(binCount)
+        val absPeakInBin = FloatArray(binCount)
         val sumSqInBin = FloatArray(binCount)
         val lowSumSqInBin = FloatArray(binCount)
         val midSumSqInBin = FloatArray(binCount)
@@ -417,8 +485,8 @@ object AudioDecoder {
         val sampleRate = wavInfo.sampleRate
         val timePerSampleUs = 1_000_000.0 / sampleRate
 
-        var lowFilterState = 0.0f
-        var midFilterState = 0.0f
+        val lowFilter = WaveformBiquadFilter().apply { configureLowPass(sampleRate, 250f) }
+        val highFilter = WaveformBiquadFilter().apply { configureHighPass(sampleRate, 4000f) }
         var decodedFrames = 0L
 
         val pcmReader = com.example.analysis.WavPcmReader(context, filePathOrUri, wavInfo)
@@ -438,19 +506,17 @@ object AudioDecoder {
                     val mono = (left + right) * 0.5f
                     val absS = abs(mono)
 
-                    lowFilterState += 0.08f * (mono - lowFilterState)
-                    val lowSample = lowFilterState
-
-                    midFilterState += 0.25f * (mono - midFilterState)
-                    val midSample = midFilterState - lowFilterState
-
-                    val highSample = mono - midFilterState
+                    val lowSample = lowFilter.process(mono)
+                    val highSample = highFilter.process(mono)
+                    val midSample = mono - lowSample - highSample
 
                     val currentSampleTimeUs = presentationTimeUs + (frameInBuf * timePerSampleUs).toLong()
                     val bin = ((currentSampleTimeUs.toDouble() / totalDurationUs.toDouble()) * binCount)
                         .toInt().coerceIn(0, binCount - 1)
 
-                    if (absS > maxPeakInBin[bin]) maxPeakInBin[bin] = absS
+                    if (mono > maxPeakInBin[bin]) maxPeakInBin[bin] = mono
+                    if (mono < minPeakInBin[bin]) minPeakInBin[bin] = mono
+                    if (absS > absPeakInBin[bin]) absPeakInBin[bin] = absS
                     sumSqInBin[bin] += mono * mono
                     lowSumSqInBin[bin] += lowSample * lowSample
                     midSumSqInBin[bin] += midSample * midSample
@@ -469,6 +535,7 @@ object AudioDecoder {
         if (decodedFrames < 100) return null
 
         val peaks = FloatArray(binCount)
+        val minPeaks = FloatArray(binCount)
         val lowBand = FloatArray(binCount)
         val midBand = FloatArray(binCount)
         val highBand = FloatArray(binCount)
@@ -484,19 +551,20 @@ object AudioDecoder {
             val count = sampleCountInBin[b]
             if (count > 0) {
                 val rms = sqrt(sumSqInBin[b] / count)
-                val maxPeak = maxPeakInBin[b]
-                val transientPeak = max(rms * 0.55f + maxPeak * 0.45f, maxPeak * 0.85f)
+                val peak = absPeakInBin[b]
+                val minP = minPeakInBin[b]
                 val low = sqrt(lowSumSqInBin[b] / count)
                 val mid = sqrt(midSumSqInBin[b] / count)
                 val high = sqrt(highSumSqInBin[b] / count)
 
-                peaks[b] = transientPeak
+                peaks[b] = peak
+                minPeaks[b] = minP
                 rmsBand[b] = rms
                 lowBand[b] = low
                 midBand[b] = mid
                 highBand[b] = high
 
-                if (transientPeak > globalMaxPeak) globalMaxPeak = transientPeak
+                if (peak > globalMaxPeak) globalMaxPeak = peak
                 if (rms > globalMaxRms) globalMaxRms = rms
                 if (low > globalMaxLow) globalMaxLow = low
                 if (mid > globalMaxMid) globalMaxMid = mid
@@ -505,6 +573,7 @@ object AudioDecoder {
         }
 
         var lastValidPeak = 0.0f
+        var lastValidMin = 0.0f
         var lastValidLow = 0.0f
         var lastValidMid = 0.0f
         var lastValidHigh = 0.0f
@@ -512,12 +581,14 @@ object AudioDecoder {
         for (b in 0 until binCount) {
             if (sampleCountInBin[b] == 0) {
                 peaks[b] = lastValidPeak * 0.9f
+                minPeaks[b] = lastValidMin * 0.9f
                 lowBand[b] = lastValidLow * 0.9f
                 midBand[b] = lastValidMid * 0.9f
                 highBand[b] = lastValidHigh * 0.9f
                 rmsBand[b] = lastValidRms * 0.9f
             } else {
                 lastValidPeak = peaks[b]
+                lastValidMin = minPeaks[b]
                 lastValidLow = lowBand[b]
                 lastValidMid = midBand[b]
                 lastValidHigh = highBand[b]
@@ -533,15 +604,21 @@ object AudioDecoder {
 
         for (b in 0 until binCount) {
             peaks[b] = (peaks[b] / peakNorm).coerceIn(0.0f, 1.0f)
+            minPeaks[b] = (minPeaks[b] / peakNorm).coerceIn(-1.0f, 0.0f)
             lowBand[b] = (lowBand[b] / lowNorm).coerceIn(0.0f, 1.0f)
             midBand[b] = (midBand[b] / midNorm).coerceIn(0.0f, 1.0f)
             highBand[b] = (highBand[b] / highNorm).coerceIn(0.0f, 1.0f)
             rmsBand[b] = (rmsBand[b] / rmsNorm).coerceIn(0.0f, 1.0f)
         }
 
+        val trueDecodedDurationMs = (decodedFrames * 1000L) / sampleRate
+        val resolvedDurationMs = if (durationMs <= 0 || abs(trueDecodedDurationMs - durationMs) > 1500L) {
+            trueDecodedDurationMs
+        } else durationMs
+
         return WaveformData(
             trackId = track.id,
-            durationMs = durationMs,
+            durationMs = resolvedDurationMs,
             samplePoints = binCount,
             peaks = peaks,
             lowBand = lowBand,
@@ -549,7 +626,10 @@ object AudioDecoder {
             highBand = highBand,
             bpm = if (track.bpm > 0) track.bpm else 126.0,
             isRealAudioData = true,
-            rms = rmsBand
+            rms = rmsBand,
+            minPeaks = minPeaks,
+            totalFrames = decodedFrames,
+            sampleRate = sampleRate
         )
     }
 
